@@ -55,8 +55,12 @@ public:
     // Управление анимированной моделью (для ImGui в main).
     int animationCount() const { return (int)foxModel_.animations.size(); }
     const char* animationName(int i) const;
-    int currentAnimation() const { return foxAnim_; }
-    void setAnimation(int i);
+    int animA() const { return foxAnimA_; }
+    int animB() const { return foxAnimB_; }
+    void setAnimA(int i) { if (i >= 0 && i < animationCount()) foxAnimA_ = i; }
+    void setAnimB(int i) { if (i >= 0 && i < animationCount()) foxAnimB_ = i; }
+    float blend() const { return foxBlend_; }
+    void setBlend(float b) { foxBlend_ = b; }
     float modelScale() const { return foxScale_; }
     void setModelScale(float s) { foxScale_ = s; }
 
@@ -68,7 +72,9 @@ private:
     SkinnedModel foxModel_;
     SkinnedHandle foxMesh_ = 0;
     TextureHandle foxTex_ = 0;
-    int foxAnim_ = 0;
+    int foxAnimA_ = 0;       // анимация A (From)
+    int foxAnimB_ = 1;       // анимация B (To)
+    float foxBlend_ = 0.0f;  // 0 -> A, 1 -> B
     float foxTime_ = 0.0f;
     float foxScale_ = 0.03f;
 

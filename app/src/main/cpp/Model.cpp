@@ -62,54 +62,87 @@ void findKey(const std::vector<float>& times, float t, int& k, float& f) {
     f = 0.0f;
 }
 
-} // namespace
-
-void SkinnedModel::sampleAnimation(int animIndex, float time, std::vector<Mat4>& out) const {
-    size_t n = nodes.size();
-    std::vector<Vec3> T(n);
-    std::vector<Quat> R(n);
-    std::vector<Vec3> S(n);
-    for (size_t i = 0; i < n; ++i) {
-        T[i] = nodes[i].t;
-        R[i] = nodes[i].r;
-        S[i] = nodes[i].s;
-    }
-
-    if (animIndex >= 0 && animIndex < (int)animations.size()) {
-        const Animation& a = animations[animIndex];
-        float t = (a.duration > 0.0f) ? std::fmod(time, a.duration) : 0.0f;
-        for (const AnimChannel& c : a.channels) {
-            if (c.node < 0 || c.times.empty()) continue;
-            int k = 0;
-            float f = 0.0f;
-            findKey(c.times, t, k, f);
-            if (c.step) f = 0.0f;
-            int k1 = (k + 1 < (int)c.times.size()) ? k + 1 : k;
-
-            if (c.path == 0 || c.path == 2) {  // translation / scale (vec3)
-                Vec3 v0{c.values[k * 3 + 0], c.values[k * 3 + 1], c.values[k * 3 + 2]};
-                Vec3 v1{c.values[k1 * 3 + 0], c.values[k1 * 3 + 1], c.values[k1 * 3 + 2]};
-                Vec3 v = v0 + (v1 - v0) * f;
-                if (c.path == 0) T[c.node] = v; else S[c.node] = v;
-            } else if (c.path == 1) {  // rotation (quat)
-                Quat q0{c.values[k * 4 + 0], c.values[k * 4 + 1], c.values[k * 4 + 2], c.values[k * 4 + 3]};
-                Quat q1{c.values[k1 * 4 + 0], c.values[k1 * 4 + 1], c.values[k1 * 4 + 2], c.values[k1 * 4 + 3]};
-                R[c.node] = slerp(q0, q1, f);
-            }
-        }
-    }
-
+// Из позы (локальные T/R/S) -> матрицы костей: local -> global по иерархии,
+// затем global * inverseBind на каждую кость.
+void poseToJoints(const SkinnedModel& m,
+                  const std::vector<Vec3>& T, const std::vector<Quat>& R,
+                  const std::vector<Vec3>& S, std::vector<Mat4>& out) {
+    size_t n = m.nodes.size();
     std::vector<Mat4> local(n);
     for (size_t i = 0; i < n; ++i) local[i] = trs(T[i], R[i], S[i]);
 
     std::vector<Mat4> global(n);
     std::vector<char> done(n, 0);
-    for (size_t i = 0; i < n; ++i) computeGlobal(nodes, (int)i, local, global, done);
+    for (size_t i = 0; i < n; ++i) computeGlobal(m.nodes, (int)i, local, global, done);
 
-    out.resize(jointNodes.size());
-    for (size_t j = 0; j < jointNodes.size(); ++j) {
-        out[j] = global[jointNodes[j]] * inverseBind[j];
+    out.resize(m.jointNodes.size());
+    for (size_t j = 0; j < m.jointNodes.size(); ++j) {
+        out[j] = global[m.jointNodes[j]] * m.inverseBind[j];
     }
+}
+
+} // namespace
+
+void SkinnedModel::samplePose(int animIndex, float time,
+                              std::vector<Vec3>& T, std::vector<Quat>& R,
+                              std::vector<Vec3>& S) const {
+    size_t n = nodes.size();
+    T.resize(n);
+    R.resize(n);
+    S.resize(n);
+    for (size_t i = 0; i < n; ++i) {  // база = TRS узла
+        T[i] = nodes[i].t;
+        R[i] = nodes[i].r;
+        S[i] = nodes[i].s;
+    }
+
+    if (animIndex < 0 || animIndex >= (int)animations.size()) return;
+    const Animation& a = animations[animIndex];
+    float t = (a.duration > 0.0f) ? std::fmod(time, a.duration) : 0.0f;
+    for (const AnimChannel& c : a.channels) {
+        if (c.node < 0 || c.times.empty()) continue;
+        int k = 0;
+        float f = 0.0f;
+        findKey(c.times, t, k, f);
+        if (c.step) f = 0.0f;
+        int k1 = (k + 1 < (int)c.times.size()) ? k + 1 : k;
+
+        if (c.path == 0 || c.path == 2) {  // translation / scale
+            Vec3 v0{c.values[k * 3 + 0], c.values[k * 3 + 1], c.values[k * 3 + 2]};
+            Vec3 v1{c.values[k1 * 3 + 0], c.values[k1 * 3 + 1], c.values[k1 * 3 + 2]};
+            Vec3 v = v0 + (v1 - v0) * f;
+            if (c.path == 0) T[c.node] = v; else S[c.node] = v;
+        } else if (c.path == 1) {  // rotation
+            Quat q0{c.values[k * 4 + 0], c.values[k * 4 + 1], c.values[k * 4 + 2], c.values[k * 4 + 3]};
+            Quat q1{c.values[k1 * 4 + 0], c.values[k1 * 4 + 1], c.values[k1 * 4 + 2], c.values[k1 * 4 + 3]};
+            R[c.node] = slerp(q0, q1, f);
+        }
+    }
+}
+
+void SkinnedModel::sampleAnimation(int animIndex, float time, std::vector<Mat4>& out) const {
+    std::vector<Vec3> T, S;
+    std::vector<Quat> R;
+    samplePose(animIndex, time, T, R, S);
+    poseToJoints(*this, T, R, S, out);
+}
+
+void SkinnedModel::sampleBlend(int animA, float timeA, int animB, float timeB,
+                               float blend, std::vector<Mat4>& out) const {
+    std::vector<Vec3> Ta, Sa, Tb, Sb;
+    std::vector<Quat> Ra, Rb;
+    samplePose(animA, timeA, Ta, Ra, Sa);
+    samplePose(animB, timeB, Tb, Rb, Sb);
+
+    size_t n = nodes.size();
+    std::vector<Vec3> T(n), S(n);
+    std::vector<Quat> R(n);
+    for (size_t i = 0; i < n; ++i) {
+        T[i] = Ta[i] + (Tb[i] - Ta[i]) * blend;  // позиция линейно
+        S[i] = Sa[i] + (Sb[i] - Sa[i]) * blend;  // масштаб линейно
+        R[i] = slerp(Ra[i], Rb[i], blend);       // поворот по дуге
+    }
+    poseToJoints(*this, T, R, S, out);
 }
 
 bool loadGltfModel(AAssetManager* mgr, const char* path, SkinnedModel& out) {

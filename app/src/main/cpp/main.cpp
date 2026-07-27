@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <memory>
+#include <string>
 
 #include "imgui.h"
 
@@ -197,13 +198,29 @@ extern "C" void android_main(android_app* app) {
 
                 Scene* sc = e->scene.get();
                 if (sc != nullptr && sc->animationCount() > 0) {
-                    ImGui::SeparatorText("Fox (glTF skinning)");
-                    int anim = sc->currentAnimation();
+                    ImGui::SeparatorText("Fox (glTF skinning + blend)");
+
+                    ImGui::TextUnformatted("From:");
+                    int a = sc->animA();
                     for (int i = 0; i < sc->animationCount(); ++i) {
-                        if (i > 0) ImGui::SameLine();
-                        if (ImGui::RadioButton(sc->animationName(i), anim == i)) {
-                            sc->setAnimation(i);
+                        ImGui::SameLine();
+                        if (ImGui::RadioButton((std::string(sc->animationName(i)) + "##A").c_str(), a == i)) {
+                            sc->setAnimA(i);
                         }
+                    }
+
+                    ImGui::TextUnformatted("To:  ");
+                    int b = sc->animB();
+                    for (int i = 0; i < sc->animationCount(); ++i) {
+                        ImGui::SameLine();
+                        if (ImGui::RadioButton((std::string(sc->animationName(i)) + "##B").c_str(), b == i)) {
+                            sc->setAnimB(i);
+                        }
+                    }
+
+                    float blend = sc->blend();
+                    if (ImGui::SliderFloat("Blend A<->B", &blend, 0.0f, 1.0f, "%.2f")) {
+                        sc->setBlend(blend);
                     }
                     float scale = sc->modelScale();
                     if (ImGui::SliderFloat("Fox scale", &scale, 0.005f, 0.1f, "%.3f")) {

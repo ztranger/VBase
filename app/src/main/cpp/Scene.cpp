@@ -112,8 +112,11 @@ void Scene::build(Renderer& renderer, AAssetManager* assets) {
         if (foxModel_.hasTexture) {
             foxTex_ = renderer.createTexture(foxModel_.baseColor);
         }
-        // Fox в нативных единицах крупный (~100), поэтому масштабируем.
-        if (foxModel_.animations.size() > 1) foxAnim_ = 1;  // обычно Walk
+        // Дефолт для демо блендинга: A = Walk, B = Run (если есть).
+        if (foxModel_.animations.size() >= 3) {
+            foxAnimA_ = 1;
+            foxAnimB_ = 2;
+        }
     } else {
         LOGW("Не удалось загрузить Fox.glb");
     }
@@ -129,13 +132,6 @@ void Scene::update(float dt) {
 const char* Scene::animationName(int i) const {
     if (i < 0 || i >= (int)foxModel_.animations.size()) return "";
     return foxModel_.animations[i].name.c_str();
-}
-
-void Scene::setAnimation(int i) {
-    if (i >= 0 && i < (int)foxModel_.animations.size() && i != foxAnim_) {
-        foxAnim_ = i;
-        foxTime_ = 0.0f;  // с начала новой анимации
-    }
 }
 
 void Scene::onPointer(float x, float y, bool pressed) {
@@ -174,7 +170,14 @@ RenderFrame Scene::buildFrame(float aspect) const {
         item.color = foxTex_ != 0 ? Vec3{1.0f, 1.0f, 1.0f} : Vec3{0.85f, 0.5f, 0.25f};
         item.model = Mat4::translation({0.0f, 0.0f, 3.5f})
                    * Mat4::scale({foxScale_, foxScale_, foxScale_});
-        foxModel_.sampleAnimation(foxAnim_, foxTime_, item.joints);
+        // Блендим A и B по фактору; на краях — одна анимация (без лишней работы).
+        if (foxBlend_ <= 0.001f) {
+            foxModel_.sampleAnimation(foxAnimA_, foxTime_, item.joints);
+        } else if (foxBlend_ >= 0.999f) {
+            foxModel_.sampleAnimation(foxAnimB_, foxTime_, item.joints);
+        } else {
+            foxModel_.sampleBlend(foxAnimA_, foxTime_, foxAnimB_, foxTime_, foxBlend_, item.joints);
+        }
         frame.skinned.push_back(std::move(item));
     }
     return frame;

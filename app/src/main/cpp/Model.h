@@ -59,9 +59,17 @@ struct SkinnedModel {
     TextureData baseColor;      // альбедо-текстура из glb (если есть)
     bool hasTexture = false;
 
-    // Посчитать матрицы костей для анимации animIndex во времени time (сек).
-    // out заполняется jointNodes.size() матрицами (для uJoints[] в шейдере).
+    // Поза узлов (локальные T/R/S) для анимации animIndex во времени time (сек).
+    void samplePose(int animIndex, float time,
+                    std::vector<Vec3>& T, std::vector<Quat>& R, std::vector<Vec3>& S) const;
+
+    // Матрицы костей одной анимации (для uJoints[] в шейдере).
     void sampleAnimation(int animIndex, float time, std::vector<Mat4>& out) const;
+
+    // Блендинг двух анимаций по фактору blend (0 -> A, 1 -> B). Смешивается ПОЗА
+    // (T/S линейно, R через slerp), затем считаются матрицы костей.
+    void sampleBlend(int animA, float timeA, int animB, float timeB,
+                     float blend, std::vector<Mat4>& out) const;
 };
 
 // Загрузка .glb/.gltf из assets/ через cgltf. Первый скин + все анимации.
