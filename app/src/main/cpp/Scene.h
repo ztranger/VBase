@@ -36,6 +36,7 @@ struct GameObject {
     MeshHandle mesh = 0;
     MaterialHandle material = 0;
     float spin = 0.0f;
+    float prevRotY = 0.0f;  // для интерполяции вращения между тиками
 };
 
 /**
@@ -46,9 +47,14 @@ struct GameObject {
 class Scene {
 public:
     void build(Renderer& renderer, AAssetManager* assets);
-    void update(float dt);
+
+    // Шаг симуляции на фиксированный dt (движение, анимация, вращение декора).
+    void fixedUpdate(float dt);
+
+    // Кадр с интерполяцией между тиками (alpha 0..1) + сглаживание камеры (renderDt).
+    RenderFrame render(float alpha, float aspect, float renderDt);
+
     void onPointer(float x, float y, bool pressed);  // -> джойстик
-    RenderFrame buildFrame(float aspect) const;
 
     void setUiScale(float s);  // масштаб джойстика под DPI
 

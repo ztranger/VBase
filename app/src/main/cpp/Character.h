@@ -1,23 +1,39 @@
 #pragma once
 
+#include <cstdint>
+
+#include "Input.h"
 #include "MathUtil.h"
 #include "Model.h"
 #include "RenderFrame.h"
 
-// Управляемый персонаж: позиция/разворот + локомоция + анимация от скорости.
-// Модель (glTF) — это данные, которые в него кладут; сам класс не «лиса».
+// Управляемый персонаж как СЕТЕВАЯ СУЩНОСТЬ. Симуляция идёт на фиксированном
+// тике (simulate), а рендер интерполирует между прошлым и текущим состоянием
+// (buildItem(alpha)) — так картинка плавная при низкой частоте тика/сети.
+// Модель (glTF) — это данные; сам класс не «лиса».
 struct Character {
-    // Состояние.
+    enum class Owner { Local, Remote };
+
+    uint32_t entityId = 0;
+    Owner owner = Owner::Local;
+
+    // Текущее состояние симуляции.
     Vec3 position{0.0f, 0.0f, 0.0f};
-    float facingYaw = 0.0f;   // куда «смотрит» (радианы)
-    float speed01 = 0.0f;     // текущая норм. скорость 0..1 (сглажена)
-    float animParam = 0.0f;   // 0=idle, 1=walk, 2=run (сглажен)
+    float facingYaw = 0.0f;
+    float speed01 = 0.0f;
+    float animParam = 0.0f;
     float animTime = 0.0f;
 
+    // Предыдущее состояние (снимок прошлого тика) — для интерполяции при рендере.
+    Vec3 prevPosition{0.0f, 0.0f, 0.0f};
+    float prevFacingYaw = 0.0f;
+    float prevAnimParam = 0.0f;
+    float prevAnimTime = 0.0f;
+
     // Конфиг.
-    float maxSpeed = 6.0f;       // мировых единиц/сек при полном отклонении
-    float turnRate = 10.0f;      // скорость доворота к направлению движения
-    float modelYawOffset = 0.0f; // подгонка «морда по движению» (зависит от модели)
+    float maxSpeed = 6.0f;
+    float turnRate = 10.0f;
+    float modelYawOffset = 0.0f;
     float scale = 0.03f;
 
     // Ссылки на модель.
@@ -25,10 +41,12 @@ struct Character {
     SkinnedHandle mesh = 0;
     TextureHandle tex = 0;
 
-    // moveDir — нормированное горизонтальное направление в мире (y=0), mag 0..1.
-    // faceMove — доворачиваться ли мордой к направлению движения (false = пятиться).
-    void update(float dt, Vec3 moveDir, float mag, bool faceMove);
+    // Зафиксировать текущее состояние как «предыдущее» (вызывать перед simulate).
+    void snapshot();
 
-    // Собрать объект для рендера (с семплингом анимации по animParam).
-    SkinnedItem buildItem() const;
+    // Шаг симуляции на фиксированный dt по команде ввода.
+    void simulate(float dt, const InputCommand& in);
+
+    // Отрисовочный объект с интерполяцией между prev и текущим (alpha 0..1).
+    SkinnedItem buildItem(float alpha) const;
 };

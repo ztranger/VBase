@@ -28,10 +28,15 @@ struct Engine {
     bool vulkanSupported = false;
     std::chrono::steady_clock::time_point lastTime{};
     bool haveTime = false;
+    float accumulator = 0.0f; // накопитель времени для фиксированного тика
     float fps = 0.0f;        // сглаженный счётчик кадров для HUD
     float lightAngle = 0.9f; // управляется слайдером ImGui
     float uiScale = 1.0f;    // масштаб UI по плотности экрана
 };
+
+// Частота симуляции. Рендер идёт быстрее и интерполирует между тиками.
+// Именно на этом тике позже будет крутиться и сетевая симуляция.
+constexpr float kTick = 1.0f / 30.0f;
 
 void handleCmd(android_app* app, int32_t cmd) {
     auto* engine = static_cast<Engine*>(app->userData);
@@ -161,7 +166,7 @@ extern "C" void android_main(android_app* app) {
         if (engine.renderer && engine.scene) {
             pumpInput(app, engine.scene.get());
 
-            // Дельта времени для кадра.
+            // Реальная дельта времени кадра.
             auto now = std::chrono::steady_clock::now();
             float dt = 0.0f;
             if (engine.haveTime) {
@@ -169,9 +174,18 @@ extern "C" void android_main(android_app* app) {
             }
             engine.lastTime = now;
             engine.haveTime = true;
+            if (dt > 0.25f) dt = 0.25f;  // защита от «спирали смерти» после паузы
 
-            engine.scene->update(dt);
-            RenderFrame frame = engine.scene->buildFrame(engine.renderer->aspectRatio());
+            // Фиксированный тик симуляции: сколько накопилось — столько шагов.
+            engine.accumulator += dt;
+            while (engine.accumulator >= kTick) {
+                engine.scene->fixedUpdate(kTick);
+                engine.accumulator -= kTick;
+            }
+            float alpha = engine.accumulator / kTick;  // доля до следующего тика
+
+            // Рендер с интерполяцией между тиками.
+            RenderFrame frame = engine.scene->render(alpha, engine.renderer->aspectRatio(), dt);
             frame.deltaTime = dt;
 
             // Направление света управляется слайдером ImGui (см. UI ниже).
