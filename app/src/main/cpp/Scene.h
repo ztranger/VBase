@@ -1,9 +1,8 @@
 #pragma once
 
-#include <android/asset_manager.h>
-
 #include <vector>
 
+#include "AssetSource.h"
 #include "Character.h"
 #include "FollowCamera.h"
 #include "Input.h"
@@ -68,7 +67,7 @@ struct GameObject {
  */
 class Scene {
 public:
-    void build(Renderer& renderer, AAssetManager* assets);
+    void build(Renderer& renderer, AssetSource& assets);
 
     // Шаг симуляции на фиксированный dt (движение, анимация, вращение декора).
     void fixedUpdate(float dt);

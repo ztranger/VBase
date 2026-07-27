@@ -17,20 +17,6 @@ int nodeIndex(const cgltf_data* data, const cgltf_node* node) {
     return (int)(node - data->nodes);
 }
 
-// Прочитать весь ассет в память.
-bool readAssetBytes(AAssetManager* mgr, const char* path, std::vector<uint8_t>& out) {
-    AAsset* asset = AAssetManager_open(mgr, path, AASSET_MODE_BUFFER);
-    if (asset == nullptr) {
-        LOGW("glTF-ассет не найден: %s", path);
-        return false;
-    }
-    off_t len = AAsset_getLength(asset);
-    out.resize((size_t)len);
-    int read = AAsset_read(asset, out.data(), (size_t)len);
-    AAsset_close(asset);
-    return read == (int)len;
-}
-
 // Рекурсивно посчитать мировую матрицу узла (родитель раньше потомка).
 void computeGlobal(const std::vector<ModelNode>& nodes, int i,
                    const std::vector<Mat4>& local, std::vector<Mat4>& global,
@@ -145,9 +131,12 @@ void SkinnedModel::sampleBlend(int animA, float timeA, int animB, float timeB,
     poseToJoints(*this, T, R, S, out);
 }
 
-bool loadGltfModel(AAssetManager* mgr, const char* path, SkinnedModel& out) {
+bool loadGltfModel(AssetSource& src, const char* path, SkinnedModel& out) {
     std::vector<uint8_t> bytes;
-    if (!readAssetBytes(mgr, path, bytes)) return false;
+    if (!src.read(path, bytes)) {
+        LOGW("glTF-ассет не найден: %s", path);
+        return false;
+    }
 
     cgltf_options options{};
     cgltf_data* data = nullptr;

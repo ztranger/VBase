@@ -32,6 +32,7 @@ set_source_files_properties(${ENET_SOURCES} PROPERTIES COMPILE_DEFINITIONS
         "HAS_SOCKLEN_T=1;HAS_FCNTL=1;HAS_POLL=1;HAS_GETADDRINFO=1;HAS_GETNAMEINFO=1;HAS_GETHOSTBYNAME_R=1;HAS_GETHOSTBYADDR_R=1;HAS_INET_PTON=1;HAS_INET_NTOP=1;HAS_MSGHDR_FLAGS=1")
 
 set(CGLTF_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/cgltf")
+set(STB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/stb")
 
 add_library(vbase SHARED
         main.cpp
@@ -51,7 +52,7 @@ add_library(vbase SHARED
         ${IMGUI_DIR}/imgui_widgets.cpp
         ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp)
 
-target_include_directories(vbase PRIVATE "${IMGUI_DIR}" "${IMGUI_DIR}/backends" "${CGLTF_DIR}" "${ENET_DIR}/include")
+target_include_directories(vbase PRIVATE "${IMGUI_DIR}" "${IMGUI_DIR}/backends" "${CGLTF_DIR}" "${STB_DIR}" "${ENET_DIR}/include")
 # Заставляет imgui_impl_opengl3 использовать GLES3, а не десктопный GL.
 target_compile_definitions(vbase PRIVATE IMGUI_IMPL_OPENGL_ES3)
 
@@ -63,7 +64,6 @@ set(CMAKE_SHARED_LINKER_FLAGS
 target_link_libraries(vbase
         game-activity::game-activity_static
         android
-        jnigraphics   # AImageDecoder_* для загрузки текстур
         EGL
         GLESv3
         vulkan

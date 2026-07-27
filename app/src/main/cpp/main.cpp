@@ -1,20 +1,42 @@
 #include <game-activity/native_app_glue/android_native_app_glue.h>
+#include <android/asset_manager.h>
 #include <android/configuration.h>
 #include <android/input.h>
 
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <string>
 
 #include "imgui.h"
 
+#include "AssetSource.h"
 #include "GlRenderer.h"
 #include "Log.h"
 #include "RenderFrame.h"
 #include "Scene.h"
 #include "VulkanProbe.h"
+
+namespace {
+// Источник ассетов Android поверх AAssetManager (файлы из APK).
+class AndroidAssetSource : public AssetSource {
+public:
+    explicit AndroidAssetSource(AAssetManager* mgr) : mgr_(mgr) {}
+    bool read(const char* path, std::vector<uint8_t>& out) override {
+        AAsset* a = AAssetManager_open(mgr_, path, AASSET_MODE_BUFFER);
+        if (a == nullptr) return false;
+        off_t len = AAsset_getLength(a);
+        out.resize((size_t)len);
+        int r = AAsset_read(a, out.data(), (size_t)len);
+        AAsset_close(a);
+        return r == (int)len;
+    }
+private:
+    AAssetManager* mgr_;
+};
+}  // namespace
 
 // NB: VulkanRenderer временно отключён от сборки, пока портируется под
 // новый контракт RenderFrame (см. CMakeLists.txt). VulkanProbe оставлен,
@@ -52,7 +74,8 @@ void handleCmd(android_app* app, int32_t cmd) {
                     // живой GPU-контекст (залить меши/текстуры) и AAssetManager
                     // (загрузить модели/картинки из APK).
                     engine->scene = std::make_unique<Scene>();
-                    engine->scene->build(*engine->renderer, app->activity->assetManager);
+                    AndroidAssetSource assets(app->activity->assetManager);
+                    engine->scene->build(*engine->renderer, assets);
                     engine->haveTime = false;
 
                     // Масштаб UI по плотности экрана — иначе на телефоне с высоким
@@ -206,7 +229,7 @@ extern "C" void android_main(android_app* app) {
             Engine* e = &engine;
             frame.ui = [e]() {
                 ImGui::SetNextWindowPos(ImVec2(20, 90), ImGuiCond_FirstUseEver);
-                ImGui::SetNextWindowSize(ImVec2(340, 260), ImGuiCond_FirstUseEver);
+                ImGui::SetNextWindowSize(ImVec2(360, 560), ImGuiCond_FirstUseEver);
                 ImGui::Begin("VBase");
                 ImGui::Text("FPS: %.1f", (double)e->fps);
                 ImGui::SliderFloat("Light angle", &e->lightAngle, 0.0f, 6.2831f);
@@ -235,7 +258,37 @@ extern "C" void android_main(android_app* app) {
                                     sc->remoteCount());
                         if (ImGui::Button("Disconnect")) sc->leaveGame();
                     } else {
-                        ImGui::InputText("IP", e->joinIp, sizeof(e->joinIp));
+                        // Своя цифровая клавиатура: системная софт-клавиатура из
+                        // ImGui на Android не поднимается, а тапы у нас работают.
+                        ImGui::Text("IP: %s", e->joinIp);
+                        auto key = [e](char c) {
+                            size_t l = std::strlen(e->joinIp);
+                            if (l + 1 < sizeof(e->joinIp)) {
+                                e->joinIp[l] = c;
+                                e->joinIp[l + 1] = '\0';
+                            }
+                        };
+                        float b = ImGui::GetFontSize() * 2.2f;
+                        ImVec2 sz(b, b);
+                        const char* rows[3] = {"789", "456", "123"};
+                        for (int r = 0; r < 3; ++r) {
+                            for (int i = 0; i < 3; ++i) {
+                                char lbl[2] = {rows[r][i], '\0'};
+                                if (i > 0) ImGui::SameLine();
+                                if (ImGui::Button(lbl, sz)) key(rows[r][i]);
+                            }
+                        }
+                        if (ImGui::Button("0", sz)) key('0');
+                        ImGui::SameLine();
+                        if (ImGui::Button(".", sz)) key('.');
+                        ImGui::SameLine();
+                        if (ImGui::Button("<-", sz)) {
+                            size_t l = std::strlen(e->joinIp);
+                            if (l > 0) e->joinIp[l - 1] = '\0';
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::Button("Clr", sz)) e->joinIp[0] = '\0';
+
                         if (ImGui::Button("Host")) sc->hostGame();
                         ImGui::SameLine();
                         if (ImGui::Button("Join")) sc->joinGame(e->joinIp);

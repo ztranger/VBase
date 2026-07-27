@@ -1,11 +1,10 @@
 #pragma once
 
-#include <android/asset_manager.h>
-
 #include <cstdint>
 #include <string>
 #include <vector>
 
+#include "AssetSource.h"
 #include "MathUtil.h"
 #include "Texture.h"
 
@@ -72,5 +71,5 @@ struct SkinnedModel {
                      float blend, std::vector<Mat4>& out) const;
 };
 
-// Загрузка .glb/.gltf из assets/ через cgltf. Первый скин + все анимации.
-bool loadGltfModel(AAssetManager* mgr, const char* path, SkinnedModel& out);
+// Загрузка .glb/.gltf через cgltf (данные читаются из AssetSource). Первый скин + анимации.
+bool loadGltfModel(AssetSource& src, const char* path, SkinnedModel& out);

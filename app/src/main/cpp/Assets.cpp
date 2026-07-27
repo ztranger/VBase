@@ -1,9 +1,9 @@
 #include "Assets.h"
 
-#include <android/bitmap.h>
-#include <android/imagedecoder.h>
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_NO_STDIO
+#include "stb_image.h"
 
-#include <cmath>
 #include <cstring>
 #include <sstream>
 #include <string>
@@ -15,17 +15,14 @@
 
 namespace {
 
-bool readAsset(AAssetManager* mgr, const char* path, std::string& out) {
-    AAsset* asset = AAssetManager_open(mgr, path, AASSET_MODE_BUFFER);
-    if (asset == nullptr) {
+bool readText(AssetSource& src, const char* path, std::string& out) {
+    std::vector<uint8_t> bytes;
+    if (!src.read(path, bytes)) {
         LOGW("Asset не найден: %s", path);
         return false;
     }
-    off_t len = AAsset_getLength(asset);
-    out.resize((size_t)len);
-    int read = AAsset_read(asset, out.data(), (size_t)len);
-    AAsset_close(asset);
-    return read == (int)len;
+    out.assign(bytes.begin(), bytes.end());
+    return true;
 }
 
 } // namespace
@@ -50,62 +47,33 @@ TextureData makeCheckerboard(uint32_t size, uint32_t cells) {
     return tex;
 }
 
-namespace {
-
-// Декодирование через уже созданный AImageDecoder -> RGBA8 в out.
-bool decodeWith(AImageDecoder* decoder, TextureData& out) {
-    const AImageDecoderHeaderInfo* info = AImageDecoder_getHeaderInfo(decoder);
-    int w = AImageDecoderHeaderInfo_getWidth(info);
-    int h = AImageDecoderHeaderInfo_getHeight(info);
-    AImageDecoder_setAndroidBitmapFormat(decoder, ANDROID_BITMAP_FORMAT_RGBA_8888);
-
-    size_t stride = AImageDecoder_getMinimumStride(decoder);
-    std::vector<uint8_t> tmp(stride * (size_t)h);
-    if (AImageDecoder_decodeImage(decoder, tmp.data(), stride, tmp.size()) !=
-        ANDROID_IMAGE_DECODER_SUCCESS) {
+bool decodeImageBuffer(const void* data, size_t size, TextureData& out) {
+    int w = 0, h = 0, channels = 0;
+    stbi_uc* pixels = stbi_load_from_memory(
+        reinterpret_cast<const stbi_uc*>(data), (int)size, &w, &h, &channels, 4);  // форсим RGBA
+    if (pixels == nullptr) {
+        LOGW("stb_image: не удалось декодировать (%s)", stbi_failure_reason());
         return false;
     }
     out.width = (uint32_t)w;
     out.height = (uint32_t)h;
-    out.rgba.resize((size_t)w * h * 4);
-    for (int row = 0; row < h; ++row) {  // уплотняем строки, если stride шире w*4
-        std::memcpy(out.rgba.data() + (size_t)row * w * 4,
-                    tmp.data() + (size_t)row * stride, (size_t)w * 4);
-    }
+    out.rgba.assign(pixels, pixels + (size_t)w * h * 4);
+    stbi_image_free(pixels);
     return true;
 }
 
-} // namespace
-
-bool loadImageAsset(AAssetManager* mgr, const char* path, TextureData& out) {
-    AAsset* asset = AAssetManager_open(mgr, path, AASSET_MODE_BUFFER);
-    if (asset == nullptr) {
+bool loadImageAsset(AssetSource& src, const char* path, TextureData& out) {
+    std::vector<uint8_t> bytes;
+    if (!src.read(path, bytes)) {
         LOGW("Изображение не найдено: %s", path);
         return false;
     }
-    bool ok = false;
-    AImageDecoder* decoder = nullptr;
-    if (AImageDecoder_createFromAAsset(asset, &decoder) == ANDROID_IMAGE_DECODER_SUCCESS) {
-        ok = decodeWith(decoder, out);
-        AImageDecoder_delete(decoder);
-    }
-    AAsset_close(asset);
-    return ok;
+    return decodeImageBuffer(bytes.data(), bytes.size(), out);
 }
 
-bool decodeImageBuffer(const void* data, size_t size, TextureData& out) {
-    bool ok = false;
-    AImageDecoder* decoder = nullptr;
-    if (AImageDecoder_createFromBuffer(data, size, &decoder) == ANDROID_IMAGE_DECODER_SUCCESS) {
-        ok = decodeWith(decoder, out);
-        AImageDecoder_delete(decoder);
-    }
-    return ok;
-}
-
-bool loadObjAsset(AAssetManager* mgr, const char* path, MeshData& out) {
+bool loadObjAsset(AssetSource& src, const char* path, MeshData& out) {
     std::string text;
-    if (!readAsset(mgr, path, text)) {
+    if (!readText(src, path, text)) {
         return false;
     }
 

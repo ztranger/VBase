@@ -17,14 +17,17 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <string>
 #include <vector>
 
 #include "Character.h"
 #include "DesktopRenderer.h"
+#include "FileAssetSource.h"
 #include "FollowCamera.h"
 #include "Input.h"
 #include "Mesh.h"
 #include "MathUtil.h"
+#include "Model.h"
 #include "Net.h"
 
 namespace {
@@ -58,6 +61,7 @@ int main(int argc, char** argv) {
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
 #endif
+    std::setvbuf(stdout, nullptr, _IONBF, 0);  // логи сразу, без буфера
     const char* serverIp = (argc > 1) ? argv[1] : "127.0.0.1";
 
     if (!glfwInit()) {
@@ -80,6 +84,20 @@ int main(int argc, char** argv) {
     // Грузим адреса GL-функций через GLFW (captureless-лямбда -> указатель функции).
     if (!renderer.init([](const char* n) { return (void*)glfwGetProcAddress(n); })) {
         return 1;
+    }
+
+    // Проверка абстракции ассетов на десктопе: читаем ту же Fox.glb с диска
+    // тем же портируемым загрузчиком (рендер модели — следующий шаг).
+    std::string assetsDir = (argc > 2) ? argv[2] : "../../app/src/main/assets";
+    FileAssetSource assets(assetsDir);
+    SkinnedModel fox;
+    if (loadGltfModel(assets, "models/Fox.glb", fox)) {
+        std::printf("Fox загружен с диска: %u вершин, %u анимаций, текстура %s\n",
+                    (unsigned)fox.vertices.size(), (unsigned)fox.animations.size(),
+                    fox.hasTexture ? "есть" : "нет");
+    } else {
+        std::printf("Fox не найден (assets dir: %s) — укажи путь 2-м аргументом\n",
+                    assetsDir.c_str());
     }
 
     uint32_t planeMesh = renderer.createMesh(makePlane(24.0f, 1.0f));

@@ -6,7 +6,7 @@
 #include "Log.h"
 #include "Renderer.h"
 
-void Scene::build(Renderer& renderer, AAssetManager* assets) {
+void Scene::build(Renderer& renderer, AssetSource& assets) {
     // --- Текстуры ---
     TextureHandle checker = renderer.createTexture(makeCheckerboard(256, 8));
     TextureHandle crateTex = 0;

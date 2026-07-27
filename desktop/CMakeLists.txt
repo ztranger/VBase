@@ -5,8 +5,9 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(APP "${CMAKE_CURRENT_SOURCE_DIR}/../app/src/main/cpp")
-set(ENET "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/enet")
-set(GLFW_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/glfw")
+set(TP "${CMAKE_CURRENT_SOURCE_DIR}/../third_party")
+set(ENET "${TP}/enet")
+set(GLFW_DIR "${TP}/glfw")
 
 # GLFW из исходников (только сама либа, без примеров/тестов/доки).
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
@@ -20,6 +21,8 @@ add_executable(vbase_desktop
         ${APP}/Character.cpp
         ${APP}/Mesh.cpp
         ${APP}/Net.cpp
+        ${APP}/Assets.cpp
+        ${APP}/Model.cpp
         ${ENET}/callbacks.c
         ${ENET}/compress.c
         ${ENET}/host.c
@@ -29,7 +32,7 @@ add_executable(vbase_desktop
         ${ENET}/protocol.c
         ${ENET}/win32.c)
 
-target_include_directories(vbase_desktop PRIVATE "${APP}" "${ENET}/include")
+target_include_directories(vbase_desktop PRIVATE "${APP}" "${ENET}/include" "${TP}/cgltf" "${TP}/stb")
 
 if(MSVC)
     target_compile_options(vbase_desktop PRIVATE /utf-8)
