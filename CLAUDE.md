@@ -1,0 +1,49 @@
+# VBase — нативный 3D-движок (Android) + мультиплеер
+
+Учебный нативный 3D-движок на C++ под Android (OpenGL ES 3), выросший до
+клиент-серверного мультиплеера с выделенным десктопным сервером и десктопным
+клиентом. Комментарии и логи — на русском.
+
+Подробности архитектуры, дизайна неткода, карты файлов и «граблей»:
+см. **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
+План дальнейших работ (что делаем следующим): **[docs/NEXT_STEPS.md](docs/NEXT_STEPS.md)**.
+Ниже — самое нужное для старта.
+
+## Три сборочные цели
+
+| Цель | Где | Как собрать | Что это |
+|---|---|---|---|
+| Android-приложение | `app/` | Android Studio (Run ▶) | клиент: рендер GLES3 + игра + сеть |
+| Выделенный сервер | `server/` | `server\build.bat` (MSVC) | авторитетный сервер, headless |
+| Десктоп-клиент | `desktop/` | `desktop\build.bat` (MSVC) | GLFW + desktop GL 3.3, переиспользует ядро |
+
+Нативный код клиента живёт в `app/src/main/cpp/`. Сервер и десктоп переиспользуют
+из него платформонезависимые файлы (симуляция, сеть, загрузчики, математика).
+
+## Тулчейн (эта машина, Windows)
+
+- Android: NDK `28.2.13676358`, GameActivity `3.0.5`, `minSdk 30`, `targetSdk 36`,
+  namespace `com.hpg.vbase`. Сборка — только через Android Studio (Gradle wrapper
+  не генерировали; из консоли мешает блокировка общего кэша `~/.gradle`).
+- Десктоп/сервер: MSVC (VS Build Tools 18, `vcvars64.bat`) + bundled CMake —
+  всё зашито в `server/build.bat` и `desktop/build.bat`.
+- Проверка компиляции нативного кода без Gradle: NDK clang с
+  `--target=aarch64-linux-android30 -std=c++20 -fsyntax-only` (см. ARCHITECTURE).
+
+## Вендоренные зависимости (`third_party/`)
+
+`imgui` (GUI), `enet` (UDP), `cgltf` (glTF), `stb` (stb_image), `glfw` (окно на десктопе).
+`glew/` — пустой остаток неудачной загрузки, **не используется**, можно удалить.
+
+## Ключевые правила
+
+- **CMake для C-исходников**: в проектах с `.c` (ENet) язык C обязателен —
+  `project(... C CXX)`, иначе `.c` молча не компилируются.
+- **Заголовок математики — `MathUtil.h`**, НЕ `Math.h` (на Windows столкнулся бы
+  со стандартным `<math.h>` из-за регистронезависимой ФС).
+- **Не ломать платформонезависимость**: `Character`, `Scene`, `Net`, `Model`,
+  `Mesh`, `MathUtil`, `Input`, `FollowCamera`, `Assets`, `AssetSource` не должны
+  тянуть Android/GL/ImGui. Рендер и платформа — за интерфейсами (`Renderer`,
+  `AssetSource`).
+- **Vulkan-бэкенд** (`VulkanRenderer.*`, `shaders/`) сейчас ИСКЛЮЧЁН из сборки
+  (портируется под контракт `RenderFrame`); GLES-бэкенд `GlRenderer` активен.
