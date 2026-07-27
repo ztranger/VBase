@@ -4,13 +4,10 @@
 
 #include "Input.h"
 #include "MathUtil.h"
-#include "Model.h"
-#include "RenderFrame.h"
 
-// Управляемый персонаж как СЕТЕВАЯ СУЩНОСТЬ. Симуляция идёт на фиксированном
-// тике (simulate), а рендер интерполирует между прошлым и текущим состоянием
-// (buildItem(alpha)) — так картинка плавная при низкой частоте тика/сети.
-// Модель (glTF) — это данные; сам класс не «лиса».
+// Управляемый персонаж — ЧИСТАЯ СИМУЛЯЦИЯ (без рендера и модели), чтобы этот
+// код компилировался и на клиенте (Android/GL), и на выделенном сервере.
+// Отрисовку (модель, скиннинг) строит клиентский слой по состоянию Character.
 struct Character {
     enum class Owner { Local, Remote };
 
@@ -24,29 +21,16 @@ struct Character {
     float animParam = 0.0f;
     float animTime = 0.0f;
 
-    // Предыдущее состояние (снимок прошлого тика) — для интерполяции при рендере.
+    // Предыдущее состояние (для интерполяции при рендере на клиенте).
     Vec3 prevPosition{0.0f, 0.0f, 0.0f};
     float prevFacingYaw = 0.0f;
     float prevAnimParam = 0.0f;
     float prevAnimTime = 0.0f;
 
-    // Конфиг.
+    // Конфиг движения.
     float maxSpeed = 6.0f;
     float turnRate = 10.0f;
-    float modelYawOffset = 0.0f;
-    float scale = 0.03f;
 
-    // Ссылки на модель.
-    const SkinnedModel* model = nullptr;
-    SkinnedHandle mesh = 0;
-    TextureHandle tex = 0;
-
-    // Зафиксировать текущее состояние как «предыдущее» (вызывать перед simulate).
-    void snapshot();
-
-    // Шаг симуляции на фиксированный dt по команде ввода.
-    void simulate(float dt, const InputCommand& in);
-
-    // Отрисовочный объект с интерполяцией между prev и текущим (alpha 0..1).
-    SkinnedItem buildItem(float alpha) const;
+    void snapshot();  // зафиксировать текущее как «предыдущее»
+    void simulate(float dt, const InputCommand& in);  // шаг симуляции
 };

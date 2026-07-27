@@ -74,16 +74,38 @@ void Scene::build(Renderer& renderer, AAssetManager* assets) {
 
     // --- Управляемый персонаж: лиса (glTF + скиннинг) ---
     if (loadGltfModel(assets, "models/Fox.glb", foxModel_)) {
-        player_.model = &foxModel_;
-        player_.mesh = renderer.createSkinnedMesh(foxModel_);
+        foxMesh_ = renderer.createSkinnedMesh(foxModel_);
         if (foxModel_.hasTexture) {
-            player_.tex = renderer.createTexture(foxModel_.baseColor);
+            foxTex_ = renderer.createTexture(foxModel_.baseColor);
         }
         player_.position = {0.0f, 0.0f, 0.0f};
         player_.snapshot();  // prev = curr, чтобы первый кадр не «прыгнул»
     } else {
         LOGW("Не удалось загрузить Fox.glb");
     }
+}
+
+SkinnedItem Scene::makeFoxItem(Vec3 pos, float yaw, float animParam, float animTime) const {
+    SkinnedItem item;
+    item.mesh = foxMesh_;
+    item.texture = foxTex_;
+    item.color = (foxTex_ != 0) ? Vec3{1.0f, 1.0f, 1.0f} : Vec3{0.85f, 0.5f, 0.25f};
+    item.model = Mat4::translation(pos)
+               * Mat4::rotationY(yaw + foxYawOffset_)
+               * Mat4::scale({foxScale_, foxScale_, foxScale_});
+
+    if (!foxModel_.animations.empty()) {
+        int n = (int)foxModel_.animations.size();
+        auto id = [n](int i) { return i < n ? i : n - 1; };
+        if (animParam <= 0.01f) {
+            foxModel_.sampleAnimation(id(0), animTime, item.joints);
+        } else if (animParam <= 1.0f) {
+            foxModel_.sampleBlend(id(0), animTime, id(1), animTime, animParam, item.joints);
+        } else {
+            foxModel_.sampleBlend(id(1), animTime, id(2), animTime, animParam - 1.0f, item.joints);
+        }
+    }
+    return item;
 }
 
 void Scene::setUiScale(float s) {
@@ -174,11 +196,6 @@ void Scene::applySnapshot() {
         if (r == nullptr) {
             RemotePlayer rp;
             rp.id = s.id;
-            rp.ch.model = &foxModel_;
-            rp.ch.mesh = player_.mesh;
-            rp.ch.tex = player_.tex;
-            rp.ch.scale = player_.scale;
-            rp.ch.modelYawOffset = player_.modelYawOffset;
             rp.ch.position = {s.x, s.y, s.z};
             rp.ch.facingYaw = s.yaw;
             remotes_.push_back(rp);
@@ -250,8 +267,13 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
         t.rotation.y = obj.prevRotY + (obj.transform.rotation.y - obj.prevRotY) * alpha;
         frame.items.push_back({obj.mesh, obj.material, t.matrix()});
     }
-    if (player_.mesh != 0) {
-        frame.skinned.push_back(player_.buildItem(alpha));
+    if (foxMesh_ != 0) {
+        // Свой аватар: интерполяция prev -> current по alpha.
+        Vec3 p = player_.prevPosition + (player_.position - player_.prevPosition) * alpha;
+        float yaw = lerpAngle(player_.prevFacingYaw, player_.facingYaw, alpha);
+        float ap = player_.prevAnimParam + (player_.animParam - player_.prevAnimParam) * alpha;
+        float at = player_.prevAnimTime + (player_.animTime - player_.prevAnimTime) * alpha;
+        frame.skinned.push_back(makeFoxItem(p, yaw, ap, at));
     }
 
     // Удалённые игроки: рендерим «прошлое» на kInterpDelay назад, интерполируя
@@ -282,7 +304,8 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
             r.ch.animParam = st.anim;
         }
         r.ch.animTime += renderDt;  // фаза анимации крутится локально
-        frame.skinned.push_back(r.ch.buildItem(1.0f));
+        frame.skinned.push_back(
+            makeFoxItem(r.ch.position, r.ch.facingYaw, r.ch.animParam, r.ch.animTime));
     }
     return frame;
 }

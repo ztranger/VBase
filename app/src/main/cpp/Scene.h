@@ -92,10 +92,10 @@ public:
     const VirtualJoystick& joystick() const { return joystick_; }
     float characterSpeed() const { return player_.speed01; }
 
-    float modelScale() const { return player_.scale; }
-    void setModelScale(float s) { player_.scale = s; }
-    float modelYawOffset() const { return player_.modelYawOffset; }
-    void setModelYawOffset(float y) { player_.modelYawOffset = y; }
+    float modelScale() const { return foxScale_; }
+    void setModelScale(float s) { foxScale_ = s; }
+    float modelYawOffset() const { return foxYawOffset_; }
+    void setModelYawOffset(float y) { foxYawOffset_ = y; }
     float cameraDistance() const { return camera_.distance; }
     void setCameraDistance(float d) { camera_.distance = d; }
     float cameraHeight() const { return camera_.height; }
@@ -105,10 +105,17 @@ private:
     FollowCamera camera_;
     std::vector<GameObject> objects_;
 
-    SkinnedModel foxModel_;   // данные модели (живёт, пока на неё ссылается player_)
-    Character player_;        // управляемый актор
+    SkinnedModel foxModel_;   // данные модели (общие для всех аватаров-лис)
+    SkinnedHandle foxMesh_ = 0;   // GPU-меш (клиентский ресурс)
+    TextureHandle foxTex_ = 0;
+    float foxScale_ = 0.03f;
+    float foxYawOffset_ = 0.0f;
+    Character player_;        // управляемый актор (симуляция)
     VirtualJoystick joystick_;
     float uiScale_ = 1.0f;
+
+    // Построить отрисовочный предмет лисы по состоянию (клиентский рендер).
+    SkinnedItem makeFoxItem(Vec3 pos, float yaw, float animParam, float animTime) const;
 
     // Сеть.
     NetClient client_;
