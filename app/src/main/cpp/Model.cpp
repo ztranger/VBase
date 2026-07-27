@@ -6,6 +6,7 @@
 #define CGLTF_IMPLEMENTATION
 #include "cgltf.h"
 
+#include "Assets.h"
 #include "Log.h"
 
 namespace {
@@ -238,6 +239,33 @@ bool loadGltfModel(AAssetManager* mgr, const char* path, SkinnedModel& out) {
             A.channels.push_back(std::move(c));
         }
         out.animations.push_back(std::move(A));
+    }
+
+    // Альбедо-текстура: берём base color первого материала, декодируем из
+    // байтов buffer_view (для .glb картинка встроена в бинарный чанк).
+    const cgltf_image* image = nullptr;
+    if (data->materials_count > 0) {
+        const cgltf_material& mat = data->materials[0];
+        if (mat.has_pbr_metallic_roughness &&
+            mat.pbr_metallic_roughness.base_color_texture.texture &&
+            mat.pbr_metallic_roughness.base_color_texture.texture->image) {
+            image = mat.pbr_metallic_roughness.base_color_texture.texture->image;
+        }
+    }
+    if (image == nullptr && data->images_count > 0) {
+        image = &data->images[0];  // запасной вариант
+    }
+    if (image && image->buffer_view) {
+        const cgltf_buffer_view* bv = image->buffer_view;
+        if (bv->buffer && bv->buffer->data) {
+            const uint8_t* bytes = (const uint8_t*)bv->buffer->data + bv->offset;
+            if (decodeImageBuffer(bytes, bv->size, out.baseColor)) {
+                out.hasTexture = true;
+                LOGI("glTF текстура: %ux%u", out.baseColor.width, out.baseColor.height);
+            } else {
+                LOGW("Не удалось декодировать встроенную текстуру glTF");
+            }
+        }
     }
 
     LOGI("glTF загружен: %s — %u верш., %u инд., %u костей, %u анимаций", path,

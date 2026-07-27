@@ -31,8 +31,9 @@ struct HudText {
 // Скиннинг-объект: анимированная модель с матрицами костей на этот кадр.
 struct SkinnedItem {
     SkinnedHandle mesh = 0;
+    TextureHandle texture = 0;   // альбедо (0 -> белая, останется чистый цвет)
     Mat4 model;                  // world-размещение
-    Vec3 color{0.8f, 0.5f, 0.3f};
+    Vec3 color{1.0f, 1.0f, 1.0f};
     std::vector<Mat4> joints;    // матрицы костей (uJoints[] в шейдере)
 };
 

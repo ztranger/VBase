@@ -109,6 +109,9 @@ void Scene::build(Renderer& renderer, AAssetManager* assets) {
     // Анимированная модель (glTF + скиннинг): Fox с анимациями Survey/Walk/Run.
     if (loadGltfModel(assets, "models/Fox.glb", foxModel_)) {
         foxMesh_ = renderer.createSkinnedMesh(foxModel_);
+        if (foxModel_.hasTexture) {
+            foxTex_ = renderer.createTexture(foxModel_.baseColor);
+        }
         // Fox в нативных единицах крупный (~100), поэтому масштабируем.
         if (foxModel_.animations.size() > 1) foxAnim_ = 1;  // обычно Walk
     } else {
@@ -166,7 +169,9 @@ RenderFrame Scene::buildFrame(float aspect) const {
     if (foxMesh_ != 0) {
         SkinnedItem item;
         item.mesh = foxMesh_;
-        item.color = {0.85f, 0.5f, 0.25f};  // лисий рыжий
+        item.texture = foxTex_;
+        // С текстурой цвет белый (не тонируем); без неё — рыжий запасной.
+        item.color = foxTex_ != 0 ? Vec3{1.0f, 1.0f, 1.0f} : Vec3{0.85f, 0.5f, 0.25f};
         item.model = Mat4::translation({0.0f, 0.0f, 3.5f})
                    * Mat4::scale({foxScale_, foxScale_, foxScale_});
         foxModel_.sampleAnimation(foxAnim_, foxTime_, item.joints);

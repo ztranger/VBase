@@ -67,6 +67,7 @@ private:
     // Анимированная модель (glTF + скиннинг).
     SkinnedModel foxModel_;
     SkinnedHandle foxMesh_ = 0;
+    TextureHandle foxTex_ = 0;
     int foxAnim_ = 0;
     float foxTime_ = 0.0f;
     float foxScale_ = 0.03f;

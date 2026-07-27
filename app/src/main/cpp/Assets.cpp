@@ -50,41 +50,56 @@ TextureData makeCheckerboard(uint32_t size, uint32_t cells) {
     return tex;
 }
 
+namespace {
+
+// Декодирование через уже созданный AImageDecoder -> RGBA8 в out.
+bool decodeWith(AImageDecoder* decoder, TextureData& out) {
+    const AImageDecoderHeaderInfo* info = AImageDecoder_getHeaderInfo(decoder);
+    int w = AImageDecoderHeaderInfo_getWidth(info);
+    int h = AImageDecoderHeaderInfo_getHeight(info);
+    AImageDecoder_setAndroidBitmapFormat(decoder, ANDROID_BITMAP_FORMAT_RGBA_8888);
+
+    size_t stride = AImageDecoder_getMinimumStride(decoder);
+    std::vector<uint8_t> tmp(stride * (size_t)h);
+    if (AImageDecoder_decodeImage(decoder, tmp.data(), stride, tmp.size()) !=
+        ANDROID_IMAGE_DECODER_SUCCESS) {
+        return false;
+    }
+    out.width = (uint32_t)w;
+    out.height = (uint32_t)h;
+    out.rgba.resize((size_t)w * h * 4);
+    for (int row = 0; row < h; ++row) {  // уплотняем строки, если stride шире w*4
+        std::memcpy(out.rgba.data() + (size_t)row * w * 4,
+                    tmp.data() + (size_t)row * stride, (size_t)w * 4);
+    }
+    return true;
+}
+
+} // namespace
+
 bool loadImageAsset(AAssetManager* mgr, const char* path, TextureData& out) {
     AAsset* asset = AAssetManager_open(mgr, path, AASSET_MODE_BUFFER);
     if (asset == nullptr) {
         LOGW("Изображение не найдено: %s", path);
         return false;
     }
-
-    // AImageDecoder введён в API 30 — доступен всегда, т.к. minSdk = 30.
     bool ok = false;
     AImageDecoder* decoder = nullptr;
     if (AImageDecoder_createFromAAsset(asset, &decoder) == ANDROID_IMAGE_DECODER_SUCCESS) {
-        const AImageDecoderHeaderInfo* info = AImageDecoder_getHeaderInfo(decoder);
-        int w = AImageDecoderHeaderInfo_getWidth(info);
-        int h = AImageDecoderHeaderInfo_getHeight(info);
-        AImageDecoder_setAndroidBitmapFormat(decoder, ANDROID_BITMAP_FORMAT_RGBA_8888);
-
-        size_t stride = AImageDecoder_getMinimumStride(decoder);
-        std::vector<uint8_t> tmp(stride * (size_t)h);
-        if (AImageDecoder_decodeImage(decoder, tmp.data(), stride, tmp.size()) ==
-            ANDROID_IMAGE_DECODER_SUCCESS) {
-            out.width = (uint32_t)w;
-            out.height = (uint32_t)h;
-            out.rgba.resize((size_t)w * h * 4);
-            // Уплотняем строки, если stride шире w*4.
-            for (int row = 0; row < h; ++row) {
-                std::memcpy(out.rgba.data() + (size_t)row * w * 4,
-                            tmp.data() + (size_t)row * stride,
-                            (size_t)w * 4);
-            }
-            ok = true;
-        }
+        ok = decodeWith(decoder, out);
         AImageDecoder_delete(decoder);
     }
-
     AAsset_close(asset);
+    return ok;
+}
+
+bool decodeImageBuffer(const void* data, size_t size, TextureData& out) {
+    bool ok = false;
+    AImageDecoder* decoder = nullptr;
+    if (AImageDecoder_createFromBuffer(data, size, &decoder) == ANDROID_IMAGE_DECODER_SUCCESS) {
+        ok = decodeWith(decoder, out);
+        AImageDecoder_delete(decoder);
+    }
     return ok;
 }
 

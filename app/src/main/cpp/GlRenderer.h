@@ -74,6 +74,7 @@ private:
     GLint uSkinModel_ = -1;
     GLint uSkinColor_ = -1;
     GLint uSkinJoints_ = -1;
+    GLint uSkinAlbedo_ = -1;
     std::vector<GlMesh> skinnedMeshes_;  // handle = индекс + 1
 
     // HUD: 2D-текст растровым шрифтом поверх сцены.

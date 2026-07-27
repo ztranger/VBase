@@ -133,6 +133,7 @@ const char* kSkinVert =
     "uniform mat4 uModel;\n"
     "uniform mat4 uJoints[64];\n"
     "out vec3 vNormal;\n"
+    "out vec2 vUV;\n"
     "void main() {\n"
     "    mat4 skin = aWeights.x * uJoints[int(aJoints.x)]\n"
     "              + aWeights.y * uJoints[int(aJoints.y)]\n"
@@ -141,6 +142,7 @@ const char* kSkinVert =
     "    vec4 worldPos = uModel * skin * vec4(aPos, 1.0);\n"
     "    gl_Position = uViewProj * worldPos;\n"
     "    vNormal = mat3(uModel * skin) * aNormal;\n"
+    "    vUV = aUV;\n"
     "}\n";
 
 const char* kSkinFrag =
@@ -148,12 +150,15 @@ const char* kSkinFrag =
     "precision mediump float;\n"
     FRAME_BLOCK
     "in vec3 vNormal;\n"
+    "in vec2 vUV;\n"
     "uniform vec3 uColor;\n"
+    "uniform sampler2D uAlbedo;\n"
     "out vec4 fragColor;\n"
     "void main() {\n"
     "    vec3 N = normalize(vNormal);\n"
     "    float diff = max(dot(N, normalize(uLightDir)), 0.0);\n"
-    "    fragColor = vec4(uColor * (0.25 + 0.75 * diff), 1.0);\n"
+    "    vec3 albedo = texture(uAlbedo, vUV).rgb * uColor;\n"
+    "    fragColor = vec4(albedo * (0.25 + 0.75 * diff), 1.0);\n"
     "}\n";
 
 // HUD: 2D-текст. Позиции задаём в пикселях, шейдер сам переводит в NDC.
@@ -345,6 +350,7 @@ bool GlRenderer::initSkin() {
     uSkinModel_ = glGetUniformLocation(skinProgram_, "uModel");
     uSkinColor_ = glGetUniformLocation(skinProgram_, "uColor");
     uSkinJoints_ = glGetUniformLocation(skinProgram_, "uJoints");
+    uSkinAlbedo_ = glGetUniformLocation(skinProgram_, "uAlbedo");
     return true;
 }
 
@@ -387,12 +393,18 @@ SkinnedHandle GlRenderer::createSkinnedMesh(const SkinnedModel& model) {
 
 void GlRenderer::drawSkinned(const std::vector<SkinnedItem>& items) {
     glUseProgram(skinProgram_);
+    glUniform1i(uSkinAlbedo_, 0);
+    glActiveTexture(GL_TEXTURE0);
     for (const SkinnedItem& item : items) {
         if (item.mesh == 0 || item.mesh > skinnedMeshes_.size()) continue;
         const GlMesh& mesh = skinnedMeshes_[item.mesh - 1];
 
         glUniformMatrix4fv(uSkinModel_, 1, GL_FALSE, item.model.m);
         glUniform3f(uSkinColor_, item.color.x, item.color.y, item.color.z);
+
+        GLuint tex = (item.texture != 0 && item.texture <= textures_.size())
+                         ? textures_[item.texture - 1] : whiteTexture_;
+        glBindTexture(GL_TEXTURE_2D, tex);
 
         int jointCount = (int)item.joints.size();
         if (jointCount > SkinnedModel::kMaxJoints) jointCount = SkinnedModel::kMaxJoints;

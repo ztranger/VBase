@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "MathUtil.h"
+#include "Texture.h"
 
 // Вершина скиннинг-меша: геометрия + до 4 костей с весами.
 struct SkinnedVertex {
@@ -54,6 +55,9 @@ struct SkinnedModel {
     std::vector<Mat4> inverseBind;     // обратная bind-матрица на кость
 
     std::vector<Animation> animations;
+
+    TextureData baseColor;      // альбедо-текстура из glb (если есть)
+    bool hasTexture = false;
 
     // Посчитать матрицы костей для анимации animIndex во времени time (сек).
     // out заполняется jointNodes.size() матрицами (для uJoints[] в шейдере).
