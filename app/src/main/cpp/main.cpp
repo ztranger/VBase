@@ -30,7 +30,6 @@ struct Engine {
     bool haveTime = false;
     float fps = 0.0f;        // сглаженный счётчик кадров для HUD
     float lightAngle = 0.9f; // управляется слайдером ImGui
-    bool showDemo = true;    // окно демо ImGui
     float uiScale = 1.0f;    // масштаб UI по плотности экрана
 };
 
@@ -60,6 +59,7 @@ void handleCmd(android_app* app, int32_t cmd) {
                     if (scale < 1.0f) scale = 1.0f;
                     if (scale > 4.0f) scale = 4.0f;
                     engine->uiScale = scale;
+                    engine->scene->setUiScale(scale);  // джойстик под DPI
 
                     // ImGui 1.92: FontScaleDpi даёт ЧЁТКОЕ масштабирование (шрифт
                     // ре-растеризуется), ScaleAllSizes масштабирует отступы/паддинги.
@@ -197,41 +197,32 @@ extern "C" void android_main(android_app* app) {
                 ImGui::SliderFloat("Light angle", &e->lightAngle, 0.0f, 6.2831f);
 
                 Scene* sc = e->scene.get();
-                if (sc != nullptr && sc->animationCount() > 0) {
-                    ImGui::SeparatorText("Fox (glTF skinning + blend)");
-
-                    ImGui::TextUnformatted("From:");
-                    int a = sc->animA();
-                    for (int i = 0; i < sc->animationCount(); ++i) {
-                        ImGui::SameLine();
-                        if (ImGui::RadioButton((std::string(sc->animationName(i)) + "##A").c_str(), a == i)) {
-                            sc->setAnimA(i);
-                        }
+                if (sc != nullptr) {
+                    ImGui::SeparatorText("Character");
+                    ImGui::Text("Speed: %.2f", (double)sc->characterSpeed());
+                    float yawOff = sc->modelYawOffset();
+                    if (ImGui::SliderFloat("Model yaw", &yawOff, -3.15f, 3.15f)) {
+                        sc->setModelYawOffset(yawOff);  // подгонка "морда по движению"
                     }
-
-                    ImGui::TextUnformatted("To:  ");
-                    int b = sc->animB();
-                    for (int i = 0; i < sc->animationCount(); ++i) {
-                        ImGui::SameLine();
-                        if (ImGui::RadioButton((std::string(sc->animationName(i)) + "##B").c_str(), b == i)) {
-                            sc->setAnimB(i);
-                        }
+                    float mscale = sc->modelScale();
+                    if (ImGui::SliderFloat("Model scale", &mscale, 0.005f, 0.1f, "%.3f")) {
+                        sc->setModelScale(mscale);
                     }
-
-                    float blend = sc->blend();
-                    if (ImGui::SliderFloat("Blend A<->B", &blend, 0.0f, 1.0f, "%.2f")) {
-                        sc->setBlend(blend);
-                    }
-                    float scale = sc->modelScale();
-                    if (ImGui::SliderFloat("Fox scale", &scale, 0.005f, 0.1f, "%.3f")) {
-                        sc->setModelScale(scale);
-                    }
+                    ImGui::SeparatorText("Camera");
+                    float cd = sc->cameraDistance();
+                    if (ImGui::SliderFloat("Distance", &cd, 2.0f, 15.0f)) sc->setCameraDistance(cd);
+                    float ch = sc->cameraHeight();
+                    if (ImGui::SliderFloat("Height", &ch, 0.5f, 10.0f)) sc->setCameraHeight(ch);
                 }
-
-                ImGui::Checkbox("ImGui demo window", &e->showDemo);
                 ImGui::End();
-                if (e->showDemo) {
-                    ImGui::ShowDemoWindow(&e->showDemo);
+
+                // Виртуальный джойстик поверх всего (появляется под пальцем).
+                if (sc != nullptr && sc->joystick().active) {
+                    const VirtualJoystick& js = sc->joystick();
+                    ImDrawList* dl = ImGui::GetForegroundDrawList();
+                    dl->AddCircle(ImVec2(js.ox, js.oy), js.radius, IM_COL32(255, 255, 255, 110), 48, 4.0f);
+                    dl->AddCircleFilled(ImVec2(js.cx, js.cy), js.radius * 0.4f,
+                                        IM_COL32(255, 255, 255, 190));
                 }
             };
 

@@ -4,7 +4,9 @@
 
 #include <vector>
 
-#include "Camera.h"
+#include "Character.h"
+#include "FollowCamera.h"
+#include "Input.h"
 #include "MathUtil.h"
 #include "Mesh.h"
 #include "Model.h"
@@ -13,10 +15,10 @@
 
 class Renderer;
 
-// Позиция/поворот/масштаб объекта. matrix() собирает world-матрицу.
+// Позиция/поворот/масштаб статичного объекта окружения.
 struct Transform {
     Vec3 position{0.0f, 0.0f, 0.0f};
-    Vec3 rotation{0.0f, 0.0f, 0.0f};  // эйлеровы углы, радианы
+    Vec3 rotation{0.0f, 0.0f, 0.0f};
     Vec3 scale{1.0f, 1.0f, 1.0f};
 
     Mat4 matrix() const {
@@ -28,57 +30,47 @@ struct Transform {
     }
 };
 
-// Игровой объект = трансформ + какой меш + какой материал + простая анимация.
+// Статичный объект окружения (пол, кубы, сферы, кольцо).
 struct GameObject {
     Transform transform;
     MeshHandle mesh = 0;
     MaterialHandle material = 0;
-    float spin = 0.0f;  // рад/сек вокруг Y (0 — не вращается)
+    float spin = 0.0f;
 };
 
 /**
- * Игровой мир. Владеет объектами и камерой, обновляет их логику и умеет
- * собрать RenderFrame для рендера. Не зависит от GL/Vulkan.
+ * Игровой мир. Владеет окружением, управляемым персонажем, следящей камерой и
+ * джойстиком. Камера следует за персонажем через обобщённый интерфейс (позиция
+ * + facing), а не за «лисой» — актора можно заменить/добавить без правок камеры.
  */
 class Scene {
 public:
-    // Создаёт меши/текстуры/материалы через рендер и грузит модели из ассетов.
     void build(Renderer& renderer, AAssetManager* assets);
-
     void update(float dt);
-
-    // Ввод из main -> вращение камеры (это логика сцены, не рендера).
-    void onPointer(float x, float y, bool pressed);
-
+    void onPointer(float x, float y, bool pressed);  // -> джойстик
     RenderFrame buildFrame(float aspect) const;
 
-    // Управление анимированной моделью (для ImGui в main).
-    int animationCount() const { return (int)foxModel_.animations.size(); }
-    const char* animationName(int i) const;
-    int animA() const { return foxAnimA_; }
-    int animB() const { return foxAnimB_; }
-    void setAnimA(int i) { if (i >= 0 && i < animationCount()) foxAnimA_ = i; }
-    void setAnimB(int i) { if (i >= 0 && i < animationCount()) foxAnimB_ = i; }
-    float blend() const { return foxBlend_; }
-    void setBlend(float b) { foxBlend_ = b; }
-    float modelScale() const { return foxScale_; }
-    void setModelScale(float s) { foxScale_ = s; }
+    void setUiScale(float s);  // масштаб джойстика под DPI
+
+    // Для ImGui/HUD.
+    const VirtualJoystick& joystick() const { return joystick_; }
+    float characterSpeed() const { return player_.speed01; }
+
+    float modelScale() const { return player_.scale; }
+    void setModelScale(float s) { player_.scale = s; }
+    float modelYawOffset() const { return player_.modelYawOffset; }
+    void setModelYawOffset(float y) { player_.modelYawOffset = y; }
+    float cameraDistance() const { return camera_.distance; }
+    void setCameraDistance(float d) { camera_.distance = d; }
+    float cameraHeight() const { return camera_.height; }
+    void setCameraHeight(float h) { camera_.height = h; }
 
 private:
-    Camera camera_;
+    FollowCamera camera_;
     std::vector<GameObject> objects_;
 
-    // Анимированная модель (glTF + скиннинг).
-    SkinnedModel foxModel_;
-    SkinnedHandle foxMesh_ = 0;
-    TextureHandle foxTex_ = 0;
-    int foxAnimA_ = 0;       // анимация A (From)
-    int foxAnimB_ = 1;       // анимация B (To)
-    float foxBlend_ = 0.0f;  // 0 -> A, 1 -> B
-    float foxTime_ = 0.0f;
-    float foxScale_ = 0.03f;
-
-    bool dragging_ = false;
-    float lastX_ = 0.0f;
-    float lastY_ = 0.0f;
+    SkinnedModel foxModel_;   // данные модели (живёт, пока на неё ссылается player_)
+    Character player_;        // управляемый актор
+    VirtualJoystick joystick_;
+    float uiScale_ = 1.0f;
 };

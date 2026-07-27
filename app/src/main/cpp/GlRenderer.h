@@ -73,8 +73,11 @@ private:
     GLuint skinProgram_ = 0;
     GLint uSkinModel_ = -1;
     GLint uSkinColor_ = -1;
-    GLint uSkinJoints_ = -1;
     GLint uSkinAlbedo_ = -1;
+    GLint uBoneTex_ = -1;     // сэмплер bone-текстуры
+    GLint uBoneOffset_ = -1;  // строка начала костей текущей модели
+    GLuint boneTexture_ = 0;  // RGBA32F: все матрицы костей кадра (кость = 1 строка)
+    std::vector<Mat4> boneData_;         // CPU-накопитель костей на кадр
     std::vector<GlMesh> skinnedMeshes_;  // handle = индекс + 1
 
     // HUD: 2D-текст растровым шрифтом поверх сцены.

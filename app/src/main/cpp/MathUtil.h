@@ -173,6 +173,17 @@ inline Mat4 trs(Vec3 t, Quat r, Vec3 s) {
     return Mat4::translation(t) * quatToMat4(r) * Mat4::scale(s);
 }
 
+// Углы: привести к [-pi, pi] и интерполировать по кратчайшей дуге.
+inline float wrapAngle(float a) {
+    const float tau = 6.28318530718f;
+    a = std::fmod(a + 3.14159265f, tau);
+    if (a < 0.0f) a += tau;
+    return a - 3.14159265f;
+}
+inline float lerpAngle(float a, float b, float t) {
+    return a + wrapAngle(b - a) * t;
+}
+
 // Общая обратная матрица 4x4 (нужна для формулы скиннинга).
 inline Mat4 inverse(const Mat4& in) {
     const float* m = in.m;

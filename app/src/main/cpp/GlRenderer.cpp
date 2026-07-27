@@ -15,6 +15,9 @@ namespace {
 // Точка связывания UBO с кадровыми данными (совпадает в C++ и шейдерах).
 constexpr GLuint kFrameBinding = 0;
 
+// Максимум строк (костей) в bone-текстуре на кадр — суммарно по всем моделям.
+constexpr int kBoneTexRows = 1024;
+
 // Раскладка std140 блока Frame. vec3 в std140 выравнивается на 16 байт,
 // поэтому явные паддинги. Размер = 96 байт.
 struct FrameUBO {
@@ -131,14 +134,22 @@ const char* kSkinVert =
     "layout(location = 4) in vec4 aWeights;\n"
     FRAME_BLOCK
     "uniform mat4 uModel;\n"
-    "uniform mat4 uJoints[64];\n"
+    "uniform highp sampler2D uBones;\n"  // кости: строка = кость, 4 texel = 4 столбца
+    "uniform int uBoneOffset;\n"          // смещение костей этой модели в текстуре
     "out vec3 vNormal;\n"
     "out vec2 vUV;\n"
+    "mat4 boneMat(int j) {\n"
+    "    int row = uBoneOffset + j;\n"
+    "    return mat4(texelFetch(uBones, ivec2(0, row), 0),\n"
+    "               texelFetch(uBones, ivec2(1, row), 0),\n"
+    "               texelFetch(uBones, ivec2(2, row), 0),\n"
+    "               texelFetch(uBones, ivec2(3, row), 0));\n"
+    "}\n"
     "void main() {\n"
-    "    mat4 skin = aWeights.x * uJoints[int(aJoints.x)]\n"
-    "              + aWeights.y * uJoints[int(aJoints.y)]\n"
-    "              + aWeights.z * uJoints[int(aJoints.z)]\n"
-    "              + aWeights.w * uJoints[int(aJoints.w)];\n"
+    "    mat4 skin = aWeights.x * boneMat(int(aJoints.x))\n"
+    "              + aWeights.y * boneMat(int(aJoints.y))\n"
+    "              + aWeights.z * boneMat(int(aJoints.z))\n"
+    "              + aWeights.w * boneMat(int(aJoints.w));\n"
     "    vec4 worldPos = uModel * skin * vec4(aPos, 1.0);\n"
     "    gl_Position = uViewProj * worldPos;\n"
     "    vNormal = mat3(uModel * skin) * aNormal;\n"
@@ -349,8 +360,18 @@ bool GlRenderer::initSkin() {
     // buildShader уже привязал блок Frame к kFrameBinding для этой программы.
     uSkinModel_ = glGetUniformLocation(skinProgram_, "uModel");
     uSkinColor_ = glGetUniformLocation(skinProgram_, "uColor");
-    uSkinJoints_ = glGetUniformLocation(skinProgram_, "uJoints");
     uSkinAlbedo_ = glGetUniformLocation(skinProgram_, "uAlbedo");
+    uBoneTex_ = glGetUniformLocation(skinProgram_, "uBones");
+    uBoneOffset_ = glGetUniformLocation(skinProgram_, "uBoneOffset");
+
+    // Bone-текстура: ширина 4 texel (4 столбца mat4), высота = лимит строк-костей.
+    glGenTextures(1, &boneTexture_);
+    glBindTexture(GL_TEXTURE_2D, boneTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 4, kBoneTexRows, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     return true;
 }
 
@@ -392,25 +413,42 @@ SkinnedHandle GlRenderer::createSkinnedMesh(const SkinnedModel& model) {
 }
 
 void GlRenderer::drawSkinned(const std::vector<SkinnedItem>& items) {
+    // Собираем кости ВСЕХ моделей в один буфер и запоминаем смещение каждой.
+    boneData_.clear();
+    std::vector<int> offsets(items.size(), 0);
+    for (size_t i = 0; i < items.size(); ++i) {
+        offsets[i] = (int)boneData_.size();
+        for (const Mat4& j : items[i].joints) {
+            if ((int)boneData_.size() >= kBoneTexRows) break;  // защита от переполнения
+            boneData_.push_back(j);
+        }
+    }
+
+    // Одна заливка костей в текстуру на весь кадр (вместо uniform'ов на каждый draw).
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, boneTexture_);
+    if (!boneData_.empty()) {
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 4, (GLsizei)boneData_.size(),
+                        GL_RGBA, GL_FLOAT, boneData_[0].m);
+    }
+
     glUseProgram(skinProgram_);
     glUniform1i(uSkinAlbedo_, 0);
-    glActiveTexture(GL_TEXTURE0);
-    for (const SkinnedItem& item : items) {
+    glUniform1i(uBoneTex_, 1);
+
+    for (size_t i = 0; i < items.size(); ++i) {
+        const SkinnedItem& item = items[i];
         if (item.mesh == 0 || item.mesh > skinnedMeshes_.size()) continue;
         const GlMesh& mesh = skinnedMeshes_[item.mesh - 1];
 
         glUniformMatrix4fv(uSkinModel_, 1, GL_FALSE, item.model.m);
         glUniform3f(uSkinColor_, item.color.x, item.color.y, item.color.z);
+        glUniform1i(uBoneOffset_, offsets[i]);  // где кости этой модели в текстуре
 
+        glActiveTexture(GL_TEXTURE0);
         GLuint tex = (item.texture != 0 && item.texture <= textures_.size())
                          ? textures_[item.texture - 1] : whiteTexture_;
         glBindTexture(GL_TEXTURE_2D, tex);
-
-        int jointCount = (int)item.joints.size();
-        if (jointCount > SkinnedModel::kMaxJoints) jointCount = SkinnedModel::kMaxJoints;
-        if (jointCount > 0) {
-            glUniformMatrix4fv(uSkinJoints_, jointCount, GL_FALSE, item.joints[0].m);
-        }
 
         glBindVertexArray(mesh.vao);
         glDrawElements(GL_TRIANGLES, mesh.indexCount, GL_UNSIGNED_INT, nullptr);
@@ -745,6 +783,7 @@ void GlRenderer::shutdown() {
             glDeleteBuffers(1, &mesh.ebo);
         }
         if (skinProgram_) glDeleteProgram(skinProgram_);
+        if (boneTexture_) glDeleteTextures(1, &boneTexture_);
         if (!textures_.empty()) {
             glDeleteTextures((GLsizei)textures_.size(), textures_.data());
         }
@@ -766,6 +805,7 @@ void GlRenderer::shutdown() {
     meshes_.clear();
     skinnedMeshes_.clear();
     skinProgram_ = 0;
+    boneTexture_ = 0;
     textures_.clear();
     materials_.clear();
     display_ = EGL_NO_DISPLAY;

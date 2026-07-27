@@ -21,6 +21,7 @@ add_library(vbase SHARED
         Assets.cpp
         Font.cpp
         Model.cpp
+        Character.cpp
         Scene.cpp
         GlRenderer.cpp
         VulkanProbe.cpp
@@ -28,7 +29,6 @@ add_library(vbase SHARED
         ${IMGUI_DIR}/imgui_draw.cpp
         ${IMGUI_DIR}/imgui_tables.cpp
         ${IMGUI_DIR}/imgui_widgets.cpp
-        ${IMGUI_DIR}/imgui_demo.cpp
         ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp)
 
 target_include_directories(vbase PRIVATE "${IMGUI_DIR}" "${IMGUI_DIR}/backends" "${CGLTF_DIR}")
