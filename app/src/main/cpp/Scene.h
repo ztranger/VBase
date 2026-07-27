@@ -10,10 +10,20 @@
 #include "MathUtil.h"
 #include "Mesh.h"
 #include "Model.h"
+#include "Net.h"
 #include "RenderFrame.h"
 #include "Texture.h"
 
 class Renderer;
+
+// Другой игрок: сущность + сглаживаемая цель из снапшотов (интерполяция).
+struct RemotePlayer {
+    uint32_t id = 0;
+    Character ch;
+    Vec3 targetPos{0.0f, 0.0f, 0.0f};
+    float targetYaw = 0.0f;
+    float targetAnim = 0.0f;
+};
 
 // Позиция/поворот/масштаб статичного объекта окружения.
 struct Transform {
@@ -58,6 +68,14 @@ public:
 
     void setUiScale(float s);  // масштаб джойстика под DPI
 
+    // Сеть.
+    void hostGame();
+    void joinGame(const char* ip);
+    void leaveGame();
+    bool netConnected() const { return client_.connected(); }
+    bool netHost() const { return host_; }
+    int remoteCount() const { return (int)remotes_.size(); }
+
     // Для ImGui/HUD.
     const VirtualJoystick& joystick() const { return joystick_; }
     float characterSpeed() const { return player_.speed01; }
@@ -79,4 +97,13 @@ private:
     Character player_;        // управляемый актор
     VirtualJoystick joystick_;
     float uiScale_ = 1.0f;
+
+    // Сеть.
+    NetClient client_;
+    NetServer server_;
+    bool host_ = false;
+    uint32_t inputSeq_ = 0;
+    std::vector<RemotePlayer> remotes_;
+
+    void applySnapshot();
 };

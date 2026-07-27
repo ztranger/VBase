@@ -113,8 +113,97 @@ void Scene::fixedUpdate(float dt) {
     cmd.faceMove = joystick_.y >= 0.0f;            // назад — пятимся
     cmd.magnitude = (joystick_.y < 0.0f) ? mag * 0.5f : mag;  // назад медленнее
 
+    // Отправляем ввод серверу (если в сети). Позицию считает сервер, но локально
+    // предсказываем — иначе движение ощущалось бы с задержкой.
+    if (client_.connected()) {
+        cmd.seq = ++inputSeq_;
+        client_.sendInput(cmd);
+    }
+
     player_.snapshot();          // зафиксировать прошлое для интерполяции
-    player_.simulate(dt, cmd);
+    player_.simulate(dt, cmd);   // локальное предсказание
+
+    // Сервер (если хостим) — тем же кодом симуляции, затем рассылка снапшотов.
+    if (host_) {
+        server_.poll();
+        server_.tick(dt);
+    }
+    // Приём: снапшоты -> удалённые игроки + мягкая коррекция своего аватара.
+    client_.poll();
+    if (client_.consumeSnapshot()) {
+        applySnapshot();
+    }
+}
+
+void Scene::applySnapshot() {
+    const std::vector<EntityState>& states = client_.states();
+    uint32_t myId = client_.myId();
+
+    for (const EntityState& s : states) {
+        if (s.id == myId) {
+            // Мягкая сверка с сервером (без полного реплея — упрощённо).
+            Vec3 sp{s.x, s.y, s.z};
+            player_.position = player_.position + (sp - player_.position) * 0.15f;
+            player_.facingYaw = lerpAngle(player_.facingYaw, s.yaw, 0.15f);
+            continue;
+        }
+        RemotePlayer* r = nullptr;
+        for (auto& rp : remotes_) {
+            if (rp.id == s.id) { r = &rp; break; }
+        }
+        if (r == nullptr) {  // новый игрок — создаём с моделью лисы
+            RemotePlayer rp;
+            rp.id = s.id;
+            rp.ch.model = &foxModel_;
+            rp.ch.mesh = player_.mesh;
+            rp.ch.tex = player_.tex;
+            rp.ch.scale = player_.scale;
+            rp.ch.modelYawOffset = player_.modelYawOffset;
+            rp.ch.position = {s.x, s.y, s.z};
+            rp.ch.facingYaw = s.yaw;
+            remotes_.push_back(rp);
+            r = &remotes_.back();
+        }
+        r->targetPos = {s.x, s.y, s.z};
+        r->targetYaw = s.yaw;
+        r->targetAnim = s.animParam;
+    }
+
+    // Убрать отключившихся (отсутствуют в снапшоте).
+    for (size_t i = 0; i < remotes_.size();) {
+        bool found = false;
+        for (const EntityState& s : states) {
+            if (s.id == remotes_[i].id) { found = true; break; }
+        }
+        if (!found) {
+            remotes_.erase(remotes_.begin() + (long)i);
+        } else {
+            ++i;
+        }
+    }
+}
+
+void Scene::hostGame() {
+    leaveGame();
+    if (server_.start(kNetPort)) {
+        client_.connect("127.0.0.1", kNetPort);
+        host_ = true;
+        inputSeq_ = 0;
+    }
+}
+
+void Scene::joinGame(const char* ip) {
+    leaveGame();
+    client_.connect(ip, kNetPort);
+    host_ = false;
+    inputSeq_ = 0;
+}
+
+void Scene::leaveGame() {
+    client_.disconnect();
+    server_.stop();
+    host_ = false;
+    remotes_.clear();
 }
 
 void Scene::onPointer(float x, float y, bool pressed) {
@@ -140,6 +229,17 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
     }
     if (player_.mesh != 0) {
         frame.skinned.push_back(player_.buildItem(alpha));
+    }
+
+    // Удалённые игроки: сглаживаем к последней цели из снапшотов (интерполяция).
+    float k = renderDt * 12.0f;
+    if (k > 1.0f) k = 1.0f;
+    for (RemotePlayer& r : remotes_) {
+        r.ch.position = r.ch.position + (r.targetPos - r.ch.position) * k;
+        r.ch.facingYaw = lerpAngle(r.ch.facingYaw, r.targetYaw, k);
+        r.ch.animParam += (r.targetAnim - r.ch.animParam) * k;
+        r.ch.animTime += renderDt;  // фаза анимации крутится локально
+        frame.skinned.push_back(r.ch.buildItem(1.0f));  // alpha=1 -> текущее состояние
     }
     return frame;
 }

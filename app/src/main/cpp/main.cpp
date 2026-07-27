@@ -32,6 +32,7 @@ struct Engine {
     float fps = 0.0f;        // сглаженный счётчик кадров для HUD
     float lightAngle = 0.9f; // управляется слайдером ImGui
     float uiScale = 1.0f;    // масштаб UI по плотности экрана
+    char joinIp[64] = "127.0.0.1";  // адрес сервера для Join
 };
 
 // Частота симуляции. Рендер идёт быстрее и интерполирует между тиками.
@@ -227,6 +228,18 @@ extern "C" void android_main(android_app* app) {
                     if (ImGui::SliderFloat("Distance", &cd, 2.0f, 15.0f)) sc->setCameraDistance(cd);
                     float ch = sc->cameraHeight();
                     if (ImGui::SliderFloat("Height", &ch, 0.5f, 10.0f)) sc->setCameraHeight(ch);
+
+                    ImGui::SeparatorText("Network");
+                    if (sc->netConnected()) {
+                        ImGui::Text("%s | remotes: %d", sc->netHost() ? "HOST" : "CLIENT",
+                                    sc->remoteCount());
+                        if (ImGui::Button("Disconnect")) sc->leaveGame();
+                    } else {
+                        ImGui::InputText("IP", e->joinIp, sizeof(e->joinIp));
+                        if (ImGui::Button("Host")) sc->hostGame();
+                        ImGui::SameLine();
+                        if (ImGui::Button("Join")) sc->joinGame(e->joinIp);
+                    }
                 }
                 ImGui::End();
 

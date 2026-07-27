@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Сетевые сокеты (ENet) -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- Требуем OpenGL ES 3.0 (Vulkan проверяем в рантайме и можем откатиться на GL) -->
     <uses-feature
         android:glEsVersion="0x00030000"
