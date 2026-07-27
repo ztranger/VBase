@@ -113,11 +113,13 @@ void Scene::fixedUpdate(float dt) {
     cmd.faceMove = joystick_.y >= 0.0f;            // назад — пятимся
     cmd.magnitude = (joystick_.y < 0.0f) ? mag * 0.5f : mag;  // назад медленнее
 
-    // Отправляем ввод серверу (если в сети). Позицию считает сервер, но локально
-    // предсказываем — иначе движение ощущалось бы с задержкой.
+    tickDt_ = dt;
+
+    // Отправляем ввод серверу и запоминаем его как неподтверждённый (для реплея).
     if (client_.connected()) {
         cmd.seq = ++inputSeq_;
         client_.sendInput(cmd);
+        pending_.push_back({cmd, dt});
     }
 
     player_.snapshot();          // зафиксировать прошлое для интерполяции
@@ -128,30 +130,48 @@ void Scene::fixedUpdate(float dt) {
         server_.poll();
         server_.tick(dt);
     }
-    // Приём: снапшоты -> удалённые игроки + мягкая коррекция своего аватара.
+    // Приём: снапшоты -> реконсиляция своего аватара + буфер чужих.
     client_.poll();
     if (client_.consumeSnapshot()) {
         applySnapshot();
     }
+
+    simClock_ += dt;
 }
 
 void Scene::applySnapshot() {
-    const std::vector<EntityState>& states = client_.states();
     uint32_t myId = client_.myId();
+    if (myId == 0) return;  // ждём Welcome, иначе примем себя за чужого
+
+    const std::vector<EntityState>& states = client_.states();
+    const uint32_t ack = client_.ackSeq();
 
     for (const EntityState& s : states) {
         if (s.id == myId) {
-            // Мягкая сверка с сервером (без полного реплея — упрощённо).
-            Vec3 sp{s.x, s.y, s.z};
-            player_.position = player_.position + (sp - player_.position) * 0.15f;
-            player_.facingYaw = lerpAngle(player_.facingYaw, s.yaw, 0.15f);
+            // Reconciliation: ставим авторитетное состояние сервера и ПЕРЕИГРЫВАЕМ
+            // все вводы, которые сервер ещё не обработал (seq > ack).
+            player_.position = {s.x, s.y, s.z};
+            player_.facingYaw = s.yaw;
+            player_.speed01 = s.speed01;
+            player_.animParam = s.animParam;
+
+            size_t w = 0;  // выкидываем подтверждённые (seq <= ack)
+            for (size_t i = 0; i < pending_.size(); ++i) {
+                if (pending_[i].cmd.seq > ack) pending_[w++] = pending_[i];
+            }
+            pending_.resize(w);
+            for (const PendingInput& p : pending_) {
+                player_.simulate(p.dt, p.cmd);  // повторно применяем поверх сервера
+            }
             continue;
         }
+
+        // Чужой игрок: кладём снапшот в буфер интерполяции.
         RemotePlayer* r = nullptr;
         for (auto& rp : remotes_) {
             if (rp.id == s.id) { r = &rp; break; }
         }
-        if (r == nullptr) {  // новый игрок — создаём с моделью лисы
+        if (r == nullptr) {
             RemotePlayer rp;
             rp.id = s.id;
             rp.ch.model = &foxModel_;
@@ -164,12 +184,14 @@ void Scene::applySnapshot() {
             remotes_.push_back(rp);
             r = &remotes_.back();
         }
-        r->targetPos = {s.x, s.y, s.z};
-        r->targetYaw = s.yaw;
-        r->targetAnim = s.animParam;
+        r->buffer.push_back({simClock_, {s.x, s.y, s.z}, s.yaw, s.animParam});
+        // Ограничиваем историю (~1 сек), чтобы буфер не рос.
+        while (r->buffer.size() > 2 && r->buffer[1].t < simClock_ - 1.0) {
+            r->buffer.erase(r->buffer.begin());
+        }
     }
 
-    // Убрать отключившихся (отсутствуют в снапшоте).
+    // Убрать отключившихся.
     for (size_t i = 0; i < remotes_.size();) {
         bool found = false;
         for (const EntityState& s : states) {
@@ -204,6 +226,7 @@ void Scene::leaveGame() {
     server_.stop();
     host_ = false;
     remotes_.clear();
+    pending_.clear();
 }
 
 void Scene::onPointer(float x, float y, bool pressed) {
@@ -231,15 +254,35 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
         frame.skinned.push_back(player_.buildItem(alpha));
     }
 
-    // Удалённые игроки: сглаживаем к последней цели из снапшотов (интерполяция).
-    float k = renderDt * 12.0f;
-    if (k > 1.0f) k = 1.0f;
+    // Удалённые игроки: рендерим «прошлое» на kInterpDelay назад, интерполируя
+    // между двумя снапшотами из буфера. Это и есть snapshot interpolation.
+    const double kInterpDelay = 0.1;  // сек буфера — гасит джиттер/потери
+    double renderTime = simClock_ + (double)(alpha * tickDt_) - kInterpDelay;
     for (RemotePlayer& r : remotes_) {
-        r.ch.position = r.ch.position + (r.targetPos - r.ch.position) * k;
-        r.ch.facingYaw = lerpAngle(r.ch.facingYaw, r.targetYaw, k);
-        r.ch.animParam += (r.targetAnim - r.ch.animParam) * k;
+        const std::vector<TimedState>& buf = r.buffer;
+        if (!buf.empty()) {
+            TimedState st = buf.back();  // по умолчанию — свежайший
+            if (renderTime <= buf.front().t) {
+                st = buf.front();
+            } else if (renderTime < buf.back().t) {
+                for (size_t i = 0; i + 1 < buf.size(); ++i) {
+                    if (renderTime >= buf[i].t && renderTime < buf[i + 1].t) {
+                        const TimedState& a = buf[i];
+                        const TimedState& b = buf[i + 1];
+                        float f = (float)((renderTime - a.t) / (b.t - a.t));
+                        st.pos = a.pos + (b.pos - a.pos) * f;
+                        st.yaw = lerpAngle(a.yaw, b.yaw, f);
+                        st.anim = a.anim + (b.anim - a.anim) * f;
+                        break;
+                    }
+                }
+            }
+            r.ch.position = st.pos;
+            r.ch.facingYaw = st.yaw;
+            r.ch.animParam = st.anim;
+        }
         r.ch.animTime += renderDt;  // фаза анимации крутится локально
-        frame.skinned.push_back(r.ch.buildItem(1.0f));  // alpha=1 -> текущее состояние
+        frame.skinned.push_back(r.ch.buildItem(1.0f));
     }
     return frame;
 }

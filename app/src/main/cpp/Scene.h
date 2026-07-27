@@ -16,13 +16,25 @@
 
 class Renderer;
 
-// Другой игрок: сущность + сглаживаемая цель из снапшотов (интерполяция).
+// Снапшот состояния во времени (для буфера интерполяции чужих игроков).
+struct TimedState {
+    double t = 0.0;  // время приёма (по часам симуляции), сек
+    Vec3 pos{0.0f, 0.0f, 0.0f};
+    float yaw = 0.0f;
+    float anim = 0.0f;
+};
+
+// Другой игрок: сущность + буфер снапшотов (рендерим с задержкой, интерполируя).
 struct RemotePlayer {
     uint32_t id = 0;
     Character ch;
-    Vec3 targetPos{0.0f, 0.0f, 0.0f};
-    float targetYaw = 0.0f;
-    float targetAnim = 0.0f;
+    std::vector<TimedState> buffer;
+};
+
+// Отправленная, но ещё не подтверждённая сервером команда (для реплея).
+struct PendingInput {
+    InputCommand cmd;
+    float dt = 0.0f;
 };
 
 // Позиция/поворот/масштаб статичного объекта окружения.
@@ -104,6 +116,9 @@ private:
     bool host_ = false;
     uint32_t inputSeq_ = 0;
     std::vector<RemotePlayer> remotes_;
+    std::vector<PendingInput> pending_;  // неподтверждённые вводы (для реплея)
+    double simClock_ = 0.0;              // часы симуляции (сек)
+    float tickDt_ = 1.0f / 30.0f;        // длительность тика (для расчёта времени рендера)
 
     void applySnapshot();
 };
