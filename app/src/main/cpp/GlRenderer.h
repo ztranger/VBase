@@ -1,9 +1,12 @@
 #pragma once
 
+#include <string>
 #include <vector>
 
 #include "GlApi.h"   // GL на обеих платформах (GLES3 / desktop loader)
 #include "Renderer.h"
+
+struct AssetSource;
 
 #ifdef __ANDROID__
 #include <EGL/egl.h>  // контекст/поверхность на Android
@@ -19,7 +22,8 @@ class GlRenderer final : public Renderer {
 public:
     ~GlRenderer() override;
 
-    bool init(ANativeWindow* window, void* (*glGetProc)(const char*)) override;
+    bool init(ANativeWindow* window, void* (*glGetProc)(const char*),
+              AssetSource& assets) override;
     void setSurfaceSize(int width, int height) override;
     MeshHandle createMesh(const MeshData& data) override;
     SkinnedHandle createSkinnedMesh(const SkinnedModel& model) override;
@@ -52,7 +56,14 @@ private:
 
     bool initGlResources();  // общая GL-инициализация (шейдеры/UBO/текстуры/...)
     bool initShaders();
-    bool buildShader(const char* vs, const char* fs, GlShader& out);
+    // Собрать программу из файлов шейдеров (пути в assets, напр. "shaders/lit.frag").
+    bool buildShader(const char* vsPath, const char* fsPath, GlShader& out);
+    // Прочитать ассет целиком в строку через assets_.
+    bool readAsset(const char* path, std::string& out);
+    // Загрузить исходник шейдера: readAsset + развернуть #include "file" (1 уровень).
+    bool loadShaderSource(const char* path, std::string& out);
+    // Собрать полный исходник: строка версии + precision (для фрагментного) + тело.
+    bool assembleShaderSource(GLenum type, const char* path, std::string& out);
     bool initSkin();
     void drawSkinned(const std::vector<SkinnedItem>& items);
     bool initHud();
@@ -102,4 +113,6 @@ private:
     std::vector<float> hudVerts_;  // переиспользуемый буфер вершин (x,y,u,v)
 
     bool imguiReady_ = false;      // инициализирован ли ImGui + его GL3-бэкенд
+
+    AssetSource* assets_ = nullptr;  // источник шейдер-файлов (задаётся в init)
 };

@@ -67,13 +67,15 @@ void handleCmd(android_app* app, int32_t cmd) {
         case APP_CMD_INIT_WINDOW:
             if (app->window != nullptr) {
                 auto renderer = std::make_unique<GlRenderer>();
-                if (renderer->init(app->window, nullptr)) {
+                // Источник ассетов нужен и рендеру (шейдеры), и сцене (модели/
+                // текстуры) — один на оба, живёт весь init/build.
+                AndroidAssetSource assets(app->activity->assetManager);
+                if (renderer->init(app->window, nullptr, assets)) {
                     engine->renderer = std::move(renderer);
                     // Мир строится после инициализации рендера: ему нужны
                     // живой GPU-контекст (залить меши/текстуры) и AAssetManager
                     // (загрузить модели/картинки из APK).
                     engine->scene = std::make_unique<Scene>();
-                    AndroidAssetSource assets(app->activity->assetManager);
                     engine->scene->build(*engine->renderer, assets);
                     engine->haveTime = false;
 

@@ -3,15 +3,19 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <sstream>
+#include <string>
 
 #include "imgui.h"
 #include "backends/imgui_impl_opengl3.h"
 
+#include "AssetSource.h"
 #include "Font.h"
 #include "Log.h"
 
 // Версия GLSL зависит от платформы: GLES 3.0 на Android, GL 3.3 core на десктопе.
-// Тела шейдеров одинаковы (precision-строки десктоп принимает и игнорирует).
+// Подставляется первой строкой при сборке исходника шейдера (assembleShaderSource);
+// precision-строку десктоп принимает и игнорирует.
 #ifdef __ANDROID__
 #define GLSL_VERSION "#version 300 es\n"
 #define IMGUI_GLSL_VERSION "#version 300 es"
@@ -38,176 +42,13 @@ struct FrameUBO {
     float pad1;          // 92
 };
 
-// Общий блок Frame — вставляется в каждый шейдер, который его использует.
-#define FRAME_BLOCK \
-    "layout(std140) uniform Frame {\n" \
-    "    mat4 uViewProj;\n" \
-    "    vec3 uLightDir;\n" \
-    "    vec3 uViewPos;\n" \
-    "};\n"
+// Тела шейдеров вынесены в ассеты shaders/*.vert|frag и грузятся через
+// AssetSource (см. loadShaderSource/assembleShaderSource). Строка версии и
+// precision подставляются на этапе сборки исходника; общий UBO-блок Frame лежит
+// в shaders/common.glsl и подключается директивой #include (её разворачивает
+// loadShaderSource). std140-раскладка Frame обязана совпадать с FrameUBO выше.
 
-// Общий вершинный шейдер для Lit/Unlit (viewProj из UBO, model — per-object).
-const char* kBasicVert =
-    GLSL_VERSION
-    "layout(location = 0) in vec3 aPos;\n"
-    "layout(location = 1) in vec3 aNormal;\n"
-    "layout(location = 2) in vec2 aUV;\n"
-    "layout(location = 3) in mat4 iModel;\n"  // инстансная матрица (локации 3..6)
-    FRAME_BLOCK
-    "out vec3 vNormal;\n"
-    "out vec2 vUV;\n"
-    "void main() {\n"
-    "    gl_Position = uViewProj * iModel * vec4(aPos, 1.0);\n"
-    "    vNormal = mat3(iModel) * aNormal;\n"
-    "    vUV = aUV;\n"
-    "}\n";
-
-// Lit: диффуз (Ламберт) + текстура.
-const char* kLitFrag =
-    GLSL_VERSION
-    "precision mediump float;\n"
-    FRAME_BLOCK
-    "in vec3 vNormal;\n"
-    "in vec2 vUV;\n"
-    "uniform vec3 uColor;\n"
-    "uniform sampler2D uAlbedo;\n"
-    "out vec4 fragColor;\n"
-    "void main() {\n"
-    "    vec3 N = normalize(vNormal);\n"
-    "    float diff = max(dot(N, normalize(uLightDir)), 0.0);\n"
-    "    vec3 albedo = texture(uAlbedo, vUV).rgb * uColor;\n"
-    "    fragColor = vec4(albedo * (0.25 + 0.75 * diff), 1.0);\n"
-    "}\n";
-
-// Unlit: плоский цвет/текстура без освещения (Frame-блок в фрагментнике не нужен).
-const char* kUnlitFrag =
-    GLSL_VERSION
-    "precision mediump float;\n"
-    "in vec3 vNormal;\n"
-    "in vec2 vUV;\n"
-    "uniform vec3 uColor;\n"
-    "uniform sampler2D uAlbedo;\n"
-    "out vec4 fragColor;\n"
-    "void main() {\n"
-    "    fragColor = vec4(texture(uAlbedo, vUV).rgb * uColor, 1.0);\n"
-    "}\n";
-
-// Phong: вершинник дополнительно отдаёт мировую позицию (для вектора взгляда).
-const char* kPhongVert =
-    GLSL_VERSION
-    "layout(location = 0) in vec3 aPos;\n"
-    "layout(location = 1) in vec3 aNormal;\n"
-    "layout(location = 2) in vec2 aUV;\n"
-    "layout(location = 3) in mat4 iModel;\n"  // инстансная матрица (локации 3..6)
-    FRAME_BLOCK
-    "out vec3 vNormal;\n"
-    "out vec3 vWorldPos;\n"
-    "out vec2 vUV;\n"
-    "void main() {\n"
-    "    vec4 world = iModel * vec4(aPos, 1.0);\n"
-    "    vWorldPos = world.xyz;\n"
-    "    gl_Position = uViewProj * world;\n"
-    "    vNormal = mat3(iModel) * aNormal;\n"
-    "    vUV = aUV;\n"
-    "}\n";
-
-// Phong: диффуз + зеркальный блик по позиции камеры.
-const char* kPhongFrag =
-    GLSL_VERSION
-    "precision mediump float;\n"
-    FRAME_BLOCK
-    "in vec3 vNormal;\n"
-    "in vec3 vWorldPos;\n"
-    "in vec2 vUV;\n"
-    "uniform vec3 uColor;\n"
-    "uniform sampler2D uAlbedo;\n"
-    "out vec4 fragColor;\n"
-    "void main() {\n"
-    "    vec3 N = normalize(vNormal);\n"
-    "    vec3 L = normalize(uLightDir);\n"
-    "    vec3 V = normalize(uViewPos - vWorldPos);\n"
-    "    vec3 R = reflect(-L, N);\n"
-    "    float diff = max(dot(N, L), 0.0);\n"
-    "    float spec = pow(max(dot(V, R), 0.0), 32.0);\n"
-    "    vec3 albedo = texture(uAlbedo, vUV).rgb * uColor;\n"
-    "    vec3 c = albedo * (0.2 + 0.8 * diff) + vec3(1.0) * (spec * 0.5);\n"
-    "    fragColor = vec4(c, 1.0);\n"
-    "}\n";
-
-// Скиннинг: позиция считается как взвешенная сумма матриц костей.
-const char* kSkinVert =
-    GLSL_VERSION
-    "layout(location = 0) in vec3 aPos;\n"
-    "layout(location = 1) in vec3 aNormal;\n"
-    "layout(location = 2) in vec2 aUV;\n"
-    "layout(location = 3) in vec4 aJoints;\n"
-    "layout(location = 4) in vec4 aWeights;\n"
-    FRAME_BLOCK
-    "uniform mat4 uModel;\n"
-    "uniform highp sampler2D uBones;\n"  // кости: строка = кость, 4 texel = 4 столбца
-    "uniform int uBoneOffset;\n"          // смещение костей этой модели в текстуре
-    "out vec3 vNormal;\n"
-    "out vec2 vUV;\n"
-    "mat4 boneMat(int j) {\n"
-    "    int row = uBoneOffset + j;\n"
-    "    return mat4(texelFetch(uBones, ivec2(0, row), 0),\n"
-    "               texelFetch(uBones, ivec2(1, row), 0),\n"
-    "               texelFetch(uBones, ivec2(2, row), 0),\n"
-    "               texelFetch(uBones, ivec2(3, row), 0));\n"
-    "}\n"
-    "void main() {\n"
-    "    mat4 skin = aWeights.x * boneMat(int(aJoints.x))\n"
-    "              + aWeights.y * boneMat(int(aJoints.y))\n"
-    "              + aWeights.z * boneMat(int(aJoints.z))\n"
-    "              + aWeights.w * boneMat(int(aJoints.w));\n"
-    "    vec4 worldPos = uModel * skin * vec4(aPos, 1.0);\n"
-    "    gl_Position = uViewProj * worldPos;\n"
-    "    vNormal = mat3(uModel * skin) * aNormal;\n"
-    "    vUV = aUV;\n"
-    "}\n";
-
-const char* kSkinFrag =
-    GLSL_VERSION
-    "precision mediump float;\n"
-    FRAME_BLOCK
-    "in vec3 vNormal;\n"
-    "in vec2 vUV;\n"
-    "uniform vec3 uColor;\n"
-    "uniform sampler2D uAlbedo;\n"
-    "out vec4 fragColor;\n"
-    "void main() {\n"
-    "    vec3 N = normalize(vNormal);\n"
-    "    float diff = max(dot(N, normalize(uLightDir)), 0.0);\n"
-    "    vec3 albedo = texture(uAlbedo, vUV).rgb * uColor;\n"
-    "    fragColor = vec4(albedo * (0.25 + 0.75 * diff), 1.0);\n"
-    "}\n";
-
-// HUD: 2D-текст. Позиции задаём в пикселях, шейдер сам переводит в NDC.
-const char* kHudVert =
-    GLSL_VERSION
-    "layout(location = 0) in vec2 aPos;\n"  // пиксели
-    "layout(location = 1) in vec2 aUV;\n"
-    "uniform vec2 uScreen;\n"
-    "out vec2 vUV;\n"
-    "void main() {\n"
-    "    vec2 ndc = vec2(aPos.x / uScreen.x * 2.0 - 1.0, 1.0 - aPos.y / uScreen.y * 2.0);\n"
-    "    gl_Position = vec4(ndc, 0.0, 1.0);\n"
-    "    vUV = aUV;\n"
-    "}\n";
-
-const char* kHudFrag =
-    GLSL_VERSION
-    "precision mediump float;\n"
-    "in vec2 vUV;\n"
-    "uniform sampler2D uFont;\n"
-    "uniform vec3 uColor;\n"
-    "out vec4 fragColor;\n"
-    "void main() {\n"
-    "    float a = texture(uFont, vUV).a;\n"
-    "    fragColor = vec4(uColor, a);\n"
-    "}\n";
-
-GLuint compileShader(GLenum type, const char* source) {
+GLuint compileShader(GLenum type, const char* source, const char* label) {
     GLuint shader = glCreateShader(type);
     glShaderSource(shader, 1, &source, nullptr);
     glCompileShader(shader);
@@ -216,11 +57,18 @@ GLuint compileShader(GLenum type, const char* source) {
     if (!ok) {
         char log[1024];
         glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
-        LOGE("Shader compile error: %s", log);
+        LOGE("Ошибка компиляции шейдера %s: %s", label, log);
         glDeleteShader(shader);
         return 0;
     }
     return shader;
+}
+
+// Директория пути ("shaders/lit.frag" -> "shaders/"), для разворота #include.
+std::string dirOf(const char* path) {
+    std::string p(path);
+    size_t slash = p.find_last_of('/');
+    return slash == std::string::npos ? std::string() : p.substr(0, slash + 1);
 }
 
 } // namespace
@@ -229,7 +77,9 @@ GlRenderer::~GlRenderer() {
     shutdown();
 }
 
-bool GlRenderer::init(ANativeWindow* window, void* (*glGetProc)(const char*)) {
+bool GlRenderer::init(ANativeWindow* window, void* (*glGetProc)(const char*),
+                      AssetSource& assets) {
+    assets_ = &assets;  // источник шейдер-файлов на время инициализации ресурсов
 #ifdef __ANDROID__
     (void)glGetProc;
     if (!initEgl(window)) {  // EGL создаёт контекст из окна и делает его текущим
@@ -361,9 +211,68 @@ void GlRenderer::setSurfaceSize(int width, int height) {
 #endif
 }
 
-bool GlRenderer::buildShader(const char* vs, const char* fs, GlShader& out) {
-    GLuint v = compileShader(GL_VERTEX_SHADER, vs);
-    GLuint f = compileShader(GL_FRAGMENT_SHADER, fs);
+bool GlRenderer::readAsset(const char* path, std::string& out) {
+    std::vector<uint8_t> bytes;
+    if (assets_ == nullptr || !assets_->read(path, bytes)) {
+        LOGE("Не удалось прочитать ассет: %s", path);
+        return false;
+    }
+    out.assign(bytes.begin(), bytes.end());
+    return true;
+}
+
+bool GlRenderer::loadShaderSource(const char* path, std::string& out) {
+    std::string raw;
+    if (!readAsset(path, raw)) return false;
+
+    const std::string dir = dirOf(path);  // #include ищем рядом с самим шейдером
+    std::string result;
+    std::istringstream in(raw);
+    std::string line;
+    while (std::getline(in, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();  // CRLF-файлы
+        // Директива #include "file" -> подставляем содержимое (один уровень).
+        size_t s = line.find_first_not_of(" \t");
+        if (s != std::string::npos && line.compare(s, 8, "#include") == 0) {
+            size_t q1 = line.find('"', s);
+            size_t q2 = (q1 == std::string::npos) ? std::string::npos : line.find('"', q1 + 1);
+            if (q1 == std::string::npos || q2 == std::string::npos) {
+                LOGE("Некорректный #include в %s: %s", path, line.c_str());
+                return false;
+            }
+            std::string incName = line.substr(q1 + 1, q2 - q1 - 1);
+            std::string incSrc;
+            if (!readAsset((dir + incName).c_str(), incSrc)) return false;
+            result += incSrc;
+            if (!incSrc.empty() && incSrc.back() != '\n') result += '\n';
+        } else {
+            result += line;
+            result += '\n';
+        }
+    }
+    out = std::move(result);
+    return true;
+}
+
+bool GlRenderer::assembleShaderSource(GLenum type, const char* path, std::string& out) {
+    std::string body;
+    if (!loadShaderSource(path, body)) return false;
+    // Первой строкой — версия под платформу; фрагментному на GLES нужна precision.
+    std::string full = GLSL_VERSION;
+    if (type == GL_FRAGMENT_SHADER) full += "precision mediump float;\n";
+    full += body;
+    out = std::move(full);
+    return true;
+}
+
+bool GlRenderer::buildShader(const char* vsPath, const char* fsPath, GlShader& out) {
+    std::string vsSrc, fsSrc;
+    if (!assembleShaderSource(GL_VERTEX_SHADER, vsPath, vsSrc) ||
+        !assembleShaderSource(GL_FRAGMENT_SHADER, fsPath, fsSrc)) {
+        return false;
+    }
+    GLuint v = compileShader(GL_VERTEX_SHADER, vsSrc.c_str(), vsPath);
+    GLuint f = compileShader(GL_FRAGMENT_SHADER, fsSrc.c_str(), fsPath);
     if (!v || !f) {
         return false;
     }
@@ -402,14 +311,14 @@ bool GlRenderer::buildShader(const char* vs, const char* fs, GlShader& out) {
 bool GlRenderer::initShaders() {
     // Порядок обязан совпадать с enum ShaderType (индекс = тип).
     shaders_.resize((size_t)ShaderType::Count);
-    return buildShader(kBasicVert, kLitFrag,   shaders_[(size_t)ShaderType::Lit]) &&
-           buildShader(kBasicVert, kUnlitFrag, shaders_[(size_t)ShaderType::Unlit]) &&
-           buildShader(kPhongVert, kPhongFrag, shaders_[(size_t)ShaderType::Phong]);
+    return buildShader("shaders/basic.vert", "shaders/lit.frag",   shaders_[(size_t)ShaderType::Lit]) &&
+           buildShader("shaders/basic.vert", "shaders/unlit.frag", shaders_[(size_t)ShaderType::Unlit]) &&
+           buildShader("shaders/phong.vert", "shaders/phong.frag", shaders_[(size_t)ShaderType::Phong]);
 }
 
 bool GlRenderer::initSkin() {
     GlShader s;
-    if (!buildShader(kSkinVert, kSkinFrag, s)) {
+    if (!buildShader("shaders/skin.vert", "shaders/skin.frag", s)) {
         return false;
     }
     skinProgram_ = s.program;
@@ -513,9 +422,14 @@ void GlRenderer::drawSkinned(const std::vector<SkinnedItem>& items) {
 }
 
 bool GlRenderer::initHud() {
-    // Программа для 2D-текста.
-    GLuint vs = compileShader(GL_VERTEX_SHADER, kHudVert);
-    GLuint fs = compileShader(GL_FRAGMENT_SHADER, kHudFrag);
+    // Программа для 2D-текста (Frame-блок не нужен, отдельно от buildShader).
+    std::string vsSrc, fsSrc;
+    if (!assembleShaderSource(GL_VERTEX_SHADER, "shaders/hud.vert", vsSrc) ||
+        !assembleShaderSource(GL_FRAGMENT_SHADER, "shaders/hud.frag", fsSrc)) {
+        return false;
+    }
+    GLuint vs = compileShader(GL_VERTEX_SHADER, vsSrc.c_str(), "shaders/hud.vert");
+    GLuint fs = compileShader(GL_FRAGMENT_SHADER, fsSrc.c_str(), "shaders/hud.frag");
     if (!vs || !fs) {
         return false;
     }

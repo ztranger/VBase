@@ -8,6 +8,7 @@
 // Forward-declare: на десктопе <android/native_window.h> нет, а тип нужен только
 // как непрозрачный указатель (используется реально лишь на Android).
 struct ANativeWindow;
+struct AssetSource;  // источник ассетов (рендер грузит через него шейдеры)
 
 /**
  * Интерфейс рендера. Знает только про меши, текстуры, материалы, камеру и свет —
@@ -21,7 +22,9 @@ public:
     // Инициализация. Контекст GL должен быть уже текущим (создаёт платформа:
     // EGL на Android из window; GLFW на десктопе). glGetProc — загрузчик адресов
     // GL-функций (нужен на десктопе; на Android null — функции слинкованы).
-    virtual bool init(ANativeWindow* window, void* (*glGetProc)(const char*)) = 0;
+    // assets — источник для загрузки шейдеров (shaders/*.vert|frag).
+    virtual bool init(ANativeWindow* window, void* (*glGetProc)(const char*),
+                      AssetSource& assets) = 0;
 
     // Размер поверхности в пикселях (десктоп задаёт каждый кадр; Android берёт
     // из EGL и это игнорирует).

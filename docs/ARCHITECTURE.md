@@ -72,9 +72,17 @@
   `imgui_impl_glfw`. Содержимое панели — общий модуль `GameUi.{h,cpp}` (imgui+`Scene`),
   один на обе платформы; отдаётся рендеру через колбэк `RenderFrame::ui`.
 
-Шейдеры — инлайн-строки в `GlRenderer.cpp`; строка версии подставляется макросом
-`GLSL_VERSION` (`#version 300 es` на Android, `#version 330 core` на десктопе).
-Vulkan-шейдеры (`shaders/*.vert/.frag`, glslc→SPIR-V) сейчас не используются.
+Шейдеры GL лежат ассетами в **`app/src/main/assets/shaders/`** (`*.vert`/`*.frag` +
+`common.glsl`) и грузятся через `AssetSource` (`GlRenderer::init` его получает).
+Файлы содержат чистое тело GLSL: строку версии (`#version 300 es` / `#version 330 core`,
+макрос `GLSL_VERSION`) и `precision` для фрагментного подставляет
+`assembleShaderSource`; общий UBO-блок `Frame` вынесен в `common.glsl` и
+подключается директивой `#include "..."`, которую разворачивает `loadShaderSource`
+(1 уровень, ищет рядом с шейдером). Комментарии в шейдер-файлах — ASCII (не-ASCII
+даже в комментариях принимают не все GL-драйверы).
+
+NB: не путать с `app/src/main/cpp/shaders/` — там GLSL-исходники **Vulkan**
+(`*.vert/.frag`, glslc→SPIR-V), сейчас исключены из сборки вместе с VulkanRenderer.
 
 ## 4. Неткод
 
@@ -121,6 +129,8 @@ Vulkan-шейдеры (`shaders/*.vert/.frag`, glslc→SPIR-V) сейчас не
 `third_party/`: `imgui`, `enet`, `cgltf`, `stb`, `glfw`. (`glew/` — пустой, удалить.)
 
 `app/src/main/assets/models/`: `Fox.glb` (CC0, Khronos), `pyramid.obj`.
+`app/src/main/assets/shaders/`: GL-шейдеры (`*.vert`/`*.frag` + `common.glsl`),
+грузятся рендером через `AssetSource` (см. §3).
 
 ## 6. Грабли (уже решённые — не наступать снова)
 

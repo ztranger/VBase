@@ -67,9 +67,12 @@ int main(int argc, char** argv) {
     // Внутренняя область видимости: деструктор GlRenderer (сносит ImGui-контекст
     // и GL-объекты) должен отработать ДО glfwTerminate, пока GL-контекст ещё есть.
     {
+        // Источник ассетов нужен и рендеру (шейдеры), и сцене (модели/текстуры).
+        FileAssetSource assets(assetsDir);
         GlRenderer renderer;
         // Контекст уже текущий (GLFW); передаём загрузчик адресов GL-функций.
-        if (!renderer.init(nullptr, [](const char* n) { return (void*)glfwGetProcAddress(n); })) {
+        if (!renderer.init(nullptr, [](const char* n) { return (void*)glfwGetProcAddress(n); },
+                           assets)) {
             std::fprintf(stderr, "renderer.init failed\n");
             exitCode = 1;
         } else {
@@ -79,7 +82,6 @@ int main(int argc, char** argv) {
             // GLFW-колбэки (наш поллинг WASD работает независимо от них).
             ImGui_ImplGlfw_InitForOpenGL(window, true);
 
-            FileAssetSource assets(assetsDir);
             Scene scene;
             scene.build(renderer, assets);
             scene.joinGame(serverIp);  // подключиться к серверу (если запущен)
