@@ -68,7 +68,7 @@ void handleCmd(android_app* app, int32_t cmd) {
         case APP_CMD_INIT_WINDOW:
             if (app->window != nullptr) {
                 auto renderer = std::make_unique<GlRenderer>();
-                if (renderer->init(app->window)) {
+                if (renderer->init(app->window, nullptr)) {
                     engine->renderer = std::move(renderer);
                     // Мир строится после инициализации рендера: ему нужны
                     // живой GPU-контекст (залить меши/текстуры) и AAssetManager

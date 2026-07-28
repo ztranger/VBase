@@ -1,10 +1,7 @@
-// Десктопный клиент VBase (Windows). Переиспользует общее ядро: Character,
-// FollowCamera, Net, InputCommand, генераторы мешей, MathUtil. Рендер — свой
-// минимальный (DesktopRenderer), ввод — клавиатура (WASD). Подключается к серверу.
-//
-// MVP: игрок и другие игроки рисуются кубами (без лисы/скиннинга/текстур/HUD —
-// им нужна абстракция ассетов, это следующий шаг). Позиции синхронизируются с
-// сервером, так что виден реальный мультиплеер ПК <-> телефон.
+// Десктопный клиент VBase (Windows): окно GLFW + desktop OpenGL 3.3, тот же
+// кроссплатформенный GlRenderer и общий игровой слой Scene, что и на Android.
+// Полный рендер (сцена, лиса со скиннингом, HUD, ImGui). Ввод — клавиатура WASD.
+// Подключается к серверу, синхронизирует игроков.
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -15,38 +12,18 @@
 
 #include <chrono>
 #include <cmath>
-#include <cstdint>
 #include <cstdio>
 #include <string>
-#include <vector>
 
-#include "Character.h"
-#include "DesktopRenderer.h"
 #include "FileAssetSource.h"
-#include "FollowCamera.h"
-#include "Input.h"
-#include "Mesh.h"
+#include "GlRenderer.h"
 #include "MathUtil.h"
-#include "Model.h"
 #include "Net.h"
+#include "Scene.h"
 
 namespace {
 
 constexpr float kTick = 1.0f / 30.0f;
-
-struct StaticObj {
-    uint32_t mesh;
-    Mat4 model;
-    Vec3 color;
-};
-
-struct RemoteCube {
-    uint32_t id = 0;
-    Vec3 pos{0, 0, 0};
-    float yaw = 0;
-    Vec3 target{0, 0, 0};
-    float targetYaw = 0;
-};
 
 int keyAxis(GLFWwindow* w, int pos, int neg) {
     int v = 0;
@@ -61,8 +38,10 @@ int main(int argc, char** argv) {
 #ifdef _WIN32
     SetConsoleOutputCP(CP_UTF8);
 #endif
-    std::setvbuf(stdout, nullptr, _IONBF, 0);  // логи сразу, без буфера
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+
     const char* serverIp = (argc > 1) ? argv[1] : "127.0.0.1";
+    std::string assetsDir = (argc > 2) ? argv[2] : "../../app/src/main/assets";
 
     if (!glfwInit()) {
         std::fprintf(stderr, "glfwInit failed\n");
@@ -78,54 +57,20 @@ int main(int argc, char** argv) {
         return 1;
     }
     glfwMakeContextCurrent(window);
-    glfwSwapInterval(1);  // vsync
+    glfwSwapInterval(1);
 
-    DesktopRenderer renderer;
-    // Грузим адреса GL-функций через GLFW (captureless-лямбда -> указатель функции).
-    if (!renderer.init([](const char* n) { return (void*)glfwGetProcAddress(n); })) {
+    GlRenderer renderer;
+    // Контекст уже текущий (GLFW); передаём загрузчик адресов GL-функций.
+    if (!renderer.init(nullptr, [](const char* n) { return (void*)glfwGetProcAddress(n); })) {
+        std::fprintf(stderr, "renderer.init failed\n");
         return 1;
     }
 
-    // Проверка абстракции ассетов на десктопе: читаем ту же Fox.glb с диска
-    // тем же портируемым загрузчиком (рендер модели — следующий шаг).
-    std::string assetsDir = (argc > 2) ? argv[2] : "../../app/src/main/assets";
     FileAssetSource assets(assetsDir);
-    SkinnedModel fox;
-    if (loadGltfModel(assets, "models/Fox.glb", fox)) {
-        std::printf("Fox загружен с диска: %u вершин, %u анимаций, текстура %s\n",
-                    (unsigned)fox.vertices.size(), (unsigned)fox.animations.size(),
-                    fox.hasTexture ? "есть" : "нет");
-    } else {
-        std::printf("Fox не найден (assets dir: %s) — укажи путь 2-м аргументом\n",
-                    assetsDir.c_str());
-    }
-
-    uint32_t planeMesh = renderer.createMesh(makePlane(24.0f, 1.0f));
-    uint32_t cubeMesh = renderer.createMesh(makeCube(1.0f));
-    uint32_t sphereMesh = renderer.createMesh(makeSphere(0.6f));
-
-    // Статичное окружение.
-    std::vector<StaticObj> statics;
-    statics.push_back({planeMesh, Mat4::translation({0, 0, 0}), {0.30f, 0.32f, 0.38f}});
-    for (int i = 0; i < 3; ++i) {
-        float x = -4.0f + (float)i * 4.0f;
-        Mat4 m = Mat4::translation({x, 0.5f, -4.0f});
-        statics.push_back({cubeMesh, m, {0.9f, 0.4f, 0.3f}});
-        Mat4 s = Mat4::translation({x, 0.6f, 4.0f});
-        statics.push_back({sphereMesh, s, {0.35f, 0.55f, 0.95f}});
-    }
-
-    Character player;
-    player.position = {0, 0, 0};
-    player.snapshot();
-    FollowCamera camera;
-
-    NetClient client;
-    client.connect(serverIp, kNetPort);
-    std::printf("Подключение к серверу %s:%u...\n", serverIp, kNetPort);
-    uint32_t inputSeq = 0;
-
-    std::vector<RemoteCube> remotes;
+    Scene scene;
+    scene.build(renderer, assets);
+    scene.joinGame(serverIp);  // подключиться к серверу (если запущен)
+    std::printf("Клиент запущен, сервер %s. WASD — движение, ESC — выход.\n", serverIp);
 
     auto last = std::chrono::steady_clock::now();
     float accumulator = 0.0f;
@@ -139,104 +84,31 @@ int main(int argc, char** argv) {
         last = now;
         if (dt > 0.25f) dt = 0.25f;
 
-        // Ввод: WASD -> вектор (как виртуальный стик).
+        // Клавиатура -> внешняя ось движения сцены (тот же путь, что тач-джойстик).
         float jx = (float)keyAxis(window, GLFW_KEY_D, GLFW_KEY_A);
         float jy = (float)keyAxis(window, GLFW_KEY_W, GLFW_KEY_S);
-        float mag = std::sqrt(jx * jx + jy * jy);
-        if (mag > 1.0f) { jx /= mag; jy /= mag; mag = 1.0f; }
+        scene.setMoveInput(jx, jy);
 
         accumulator += dt;
         while (accumulator >= kTick) {
-            // Направление относительно камеры (как на телефоне).
-            InputCommand cmd;
-            if (mag > 0.05f) {
-                float cy = camera.yaw;
-                Vec3 fwd{std::sin(cy), 0.0f, std::cos(cy)};
-                Vec3 right{-std::cos(cy), 0.0f, std::sin(cy)};
-                Vec3 dir = normalize(fwd * jy + right * jx);
-                cmd.moveX = dir.x;
-                cmd.moveZ = dir.z;
-            }
-            cmd.faceMove = jy >= 0.0f;
-            cmd.magnitude = (jy < 0.0f) ? mag * 0.5f : mag;
-
-            if (client.connected()) {
-                cmd.seq = ++inputSeq;
-                client.sendInput(cmd);
-            }
-            player.snapshot();
-            player.simulate(kTick, cmd);
-
-            client.poll();
-            if (client.consumeSnapshot()) {
-                uint32_t myId = client.myId();
-                const std::vector<EntityState>& states = client.states();
-                for (const EntityState& s : states) {
-                    if (myId != 0 && s.id == myId) {
-                        // Мягкая коррекция своего аватара к серверу.
-                        Vec3 sp{s.x, s.y, s.z};
-                        player.position = player.position + (sp - player.position) * 0.15f;
-                        player.facingYaw = lerpAngle(player.facingYaw, s.yaw, 0.15f);
-                        continue;
-                    }
-                    RemoteCube* r = nullptr;
-                    for (auto& rc : remotes) if (rc.id == s.id) { r = &rc; break; }
-                    if (r == nullptr) {
-                        RemoteCube rc;
-                        rc.id = s.id;
-                        rc.pos = {s.x, s.y, s.z};
-                        rc.yaw = s.yaw;
-                        remotes.push_back(rc);
-                        r = &remotes.back();
-                    }
-                    r->target = {s.x, s.y, s.z};
-                    r->targetYaw = s.yaw;
-                }
-                // Удалить ушедших.
-                for (size_t i = 0; i < remotes.size();) {
-                    bool found = false;
-                    for (const EntityState& s : states) if (s.id == remotes[i].id) { found = true; break; }
-                    if (!found) remotes.erase(remotes.begin() + (long)i); else ++i;
-                }
-            }
+            scene.fixedUpdate(kTick);
             accumulator -= kTick;
         }
-
-        camera.follow(player.position, player.facingYaw, dt);
-
-        // Сглаживание чужих к цели.
-        float k = dt * 12.0f;
-        if (k > 1.0f) k = 1.0f;
-        for (RemoteCube& r : remotes) {
-            r.pos = r.pos + (r.target - r.pos) * k;
-            r.yaw = lerpAngle(r.yaw, r.targetYaw, k);
-        }
+        float alpha = accumulator / kTick;
 
         int fbw = 0, fbh = 0;
         glfwGetFramebufferSize(window, &fbw, &fbh);
         float aspect = fbh > 0 ? (float)fbw / (float)fbh : 1.0f;
 
-        renderer.beginFrame(fbw, fbh, camera.view(), camera.proj(aspect),
-                            normalize(Vec3{0.4f, 1.0f, 0.6f}));
-        for (const StaticObj& o : statics) {
-            renderer.draw(o.mesh, o.model, o.color);
-        }
-        // Свой игрок — жёлтый куб.
-        Mat4 pm = Mat4::translation(player.position) * Mat4::rotationY(player.facingYaw)
-                * Mat4::scale({0.6f, 0.6f, 0.6f});
-        renderer.draw(cubeMesh, pm, {0.95f, 0.85f, 0.2f});
-        // Чужие — зелёные кубы.
-        for (const RemoteCube& r : remotes) {
-            Mat4 rm = Mat4::translation(r.pos) * Mat4::rotationY(r.yaw)
-                    * Mat4::scale({0.6f, 0.6f, 0.6f});
-            renderer.draw(cubeMesh, rm, {0.3f, 0.9f, 0.4f});
-        }
+        RenderFrame frame = scene.render(alpha, aspect, dt);
+        frame.deltaTime = dt;
+        renderer.setSurfaceSize(fbw, fbh);
+        renderer.renderFrame(frame);
 
         glfwSwapBuffers(window);
     }
 
-    client.disconnect();
-    renderer.shutdown();
+    scene.leaveGame();
     glfwDestroyWindow(window);
     glfwTerminate();
     return 0;

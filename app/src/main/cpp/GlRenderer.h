@@ -1,22 +1,26 @@
 #pragma once
 
-#include <EGL/egl.h>
-#include <GLES3/gl3.h>
-
 #include <vector>
 
+#include "GlApi.h"   // GL на обеих платформах (GLES3 / desktop loader)
 #include "Renderer.h"
 
+#ifdef __ANDROID__
+#include <EGL/egl.h>  // контекст/поверхность на Android
+#endif
+
 /**
- * OpenGL ES 3.0 бэкенд: реестры шейдеров/мешей/текстур/материалов + отрисовка
- * RenderFrame. Вызовы сортируются по (шейдер, материал, меш), а избыточные
- * смены состояния GPU пропускаются (см. renderFrame).
+ * OpenGL-бэкенд, общий для Android (GLES3 + EGL) и десктопа (GL 3.3 + GLFW).
+ * Реестры шейдеров/мешей/текстур/материалов + отрисовка RenderFrame. Вызовы
+ * сортируются по (шейдер, материал, меш), избыточные смены состояния — пропуск.
+ * Контекст создаёт платформа; на десктопе своп/размер — снаружи (setSurfaceSize).
  */
 class GlRenderer final : public Renderer {
 public:
     ~GlRenderer() override;
 
-    bool init(ANativeWindow* window) override;
+    bool init(ANativeWindow* window, void* (*glGetProc)(const char*)) override;
+    void setSurfaceSize(int width, int height) override;
     MeshHandle createMesh(const MeshData& data) override;
     SkinnedHandle createSkinnedMesh(const SkinnedModel& model) override;
     TextureHandle createTexture(const TextureData& data) override;
@@ -46,18 +50,25 @@ private:
         GLuint texture = 0;   // разрешённый GL-идентификатор (albedo или белая)
     };
 
-    bool initEgl(ANativeWindow* window);
+    bool initGlResources();  // общая GL-инициализация (шейдеры/UBO/текстуры/...)
     bool initShaders();
     bool buildShader(const char* vs, const char* fs, GlShader& out);
     bool initSkin();
     void drawSkinned(const std::vector<SkinnedItem>& items);
     bool initHud();
     void drawHud(const std::vector<HudText>& texts, int screenW, int screenH);
+    void surfaceSize(int& w, int& h) const;  // размер поверхности (EGL/сохранённый)
     void shutdown();
 
+#ifdef __ANDROID__
+    bool initEgl(ANativeWindow* window);
     EGLDisplay display_ = EGL_NO_DISPLAY;
     EGLSurface surface_ = EGL_NO_SURFACE;
     EGLContext context_ = EGL_NO_CONTEXT;
+#else
+    bool ready_ = false;           // инициализирован ли (контекст создаёт платформа)
+    int surfaceW_ = 1, surfaceH_ = 1;  // размер задаётся setSurfaceSize
+#endif
 
     GLuint whiteTexture_ = 0;  // 1x1 белая — материалы без текстуры используют её
     GLuint frameUbo_ = 0;      // кадровые данные (Frame block), общие для всех программ

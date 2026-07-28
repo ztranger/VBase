@@ -1,11 +1,13 @@
 #pragma once
 
-#include <android/native_window.h>
-
 #include "Mesh.h"
 #include "Model.h"
 #include "RenderFrame.h"
 #include "Texture.h"
+
+// Forward-declare: на десктопе <android/native_window.h> нет, а тип нужен только
+// как непрозрачный указатель (используется реально лишь на Android).
+struct ANativeWindow;
 
 /**
  * Интерфейс рендера. Знает только про меши, текстуры, материалы, камеру и свет —
@@ -16,8 +18,14 @@ class Renderer {
 public:
     virtual ~Renderer() = default;
 
-    // Создать контекст/свопчейн на данном окне. false — бэкенд недоступен.
-    virtual bool init(ANativeWindow* window) = 0;
+    // Инициализация. Контекст GL должен быть уже текущим (создаёт платформа:
+    // EGL на Android из window; GLFW на десктопе). glGetProc — загрузчик адресов
+    // GL-функций (нужен на десктопе; на Android null — функции слинкованы).
+    virtual bool init(ANativeWindow* window, void* (*glGetProc)(const char*)) = 0;
+
+    // Размер поверхности в пикселях (десктоп задаёт каждый кадр; Android берёт
+    // из EGL и это игнорирует).
+    virtual void setSurfaceSize(int width, int height) {}
 
     // Залить геометрию в GPU и вернуть handle для использования в RenderItem.
     virtual MeshHandle createMesh(const MeshData& data) = 0;

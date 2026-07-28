@@ -122,18 +122,30 @@ void Scene::fixedUpdate(float dt) {
 
     // Ввод -> команда (это и уйдёт на сервер в будущем). Направление считаем
     // относительно камеры: вверх на стике = "от камеры вперёд".
+    // Источник ввода: тач-джойстик (телефон) либо внешняя ось (клавиатура на ПК).
+    float ix, iy, mag;
+    if (joystick_.active) {
+        ix = joystick_.x;
+        iy = joystick_.y;
+        mag = joystick_.mag;
+    } else {
+        ix = extX_;
+        iy = extY_;
+        mag = std::sqrt(ix * ix + iy * iy);
+        if (mag > 1.0f) { ix /= mag; iy /= mag; mag = 1.0f; }
+    }
+
     InputCommand cmd;
-    float mag = joystick_.mag;
     if (mag > 0.05f) {
         float cy = camera_.yaw;
         Vec3 fwd{std::sin(cy), 0.0f, std::cos(cy)};
         Vec3 right{-std::cos(cy), 0.0f, std::sin(cy)};  // экранный right = cross(fwd, up)
-        Vec3 moveDir = normalize(fwd * joystick_.y + right * joystick_.x);
+        Vec3 moveDir = normalize(fwd * iy + right * ix);
         cmd.moveX = moveDir.x;
         cmd.moveZ = moveDir.z;
     }
-    cmd.faceMove = joystick_.y >= 0.0f;            // назад — пятимся
-    cmd.magnitude = (joystick_.y < 0.0f) ? mag * 0.5f : mag;  // назад медленнее
+    cmd.faceMove = iy >= 0.0f;                      // назад — пятимся
+    cmd.magnitude = (iy < 0.0f) ? mag * 0.5f : mag;  // назад медленнее
 
     tickDt_ = dt;
 

@@ -8,6 +8,7 @@ set(APP "${CMAKE_CURRENT_SOURCE_DIR}/../app/src/main/cpp")
 set(TP "${CMAKE_CURRENT_SOURCE_DIR}/../third_party")
 set(ENET "${TP}/enet")
 set(GLFW_DIR "${TP}/glfw")
+set(IMGUI "${TP}/imgui")
 
 # GLFW из исходников (только сама либа, без примеров/тестов/доки).
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
@@ -17,12 +18,19 @@ add_subdirectory("${GLFW_DIR}" glfw_build)
 
 add_executable(vbase_desktop
         main.cpp
-        DesktopRenderer.cpp
         ${APP}/Character.cpp
         ${APP}/Mesh.cpp
         ${APP}/Net.cpp
         ${APP}/Assets.cpp
         ${APP}/Model.cpp
+        ${APP}/Scene.cpp
+        ${APP}/GlRenderer.cpp
+        ${APP}/Font.cpp
+        ${IMGUI}/imgui.cpp
+        ${IMGUI}/imgui_draw.cpp
+        ${IMGUI}/imgui_tables.cpp
+        ${IMGUI}/imgui_widgets.cpp
+        ${IMGUI}/backends/imgui_impl_opengl3.cpp
         ${ENET}/callbacks.c
         ${ENET}/compress.c
         ${ENET}/host.c
@@ -32,7 +40,9 @@ add_executable(vbase_desktop
         ${ENET}/protocol.c
         ${ENET}/win32.c)
 
-target_include_directories(vbase_desktop PRIVATE "${APP}" "${ENET}/include" "${TP}/cgltf" "${TP}/stb")
+# ImGui — БЕЗ IMGUI_IMPL_OPENGL_ES3: на десктопе бэкенд использует полный GL 3.3.
+target_include_directories(vbase_desktop PRIVATE
+        "${APP}" "${ENET}/include" "${TP}/cgltf" "${TP}/stb" "${IMGUI}" "${IMGUI}/backends")
 
 if(MSVC)
     target_compile_options(vbase_desktop PRIVATE /utf-8)

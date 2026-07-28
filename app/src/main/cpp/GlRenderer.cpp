@@ -10,6 +10,16 @@
 #include "Font.h"
 #include "Log.h"
 
+// Версия GLSL зависит от платформы: GLES 3.0 на Android, GL 3.3 core на десктопе.
+// Тела шейдеров одинаковы (precision-строки десктоп принимает и игнорирует).
+#ifdef __ANDROID__
+#define GLSL_VERSION "#version 300 es\n"
+#define IMGUI_GLSL_VERSION "#version 300 es"
+#else
+#define GLSL_VERSION "#version 330 core\n"
+#define IMGUI_GLSL_VERSION "#version 330"
+#endif
+
 namespace {
 
 // Точка связывания UBO с кадровыми данными (совпадает в C++ и шейдерах).
@@ -38,7 +48,7 @@ struct FrameUBO {
 
 // Общий вершинный шейдер для Lit/Unlit (viewProj из UBO, model — per-object).
 const char* kBasicVert =
-    "#version 300 es\n"
+    GLSL_VERSION
     "layout(location = 0) in vec3 aPos;\n"
     "layout(location = 1) in vec3 aNormal;\n"
     "layout(location = 2) in vec2 aUV;\n"
@@ -54,7 +64,7 @@ const char* kBasicVert =
 
 // Lit: диффуз (Ламберт) + текстура.
 const char* kLitFrag =
-    "#version 300 es\n"
+    GLSL_VERSION
     "precision mediump float;\n"
     FRAME_BLOCK
     "in vec3 vNormal;\n"
@@ -71,7 +81,7 @@ const char* kLitFrag =
 
 // Unlit: плоский цвет/текстура без освещения (Frame-блок в фрагментнике не нужен).
 const char* kUnlitFrag =
-    "#version 300 es\n"
+    GLSL_VERSION
     "precision mediump float;\n"
     "in vec3 vNormal;\n"
     "in vec2 vUV;\n"
@@ -84,7 +94,7 @@ const char* kUnlitFrag =
 
 // Phong: вершинник дополнительно отдаёт мировую позицию (для вектора взгляда).
 const char* kPhongVert =
-    "#version 300 es\n"
+    GLSL_VERSION
     "layout(location = 0) in vec3 aPos;\n"
     "layout(location = 1) in vec3 aNormal;\n"
     "layout(location = 2) in vec2 aUV;\n"
@@ -103,7 +113,7 @@ const char* kPhongVert =
 
 // Phong: диффуз + зеркальный блик по позиции камеры.
 const char* kPhongFrag =
-    "#version 300 es\n"
+    GLSL_VERSION
     "precision mediump float;\n"
     FRAME_BLOCK
     "in vec3 vNormal;\n"
@@ -126,7 +136,7 @@ const char* kPhongFrag =
 
 // Скиннинг: позиция считается как взвешенная сумма матриц костей.
 const char* kSkinVert =
-    "#version 300 es\n"
+    GLSL_VERSION
     "layout(location = 0) in vec3 aPos;\n"
     "layout(location = 1) in vec3 aNormal;\n"
     "layout(location = 2) in vec2 aUV;\n"
@@ -157,7 +167,7 @@ const char* kSkinVert =
     "}\n";
 
 const char* kSkinFrag =
-    "#version 300 es\n"
+    GLSL_VERSION
     "precision mediump float;\n"
     FRAME_BLOCK
     "in vec3 vNormal;\n"
@@ -174,7 +184,7 @@ const char* kSkinFrag =
 
 // HUD: 2D-текст. Позиции задаём в пикселях, шейдер сам переводит в NDC.
 const char* kHudVert =
-    "#version 300 es\n"
+    GLSL_VERSION
     "layout(location = 0) in vec2 aPos;\n"  // пиксели
     "layout(location = 1) in vec2 aUV;\n"
     "uniform vec2 uScreen;\n"
@@ -186,7 +196,7 @@ const char* kHudVert =
     "}\n";
 
 const char* kHudFrag =
-    "#version 300 es\n"
+    GLSL_VERSION
     "precision mediump float;\n"
     "in vec2 vUV;\n"
     "uniform sampler2D uFont;\n"
@@ -219,9 +229,31 @@ GlRenderer::~GlRenderer() {
     shutdown();
 }
 
-bool GlRenderer::init(ANativeWindow* window) {
-    if (!initEgl(window) || !initShaders() || !initSkin() || !initHud()) {
+bool GlRenderer::init(ANativeWindow* window, void* (*glGetProc)(const char*)) {
+#ifdef __ANDROID__
+    (void)glGetProc;
+    if (!initEgl(window)) {  // EGL создаёт контекст из окна и делает его текущим
         shutdown();
+        return false;
+    }
+#else
+    (void)window;  // на десктопе контекст уже создан GLFW и сделан текущим
+    if (!glApiLoad(glGetProc)) {
+        LOGE("Не удалось загрузить функции OpenGL");
+        return false;
+    }
+    ready_ = true;
+#endif
+    if (!initGlResources()) {
+        shutdown();
+        return false;
+    }
+    return true;
+}
+
+// Общая GL-инициализация (одинаково на обеих платформах, контекст уже текущий).
+bool GlRenderer::initGlResources() {
+    if (!initShaders() || !initSkin() || !initHud()) {
         return false;
     }
     glEnable(GL_DEPTH_TEST);
@@ -236,7 +268,6 @@ bool GlRenderer::init(ANativeWindow* window) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
     // UBO с кадровыми данными, привязанный к общей точке kFrameBinding.
-    // Все программы читают его через блок Frame — обновляем один раз за кадр.
     glGenBuffers(1, &frameUbo_);
     glBindBuffer(GL_UNIFORM_BUFFER, frameUbo_);
     glBufferData(GL_UNIFORM_BUFFER, sizeof(FrameUBO), nullptr, GL_DYNAMIC_DRAW);
@@ -245,13 +276,12 @@ bool GlRenderer::init(ANativeWindow* window) {
     // Общий буфер инстансных матриц (наполняется по батчам в renderFrame).
     glGenBuffers(1, &instanceVbo_);
 
-    // Dear ImGui: контекст + GL ES 3 бэкенд. Ввод скармливаем вручную из main
-    // (GameActivity не использует AInputEvent, поэтому платформенный бэкенд не берём).
+    // Dear ImGui: контекст + GL3-бэкенд. Ввод скармливаем вручную.
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui::StyleColorsDark();
-    ImGui::GetIO().IniFilename = nullptr;  // не писать imgui.ini на Android
-    if (!ImGui_ImplOpenGL3_Init("#version 300 es")) {
+    ImGui::GetIO().IniFilename = nullptr;
+    if (!ImGui_ImplOpenGL3_Init(IMGUI_GLSL_VERSION)) {
         LOGE("ImGui_ImplOpenGL3_Init failed");
         return false;
     }
@@ -262,6 +292,7 @@ bool GlRenderer::init(ANativeWindow* window) {
     return true;
 }
 
+#ifdef __ANDROID__
 bool GlRenderer::initEgl(ANativeWindow* window) {
     display_ = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (display_ == EGL_NO_DISPLAY || !eglInitialize(display_, nullptr, nullptr)) {
@@ -303,6 +334,31 @@ bool GlRenderer::initEgl(ANativeWindow* window) {
         return false;
     }
     return true;
+}
+#endif  // __ANDROID__
+
+// Размер поверхности: на Android — из EGL, на десктопе — заданный извне.
+void GlRenderer::surfaceSize(int& w, int& h) const {
+#ifdef __ANDROID__
+    EGLint ww = 0, hh = 0;
+    eglQuerySurface(display_, surface_, EGL_WIDTH, &ww);
+    eglQuerySurface(display_, surface_, EGL_HEIGHT, &hh);
+    w = ww;
+    h = hh;
+#else
+    w = surfaceW_;
+    h = surfaceH_;
+#endif
+}
+
+void GlRenderer::setSurfaceSize(int width, int height) {
+#ifndef __ANDROID__
+    surfaceW_ = width > 0 ? width : 1;
+    surfaceH_ = height > 0 ? height : 1;
+#else
+    (void)width;
+    (void)height;
+#endif
 }
 
 bool GlRenderer::buildShader(const char* vs, const char* fs, GlShader& out) {
@@ -630,13 +686,14 @@ MaterialHandle GlRenderer::createMaterial(const MaterialDesc& desc) {
 }
 
 void GlRenderer::renderFrame(const RenderFrame& frame) {
-    if (display_ == EGL_NO_DISPLAY) {
-        return;
-    }
+#ifdef __ANDROID__
+    if (display_ == EGL_NO_DISPLAY) return;
+#else
+    if (!ready_) return;
+#endif
 
-    EGLint width = 0, height = 0;
-    eglQuerySurface(display_, surface_, EGL_WIDTH, &width);
-    eglQuerySurface(display_, surface_, EGL_HEIGHT, &height);
+    int width = 0, height = 0;
+    surfaceSize(width, height);
     glViewport(0, 0, width, height);
 
     glClearColor(0.07f, 0.07f, 0.12f, 1.0f);
@@ -748,59 +805,71 @@ void GlRenderer::renderFrame(const RenderFrame& frame) {
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     }
 
+#ifdef __ANDROID__
     if (!eglSwapBuffers(display_, surface_)) {
         LOGW("eglSwapBuffers failed: 0x%x", eglGetError());
     }
+#endif  // на десктопе своп делает GLFW в главном цикле
 }
 
 float GlRenderer::aspectRatio() const {
-    if (display_ == EGL_NO_DISPLAY) {
-        return 1.0f;
-    }
-    EGLint width = 0, height = 0;
-    eglQuerySurface(display_, surface_, EGL_WIDTH, &width);
-    eglQuerySurface(display_, surface_, EGL_HEIGHT, &height);
+    int width = 0, height = 0;
+    surfaceSize(width, height);
     return height > 0 ? (float)width / (float)height : 1.0f;
 }
 
 void GlRenderer::shutdown() {
-    if (display_ != EGL_NO_DISPLAY) {
-        // ImGui сносим, пока контекст ещё активен (бэкенд удаляет свои GL-объекты).
-        if (imguiReady_) {
-            ImGui_ImplOpenGL3_Shutdown();
-            ImGui::DestroyContext();
-            imguiReady_ = false;
-        }
-        eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-        for (const GlMesh& mesh : meshes_) {
-            glDeleteVertexArrays(1, &mesh.vao);
-            glDeleteBuffers(1, &mesh.vbo);
-            glDeleteBuffers(1, &mesh.ebo);
-        }
-        for (const GlMesh& mesh : skinnedMeshes_) {
-            glDeleteVertexArrays(1, &mesh.vao);
-            glDeleteBuffers(1, &mesh.vbo);
-            glDeleteBuffers(1, &mesh.ebo);
-        }
-        if (skinProgram_) glDeleteProgram(skinProgram_);
-        if (boneTexture_) glDeleteTextures(1, &boneTexture_);
-        if (!textures_.empty()) {
-            glDeleteTextures((GLsizei)textures_.size(), textures_.data());
-        }
-        if (whiteTexture_) glDeleteTextures(1, &whiteTexture_);
-        if (fontTexture_) glDeleteTextures(1, &fontTexture_);
-        if (frameUbo_) glDeleteBuffers(1, &frameUbo_);
-        if (instanceVbo_) glDeleteBuffers(1, &instanceVbo_);
-        if (hudVbo_) glDeleteBuffers(1, &hudVbo_);
-        if (hudVao_) glDeleteVertexArrays(1, &hudVao_);
-        if (hudProgram_) glDeleteProgram(hudProgram_);
-        for (const GlShader& s : shaders_) {
-            if (s.program) glDeleteProgram(s.program);
-        }
-        if (context_ != EGL_NO_CONTEXT) eglDestroyContext(display_, context_);
-        if (surface_ != EGL_NO_SURFACE) eglDestroySurface(display_, surface_);
-        eglTerminate(display_);
+    // Ничего не создавали — выходим (иначе на десктопе GL-функции ещё не загружены).
+#ifdef __ANDROID__
+    if (display_ == EGL_NO_DISPLAY) return;
+#else
+    if (!ready_) return;
+#endif
+
+    // ImGui + GL-объекты сносим, пока контекст ещё текущий.
+    if (imguiReady_) {
+        ImGui_ImplOpenGL3_Shutdown();
+        ImGui::DestroyContext();
+        imguiReady_ = false;
     }
+    for (const GlMesh& mesh : meshes_) {
+        glDeleteVertexArrays(1, &mesh.vao);
+        glDeleteBuffers(1, &mesh.vbo);
+        glDeleteBuffers(1, &mesh.ebo);
+    }
+    for (const GlMesh& mesh : skinnedMeshes_) {
+        glDeleteVertexArrays(1, &mesh.vao);
+        glDeleteBuffers(1, &mesh.vbo);
+        glDeleteBuffers(1, &mesh.ebo);
+    }
+    if (skinProgram_) glDeleteProgram(skinProgram_);
+    if (boneTexture_) glDeleteTextures(1, &boneTexture_);
+    if (!textures_.empty()) {
+        glDeleteTextures((GLsizei)textures_.size(), textures_.data());
+    }
+    if (whiteTexture_) glDeleteTextures(1, &whiteTexture_);
+    if (fontTexture_) glDeleteTextures(1, &fontTexture_);
+    if (frameUbo_) glDeleteBuffers(1, &frameUbo_);
+    if (instanceVbo_) glDeleteBuffers(1, &instanceVbo_);
+    if (hudVbo_) glDeleteBuffers(1, &hudVbo_);
+    if (hudVao_) glDeleteVertexArrays(1, &hudVao_);
+    if (hudProgram_) glDeleteProgram(hudProgram_);
+    for (const GlShader& s : shaders_) {
+        if (s.program) glDeleteProgram(s.program);
+    }
+
+#ifdef __ANDROID__
+    eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+    if (context_ != EGL_NO_CONTEXT) eglDestroyContext(display_, context_);
+    if (surface_ != EGL_NO_SURFACE) eglDestroySurface(display_, surface_);
+    eglTerminate(display_);
+    display_ = EGL_NO_DISPLAY;
+    surface_ = EGL_NO_SURFACE;
+    context_ = EGL_NO_CONTEXT;
+#else
+    ready_ = false;
+#endif
+
     shaders_.clear();
     meshes_.clear();
     skinnedMeshes_.clear();
@@ -808,9 +877,6 @@ void GlRenderer::shutdown() {
     boneTexture_ = 0;
     textures_.clear();
     materials_.clear();
-    display_ = EGL_NO_DISPLAY;
-    surface_ = EGL_NO_SURFACE;
-    context_ = EGL_NO_CONTEXT;
     whiteTexture_ = 0;
     frameUbo_ = 0;
     instanceVbo_ = 0;

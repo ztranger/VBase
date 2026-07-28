@@ -75,7 +75,8 @@ public:
     // Кадр с интерполяцией между тиками (alpha 0..1) + сглаживание камеры (renderDt).
     RenderFrame render(float alpha, float aspect, float renderDt);
 
-    void onPointer(float x, float y, bool pressed);  // -> джойстик
+    void onPointer(float x, float y, bool pressed);  // -> джойстик (тач)
+    void setMoveInput(float x, float y) { extX_ = x; extY_ = y; }  // внешняя ось (клавиатура)
 
     void setUiScale(float s);  // масштаб джойстика под DPI
 
@@ -111,6 +112,7 @@ private:
     float foxYawOffset_ = 0.0f;
     Character player_;        // управляемый актор (симуляция)
     VirtualJoystick joystick_;
+    float extX_ = 0.0f, extY_ = 0.0f;  // внешняя ось движения (клавиатура на десктопе)
     float uiScale_ = 1.0f;
 
     // Построить отрисовочный предмет лисы по состоянию (клиентский рендер).
