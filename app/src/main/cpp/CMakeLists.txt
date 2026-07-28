@@ -43,6 +43,7 @@ add_library(vbase SHARED
         Character.cpp
         Net.cpp
         Scene.cpp
+        SceneLoader.cpp
         GlRenderer.cpp
         GameUi.cpp
         VulkanProbe.cpp

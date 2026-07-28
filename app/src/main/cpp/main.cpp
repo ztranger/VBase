@@ -213,9 +213,7 @@ extern "C" void android_main(android_app* app) {
             RenderFrame frame = engine.scene->render(alpha, engine.renderer->aspectRatio(), dt);
             frame.deltaTime = dt;
 
-            // Направление света управляется слайдером ImGui (см. UI ниже).
-            frame.lightDir = normalize(
-                Vec3{std::cos(engine.ui.lightAngle), 1.0f, std::sin(engine.ui.lightAngle)});
+            // Свет задаёт сцена (из файла), правится слайдером в GameUi.
 
             // FPS — забота приложения (тайминг здесь), а не игровой логики.
             if (dt > 0.0f) {

@@ -32,7 +32,8 @@
   - `Scene` — мир: окружение (`GameObject`), игрок (`Character`), камера
     (`FollowCamera`), джойстик (`VirtualJoystick`), сеть. `fixedUpdate(dt)` (тик),
     `render(alpha, aspect, dt)` → `RenderFrame` (интерполяция). Строит визуальные
-    предметы лисы (`makeFoxItem`).
+    предметы лисы (`makeFoxItem`). Содержимое сцены не захардкожено: `build()`
+    грузит **файл сцены** через `SceneLoader` (см. §5.1) и инстанцирует его.
   - `FollowCamera` — камера 3-го лица за обобщённой целью (позиция+facing).
   - `InputCommand` (в `Input.h`) — ввод за тик (dir + magnitude + faceMove + seq).
     То, что клиент шлёт серверу.
@@ -108,7 +109,7 @@ NB: не путать с `app/src/main/cpp/shaders/` — там GLSL-исход�
 - Платформонезависимое (игра/данные/сеть): `Character.*`, `Scene.*`, `FollowCamera.h`,
   `Input.h`, `MathUtil.h`, `Mesh.*`, `Model.*`, `Texture.h`, `RenderFrame.h`,
   `Renderer.h`, `Net.*`, `Assets.*`, `AssetSource.h`, `FileAssetSource.h`,
-  `Log.h` (переносимый).
+  `SceneDesc.h`/`SceneLoader.*` (описание+парсер сцены), `Log.h` (переносимый).
 - Кроссплатформенный рендер: `GlRenderer.*` (Android GLES3+EGL и desktop GL 3.3+GLFW
   через `#ifdef`), `GlApi.h` (GL: GLES3 на Android / загрузчик на десктопе), `Font.*`.
 - Кроссплатформенный GUI: `GameUi.{h,cpp}` — построение ImGui-панели (imgui+`Scene`),
@@ -131,6 +132,27 @@ NB: не путать с `app/src/main/cpp/shaders/` — там GLSL-исход�
 `app/src/main/assets/models/`: `Fox.glb` (CC0, Khronos), `pyramid.obj`.
 `app/src/main/assets/shaders/`: GL-шейдеры (`*.vert`/`*.frag` + `common.glsl`),
 грузятся рендером через `AssetSource` (см. §3).
+`app/src/main/assets/scenes/`: файлы сцен (`*.scene`), грузятся `SceneLoader` (см. §5.1).
+
+## 5.1. Формат файла сцены
+
+Текстовый, построчный; `#` — комментарий до конца строки; ссылки (`mat`/`tex`) —
+по именам, объявленным выше. Парсер — `SceneLoader` (свой, без зависимостей, в духе
+OBJ-загрузчика). Директивы:
+
+- `texture <name> procedural <size> <cells>` | `image <path>`
+- `material <name> <lit|unlit|phong> [color r g b] [tex <ref>]` — `ref` = имя текстуры
+  или путь к картинке; пусто → без текстуры (белая).
+- `mesh <name> plane <size> [uvTiles]` | `cube <size>` | `sphere <r> [stacks] [slices]`
+- `object <mesh> mat <mat> [pos x y z] [rot x y z] [scale s] [spin s]`
+- `ring <mesh> mat <mat> count <n> radius <r> [y <y>] [scale s] [spin s]` — инстансинг по кольцу
+- `player model <path> [pos x y z] [scale s] [yaw o]` — glTF-персонаж (скиннинг)
+- `light dir <x> <y> <z>` — направление на свет (правится слайдером в `GameUi`)
+- `camera [distance d] [height h] [lookHeight l] [fov f] [near n] [far f]`
+
+Путь к сцене — параметр `Scene::build` (по умолчанию `scenes/default.scene`); на
+десктопе задаётся 3-м аргументом: `vbase_desktop.exe [serverIp] [assetsDir] [scenePath]`.
+Разные сцены = разные файлы. Ошибка парсинга → лог с номером строки, сцена пустая.
 
 ## 6. Грабли (уже решённые — не наступать снова)
 

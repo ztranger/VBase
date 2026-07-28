@@ -46,6 +46,7 @@ int main(int argc, char** argv) {
 
     const char* serverIp = (argc > 1) ? argv[1] : "127.0.0.1";
     std::string assetsDir = (argc > 2) ? argv[2] : "../../app/src/main/assets";
+    const char* scenePath = (argc > 3) ? argv[3] : "scenes/default.scene";
 
     if (!glfwInit()) {
         std::fprintf(stderr, "glfwInit failed\n");
@@ -83,10 +84,11 @@ int main(int argc, char** argv) {
             ImGui_ImplGlfw_InitForOpenGL(window, true);
 
             Scene scene;
-            scene.build(renderer, assets);
+            scene.build(renderer, assets, scenePath);
             scene.joinGame(serverIp);  // подключиться к серверу (если запущен)
             GameUiState ui;
-            std::printf("Клиент запущен, сервер %s. WASD — движение, ESC — выход.\n", serverIp);
+            std::printf("Клиент запущен, сервер %s, сцена %s. WASD — движение, ESC — выход.\n",
+                        serverIp, scenePath);
 
             auto last = std::chrono::steady_clock::now();
             float accumulator = 0.0f;
@@ -123,9 +125,7 @@ int main(int argc, char** argv) {
                 RenderFrame frame = scene.render(alpha, aspect, dt);
                 frame.deltaTime = dt;
 
-                // Направление света — по слайдеру панели (как на Android).
-                frame.lightDir = normalize(
-                    Vec3{std::cos(ui.lightAngle), 1.0f, std::sin(ui.lightAngle)});
+                // Свет задаёт сцена (из файла), правится слайдером в GameUi.
 
                 // FPS — забота приложения (тайминг здесь), а не игровой логики.
                 if (dt > 0.0f) ui.fps = ui.fps * 0.92f + (1.0f / dt) * 0.08f;

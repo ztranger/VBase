@@ -14,7 +14,13 @@ void build(GameUiState& state, Scene& scene) {
     ImGui::SetNextWindowSize(ImVec2(360, 560), ImGuiCond_FirstUseEver);
     ImGui::Begin("VBase");
     ImGui::Text("FPS: %.1f", (double)state.fps);
-    ImGui::SliderFloat("Light angle", &state.lightAngle, 0.0f, 6.2831f);
+
+    ImGui::SeparatorText("Light");
+    Vec3 ld = scene.lightDir();  // направление света сцены (из файла), правим вживую
+    float dir[3] = {ld.x, ld.y, ld.z};
+    if (ImGui::SliderFloat3("Light dir", dir, -1.0f, 1.0f)) {
+        scene.setLightDir(Vec3{dir[0], dir[1], dir[2]});
+    }
 
     ImGui::SeparatorText("Character");
     ImGui::Text("Speed: %.2f", (double)scene.characterSpeed());

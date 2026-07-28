@@ -24,6 +24,7 @@ add_executable(vbase_desktop
         ${APP}/Assets.cpp
         ${APP}/Model.cpp
         ${APP}/Scene.cpp
+        ${APP}/SceneLoader.cpp
         ${APP}/GlRenderer.cpp
         ${APP}/GameUi.cpp
         ${APP}/Font.cpp

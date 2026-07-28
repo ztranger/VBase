@@ -11,7 +11,6 @@ class Scene;
 // И Android, и десктоп держат экземпляр у себя и передают его в build().
 struct GameUiState {
     float fps = 0.0f;               // сглаженный FPS (считает приложение)
-    float lightAngle = 0.9f;        // угол направленного света (слайдер)
     char joinIp[64] = "127.0.0.1";  // адрес сервера для Join
 };
 

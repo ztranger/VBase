@@ -67,7 +67,9 @@ struct GameObject {
  */
 class Scene {
 public:
-    void build(Renderer& renderer, AssetSource& assets);
+    // Построить сцену из файла (scenePath — через AssetSource, напр. "scenes/default.scene").
+    void build(Renderer& renderer, AssetSource& assets,
+               const char* scenePath = "scenes/default.scene");
 
     // Шаг симуляции на фиксированный dt (движение, анимация, вращение декора).
     void fixedUpdate(float dt);
@@ -101,6 +103,9 @@ public:
     float cameraHeight() const { return camera_.height; }
     void setCameraHeight(float h) { camera_.height = h; }
 
+    Vec3 lightDir() const { return lightDir_; }
+    void setLightDir(Vec3 d) { lightDir_ = d; }
+
 private:
     FollowCamera camera_;
     std::vector<GameObject> objects_;
@@ -114,6 +119,7 @@ private:
     VirtualJoystick joystick_;
     float extX_ = 0.0f, extY_ = 0.0f;  // внешняя ось движения (клавиатура на десктопе)
     float uiScale_ = 1.0f;
+    Vec3 lightDir_{0.4f, 1.0f, 0.6f};  // направление НА свет (из файла сцены)
 
     // Построить отрисовочный предмет лисы по состоянию (клиентский рендер).
     SkinnedItem makeFoxItem(Vec3 pos, float yaw, float animParam, float animTime) const;

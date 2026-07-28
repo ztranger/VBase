@@ -1,87 +1,134 @@
 #include "Scene.h"
 
 #include <cmath>
+#include <string>
+#include <unordered_map>
 
 #include "Assets.h"
 #include "Log.h"
 #include "Renderer.h"
+#include "SceneLoader.h"
 
-void Scene::build(Renderer& renderer, AssetSource& assets) {
-    // --- Текстуры ---
-    TextureHandle checker = renderer.createTexture(makeCheckerboard(256, 8));
-    TextureHandle crateTex = 0;
-    {
-        TextureData img;
-        if (loadImageAsset(assets, "textures/crate.png", img)) {
-            crateTex = renderer.createTexture(img);
-        }
-    }
-
-    // --- Материалы (окружение) ---
-    MaterialHandle floorMat  = renderer.createMaterial({ShaderType::Lit,   {1.0f, 1.0f, 1.0f}, checker});
-    MaterialHandle crateMat  = renderer.createMaterial({ShaderType::Lit,   {1.0f, 1.0f, 1.0f}, crateTex});
-    MaterialHandle redMat    = renderer.createMaterial({ShaderType::Phong, {0.90f, 0.35f, 0.30f}, 0});
-    MaterialHandle flatGreen = renderer.createMaterial({ShaderType::Unlit, {0.30f, 0.85f, 0.45f}, 0});
-    MaterialHandle blueMat   = renderer.createMaterial({ShaderType::Phong, {0.35f, 0.55f, 0.95f}, 0});
-    MaterialHandle goldMat   = renderer.createMaterial({ShaderType::Phong, {0.95f, 0.80f, 0.25f}, 0});
-
-    // --- Меши окружения ---
-    MeshHandle plane = renderer.createMesh(makePlane(24.0f, 12.0f));
-    MeshHandle cube = renderer.createMesh(makeCube(1.0f));
-    MeshHandle sphere = renderer.createMesh(makeSphere(0.6f));
-
+void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath) {
     objects_.clear();
 
-    {  // пол (побольше — есть где ходить)
-        GameObject ground;
-        ground.mesh = plane;
-        ground.material = floorMat;
-        objects_.push_back(ground);
+    SceneDesc desc;
+    if (!loadSceneDesc(assets, scenePath, desc)) {
+        LOGE("Не удалось загрузить сцену: %s", scenePath);
+        return;  // пустая сцена — ошибки уже в логе
     }
 
-    const MaterialHandle cubeMats[] = {crateMat, redMat, flatGreen};
-    for (int i = 0; i < 3; ++i) {
-        GameObject c;
-        c.mesh = cube;
-        c.material = cubeMats[i];
-        c.transform.position = {-4.0f + (float)i * 4.0f, 0.5f, -4.0f};
-        c.spin = 0.6f + 0.3f * (float)i;
-        objects_.push_back(c);
-    }
-    const MaterialHandle sphereMats[] = {blueMat, goldMat, redMat};
-    for (int i = 0; i < 3; ++i) {
-        GameObject s;
-        s.mesh = sphere;
-        s.material = sphereMats[i];
-        s.transform.position = {-4.0f + (float)i * 4.0f, 0.6f, 4.0f};
-        objects_.push_back(s);
-    }
+    // Свет и камера — прямо из описания.
+    lightDir_ = desc.lightDir;
+    camera_.distance = desc.camera.distance;
+    camera_.height = desc.camera.height;
+    camera_.lookHeight = desc.camera.lookHeight;
+    camera_.fovY = desc.camera.fovY;
+    camera_.nearZ = desc.camera.nearZ;
+    camera_.farZ = desc.camera.farZ;
 
-    // Кольцо инстансных кубов (демонстрация инстансинга) — как декор по краю.
-    MaterialHandle ringMat = renderer.createMaterial({ShaderType::Lit, {0.55f, 0.65f, 0.85f}, checker});
-    const int ringCount = 48;
-    const float pi = 3.14159265358979323846f;
-    for (int i = 0; i < ringCount; ++i) {
-        float a = 2.0f * pi * (float)i / (float)ringCount;
-        GameObject c;
-        c.mesh = cube;
-        c.material = ringMat;
-        c.transform.position = {std::cos(a) * 10.0f, 0.4f, std::sin(a) * 10.0f};
-        c.transform.scale = {0.4f, 0.4f, 0.4f};
-        c.spin = 1.2f;
-        objects_.push_back(c);
-    }
-
-    // --- Управляемый персонаж: лиса (glTF + скиннинг) ---
-    if (loadGltfModel(assets, "models/Fox.glb", foxModel_)) {
-        foxMesh_ = renderer.createSkinnedMesh(foxModel_);
-        if (foxModel_.hasTexture) {
-            foxTex_ = renderer.createTexture(foxModel_.baseColor);
+    // --- Текстуры (имя -> GPU-handle) ---
+    std::unordered_map<std::string, TextureHandle> texMap;
+    for (const TextureSpec& ts : desc.textures) {
+        TextureHandle h = 0;
+        if (ts.kind == TextureSpec::Checker) {
+            h = renderer.createTexture(makeCheckerboard((uint32_t)ts.size, (uint32_t)ts.cells));
+        } else {
+            TextureData img;
+            if (loadImageAsset(assets, ts.path.c_str(), img)) h = renderer.createTexture(img);
+            else LOGW("Текстура-картинка не найдена: %s (материал станет белым)", ts.path.c_str());
         }
-        player_.position = {0.0f, 0.0f, 0.0f};
-        player_.snapshot();  // prev = curr, чтобы первый кадр не «прыгнул»
-    } else {
-        LOGW("Не удалось загрузить Fox.glb");
+        texMap[ts.name] = h;
+    }
+    // Разрешить ссылку на текстуру: имя объявленной ИЛИ путь к картинке ИЛИ пусто.
+    auto resolveTex = [&](const std::string& ref) -> TextureHandle {
+        if (ref.empty()) return 0;
+        auto it = texMap.find(ref);
+        if (it != texMap.end()) return it->second;
+        TextureData img;
+        if (loadImageAsset(assets, ref.c_str(), img)) return renderer.createTexture(img);
+        LOGW("Текстура не найдена: %s", ref.c_str());
+        return 0;
+    };
+
+    // --- Материалы (имя -> handle) ---
+    std::unordered_map<std::string, MaterialHandle> matMap;
+    for (const MaterialSpec& ms : desc.materials) {
+        MaterialDesc md;
+        md.shader = ms.shader;
+        md.baseColor = ms.color;
+        md.albedo = resolveTex(ms.tex);
+        matMap[ms.name] = renderer.createMaterial(md);
+    }
+
+    // --- Меши (имя -> handle) ---
+    std::unordered_map<std::string, MeshHandle> meshMap;
+    for (const MeshSpec& m : desc.meshes) {
+        MeshHandle h = 0;
+        switch (m.kind) {
+            case MeshSpec::Plane:  h = renderer.createMesh(makePlane(m.a, m.b)); break;
+            case MeshSpec::Cube:   h = renderer.createMesh(makeCube(m.a)); break;
+            case MeshSpec::Sphere: h = renderer.createMesh(makeSphere(m.a, m.stacks, m.slices)); break;
+        }
+        meshMap[m.name] = h;
+    }
+
+    auto meshH = [&](const std::string& n) -> MeshHandle {
+        auto it = meshMap.find(n);
+        if (it == meshMap.end()) { LOGW("Неизвестный меш в объекте: %s", n.c_str()); return 0; }
+        return it->second;
+    };
+    auto matH = [&](const std::string& n) -> MaterialHandle {
+        auto it = matMap.find(n);
+        if (it == matMap.end()) { LOGW("Неизвестный материал в объекте: %s", n.c_str()); return 0; }
+        return it->second;
+    };
+
+    // --- Объекты (обычные и кольцевые) ---
+    const float pi = 3.14159265358979323846f;
+    for (const ObjectSpec& os : desc.objects) {
+        MeshHandle mh = meshH(os.mesh);
+        MaterialHandle mah = matH(os.material);
+        if (os.ring) {
+            for (int k = 0; k < os.ringCount; ++k) {
+                float a = 2.0f * pi * (float)k / (float)(os.ringCount > 0 ? os.ringCount : 1);
+                GameObject c;
+                c.mesh = mh;
+                c.material = mah;
+                c.transform.position = {std::cos(a) * os.ringRadius, os.ringY, std::sin(a) * os.ringRadius};
+                c.transform.rotation = os.rot;
+                c.transform.scale = {os.scale, os.scale, os.scale};
+                c.spin = os.spin;
+                c.prevRotY = os.rot.y;
+                objects_.push_back(c);
+            }
+        } else {
+            GameObject o;
+            o.mesh = mh;
+            o.material = mah;
+            o.transform.position = os.pos;
+            o.transform.rotation = os.rot;
+            o.transform.scale = {os.scale, os.scale, os.scale};
+            o.spin = os.spin;
+            o.prevRotY = os.rot.y;
+            objects_.push_back(o);
+        }
+    }
+
+    // --- Управляемый персонаж (glTF + скиннинг) ---
+    if (desc.player.present) {
+        if (loadGltfModel(assets, desc.player.model.c_str(), foxModel_)) {
+            foxMesh_ = renderer.createSkinnedMesh(foxModel_);
+            if (foxModel_.hasTexture) {
+                foxTex_ = renderer.createTexture(foxModel_.baseColor);
+            }
+            foxScale_ = desc.player.scale;
+            foxYawOffset_ = desc.player.yawOffset;
+            player_.position = desc.player.pos;
+            player_.snapshot();  // prev = curr, чтобы первый кадр не «прыгнул»
+        } else {
+            LOGW("Не удалось загрузить модель игрока: %s", desc.player.model.c_str());
+        }
     }
 }
 
@@ -272,7 +319,7 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
     frame.view = camera_.view();
     frame.proj = camera_.proj(aspect);
     frame.cameraPos = camera_.eye();
-    frame.lightDir = normalize(Vec3{0.4f, 1.0f, 0.6f});
+    frame.lightDir = normalize(lightDir_);  // из файла сцены; правится в GUI
 
     for (const GameObject& obj : objects_) {
         Transform t = obj.transform;
