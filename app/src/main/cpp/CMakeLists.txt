@@ -44,6 +44,7 @@ add_library(vbase SHARED
         Net.cpp
         Scene.cpp
         GlRenderer.cpp
+        GameUi.cpp
         VulkanProbe.cpp
         ${ENET_SOURCES}
         ${IMGUI_DIR}/imgui.cpp

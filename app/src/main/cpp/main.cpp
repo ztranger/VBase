@@ -13,6 +13,7 @@
 #include "imgui.h"
 
 #include "AssetSource.h"
+#include "GameUi.h"
 #include "GlRenderer.h"
 #include "Log.h"
 #include "RenderFrame.h"
@@ -51,10 +52,8 @@ struct Engine {
     std::chrono::steady_clock::time_point lastTime{};
     bool haveTime = false;
     float accumulator = 0.0f; // накопитель времени для фиксированного тика
-    float fps = 0.0f;        // сглаженный счётчик кадров для HUD
-    float lightAngle = 0.9f; // управляется слайдером ImGui
     float uiScale = 1.0f;    // масштаб UI по плотности экрана
-    char joinIp[64] = "127.0.0.1";  // адрес сервера для Join
+    GameUiState ui;          // состояние панели (fps/угол света/IP) — общее с десктопом
 };
 
 // Частота симуляции. Рендер идёт быстрее и интерполирует между тиками.
@@ -214,97 +213,21 @@ extern "C" void android_main(android_app* app) {
 
             // Направление света управляется слайдером ImGui (см. UI ниже).
             frame.lightDir = normalize(
-                Vec3{std::cos(engine.lightAngle), 1.0f, std::sin(engine.lightAngle)});
+                Vec3{std::cos(engine.ui.lightAngle), 1.0f, std::sin(engine.ui.lightAngle)});
 
             // FPS — забота приложения (тайминг здесь), а не игровой логики.
             if (dt > 0.0f) {
-                engine.fps = engine.fps * 0.92f + (1.0f / dt) * 0.08f;
+                engine.ui.fps = engine.ui.fps * 0.92f + (1.0f / dt) * 0.08f;
             }
             char hud[32];
-            std::snprintf(hud, sizeof(hud), "FPS: %.0f", (double)engine.fps);
+            std::snprintf(hud, sizeof(hud), "FPS: %.0f", (double)engine.ui.fps);
             const float s = engine.uiScale;  // HUD тоже масштабируем по DPI
             frame.hud.push_back({hud, 24.0f * s, 24.0f * s, 40.0f * s, {1.0f, 0.85f, 0.2f}});
 
-            // UI строит приложение; рендер вызовет это между ImGui NewFrame и Render.
+            // UI строит общий модуль GameUi (тот же на десктопе). Рендер вызовет
+            // это между ImGui NewFrame и Render.
             Engine* e = &engine;
-            frame.ui = [e]() {
-                ImGui::SetNextWindowPos(ImVec2(20, 90), ImGuiCond_FirstUseEver);
-                ImGui::SetNextWindowSize(ImVec2(360, 560), ImGuiCond_FirstUseEver);
-                ImGui::Begin("VBase");
-                ImGui::Text("FPS: %.1f", (double)e->fps);
-                ImGui::SliderFloat("Light angle", &e->lightAngle, 0.0f, 6.2831f);
-
-                Scene* sc = e->scene.get();
-                if (sc != nullptr) {
-                    ImGui::SeparatorText("Character");
-                    ImGui::Text("Speed: %.2f", (double)sc->characterSpeed());
-                    float yawOff = sc->modelYawOffset();
-                    if (ImGui::SliderFloat("Model yaw", &yawOff, -3.15f, 3.15f)) {
-                        sc->setModelYawOffset(yawOff);  // подгонка "морда по движению"
-                    }
-                    float mscale = sc->modelScale();
-                    if (ImGui::SliderFloat("Model scale", &mscale, 0.005f, 0.1f, "%.3f")) {
-                        sc->setModelScale(mscale);
-                    }
-                    ImGui::SeparatorText("Camera");
-                    float cd = sc->cameraDistance();
-                    if (ImGui::SliderFloat("Distance", &cd, 2.0f, 15.0f)) sc->setCameraDistance(cd);
-                    float ch = sc->cameraHeight();
-                    if (ImGui::SliderFloat("Height", &ch, 0.5f, 10.0f)) sc->setCameraHeight(ch);
-
-                    ImGui::SeparatorText("Network");
-                    if (sc->netConnected()) {
-                        ImGui::Text("%s | remotes: %d", sc->netHost() ? "HOST" : "CLIENT",
-                                    sc->remoteCount());
-                        if (ImGui::Button("Disconnect")) sc->leaveGame();
-                    } else {
-                        // Своя цифровая клавиатура: системная софт-клавиатура из
-                        // ImGui на Android не поднимается, а тапы у нас работают.
-                        ImGui::Text("IP: %s", e->joinIp);
-                        auto key = [e](char c) {
-                            size_t l = std::strlen(e->joinIp);
-                            if (l + 1 < sizeof(e->joinIp)) {
-                                e->joinIp[l] = c;
-                                e->joinIp[l + 1] = '\0';
-                            }
-                        };
-                        float b = ImGui::GetFontSize() * 2.2f;
-                        ImVec2 sz(b, b);
-                        const char* rows[3] = {"789", "456", "123"};
-                        for (int r = 0; r < 3; ++r) {
-                            for (int i = 0; i < 3; ++i) {
-                                char lbl[2] = {rows[r][i], '\0'};
-                                if (i > 0) ImGui::SameLine();
-                                if (ImGui::Button(lbl, sz)) key(rows[r][i]);
-                            }
-                        }
-                        if (ImGui::Button("0", sz)) key('0');
-                        ImGui::SameLine();
-                        if (ImGui::Button(".", sz)) key('.');
-                        ImGui::SameLine();
-                        if (ImGui::Button("<-", sz)) {
-                            size_t l = std::strlen(e->joinIp);
-                            if (l > 0) e->joinIp[l - 1] = '\0';
-                        }
-                        ImGui::SameLine();
-                        if (ImGui::Button("Clr", sz)) e->joinIp[0] = '\0';
-
-                        if (ImGui::Button("Host")) sc->hostGame();
-                        ImGui::SameLine();
-                        if (ImGui::Button("Join")) sc->joinGame(e->joinIp);
-                    }
-                }
-                ImGui::End();
-
-                // Виртуальный джойстик поверх всего (появляется под пальцем).
-                if (sc != nullptr && sc->joystick().active) {
-                    const VirtualJoystick& js = sc->joystick();
-                    ImDrawList* dl = ImGui::GetForegroundDrawList();
-                    dl->AddCircle(ImVec2(js.ox, js.oy), js.radius, IM_COL32(255, 255, 255, 110), 48, 4.0f);
-                    dl->AddCircleFilled(ImVec2(js.cx, js.cy), js.radius * 0.4f,
-                                        IM_COL32(255, 255, 255, 190));
-                }
-            };
+            frame.ui = [e]() { GameUi::build(e->ui, *e->scene); };
 
             engine.renderer->renderFrame(frame);
         }

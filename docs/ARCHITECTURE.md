@@ -67,8 +67,10 @@
 - **Скиннинг**: кости в **bone-текстуре** (`RGBA32F`, кость = строка), выборка через
   `texelFetch`; на модель — только `uBoneOffset`. Масштабируется на много моделей.
 - **HUD**: свой растровый шрифт 5×7 (`Font.*`), 2D-оверлей; DPI-масштаб.
-- **ImGui**: бэкенд `imgui_impl_opengl3` (ES3), ввод скармливается вручную (touch→mouse),
-  UI строится приложением через `RenderFrame::ui`.
+- **ImGui**: renderer-бэкенд `imgui_impl_opengl3` (общий, в `GlRenderer`); platform-бэкенд
+  вне рендера — Android кормит ввод вручную (touch→mouse), десктоп через официальный
+  `imgui_impl_glfw`. Содержимое панели — общий модуль `GameUi.{h,cpp}` (imgui+`Scene`),
+  один на обе платформы; отдаётся рендеру через колбэк `RenderFrame::ui`.
 
 Шейдеры — инлайн-строки в `GlRenderer.cpp`; строка версии подставляется макросом
 `GLSL_VERSION` (`#version 300 es` на Android, `#version 330 core` на десктопе).
@@ -101,6 +103,8 @@ Vulkan-шейдеры (`shaders/*.vert/.frag`, glslc→SPIR-V) сейчас не
   `Log.h` (переносимый).
 - Кроссплатформенный рендер: `GlRenderer.*` (Android GLES3+EGL и desktop GL 3.3+GLFW
   через `#ifdef`), `GlApi.h` (GL: GLES3 на Android / загрузчик на десктопе), `Font.*`.
+- Кроссплатформенный GUI: `GameUi.{h,cpp}` — построение ImGui-панели (imgui+`Scene`),
+  общее для Android и десктопа; вызывается из `RenderFrame::ui`.
 - Android-специфичное: `main.cpp` (GameActivity, ввод, цикл, EGL через GlRenderer,
   `AndroidAssetSource`), `VulkanProbe.*`.
 - Исключено из сборки: `VulkanRenderer.*`, `shaders/`.
@@ -145,7 +149,8 @@ Vulkan-шейдеры (`shaders/*.vert/.frag`, glslc→SPIR-V) сейчас не
    Файлы `VulkanRenderer.*` есть, сейчас исключены из сборки. — теперь следующий.
 3. **Неткод — доведение**: delta-сжатие снапшотов; lag compensation (когда появится
    боёвка/хиты — сейчас неприменима); вынести настройку сервера/адреса.
-4. Мелочи десктопа: ввод в ImGui (мышь/клавиатура), своя `crate.png`.
+4. Мелочи десктопа: ✅ ввод в ImGui (мышь/клавиатура) через `imgui_impl_glfw`;
+   осталась своя `crate.png`.
 
 Идея-ориентир: всё, что «над рендером» и «над платформой», держать
 платформонезависимым; новые фичи вводить как данные в `RenderFrame`/`Scene` и

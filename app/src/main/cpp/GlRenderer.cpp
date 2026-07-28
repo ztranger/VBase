@@ -792,11 +792,16 @@ void GlRenderer::renderFrame(const RenderFrame& frame) {
     }
 
     // Dear ImGui поверх всего. UI строит приложение в колбэке frame.ui.
+    // Renderer-бэкенд (imgui_impl_opengl3) — общий; platform-бэкенд — за пределами
+    // GlRenderer (Android: ручной ввод в main.cpp; десктоп: imgui_impl_glfw).
     if (imguiReady_) {
         ImGui_ImplOpenGL3_NewFrame();
+#ifdef __ANDROID__
+        // Платформенного бэкенда нет — размер экрана и dt подаём вручную.
         ImGuiIO& io = ImGui::GetIO();
         io.DisplaySize = ImVec2((float)width, (float)height);
         io.DeltaTime = frame.deltaTime > 0.0f ? frame.deltaTime : (1.0f / 60.0f);
+#endif  // на десктопе DisplaySize/DeltaTime/scale задаёт ImGui_ImplGlfw_NewFrame
         ImGui::NewFrame();
         if (frame.ui) {
             frame.ui();

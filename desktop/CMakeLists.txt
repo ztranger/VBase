@@ -25,12 +25,14 @@ add_executable(vbase_desktop
         ${APP}/Model.cpp
         ${APP}/Scene.cpp
         ${APP}/GlRenderer.cpp
+        ${APP}/GameUi.cpp
         ${APP}/Font.cpp
         ${IMGUI}/imgui.cpp
         ${IMGUI}/imgui_draw.cpp
         ${IMGUI}/imgui_tables.cpp
         ${IMGUI}/imgui_widgets.cpp
         ${IMGUI}/backends/imgui_impl_opengl3.cpp
+        ${IMGUI}/backends/imgui_impl_glfw.cpp
         ${ENET}/callbacks.c
         ${ENET}/compress.c
         ${ENET}/host.c
