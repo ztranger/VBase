@@ -25,13 +25,58 @@ imgui + `Scene`, не ломает платформонезависимость 
 кейпад для тача. Осталось по желанию: своя `assets/textures/crate.png` для
 текстурированного куба.
 
-## Шаг 2 — порт Vulkan-бэкенда под контракт RenderFrame
+## Шаг 2 — порт Vulkan-бэкенда под контракт RenderFrame (в работе, фазами)
 
-**Цель:** вернуть Vulkan как второй бэкенд (выбор в рантайме по `VulkanProbe`).
+**Цель:** второй бэкенд под тем же `Renderer`/`RenderFrame`. Делаем **десктоп-first,
+кроссплатформенно**: разрабатываем и запускаем на десктопе (GLFW+Vulkan, флаг
+`--vk`), ядро потом переиспользуем на Android. Причина — Vulkan без запуска почти
+не заводится, а Android здесь не запускается; на десктопе итерируем.
 
-**Что делать:**
-- Файлы `VulkanRenderer.*` уже есть, но исключены из сборки и написаны под старый
-  контракт (одиночный треугольник). Переписать под `Renderer`/`RenderFrame`:
+**Тулчейн:** заголовки Khronos вендорены в `third_party/vulkan/`; функции грузятся
+динамически через `glfwGetInstanceProcAddress` (загрузчик `VkApi.*`) — vulkan-1.lib
+для запуска не нужен. Шейдеры GLSL→SPIR-V — через `glslc` (SDK:
+`C:\VulkanSDK\1.4.350.0\Bin\glslc.exe`, либо NDK `shader-tools/`).
+**Validation layers:** установлен Vulkan SDK (`C:\VulkanSDK\1.4.350.0`), слои
+`VK_LAYER_KHRONOS_validation` включаются автоматически при наличии + debug messenger
+шлёт сообщения в лог. Фаза 0 проходит валидацию чисто.
+
+**Фазы:**
+- ✅ **Фаза 0** — instance/device/swapchain/render pass/present, очистка экрана
+  (`VulkanRenderer.cpp`, `VkApi.*`). Собрано и запущено на десктопе (`--vk`).
+- ✅ **Фаза 1** — пайплайн Lit + вершинные/индексные буферы (host-visible) + **depth** +
+  per-object матрица (push-константа) + frame-UBO (viewProj/свет, дескриптор-сет на кадр)
+  + коррекция клип-пространства GL→Vulkan (`vulkanClipFix`). Шейдеры `cpp/shaders/lit.*`
+  → SPIR-V через `glslc` (CMake), грузятся из `assets/shaders/vk/`. Окружение рисуется,
+  валидация чиста. Cull=NONE (winding — потом). Материалы пока только цвет (текстуры — Ф2).
+- ✅ **Фаза 2** — текстуры (staging → device-local image, барьеры layout, сэмплер
+  LINEAR+REPEAT, дефолтная белая 1x1) + три пайплайна Lit/Unlit/Phong (общий
+  pipeline layout: set 0 = Frame UBO, set 1 = albedo материала, push = model+color).
+  Шахматка на полу и блики Phong рисуются, валидация (вкл. synchronization) чиста.
+- ✅ **Фаза 3** — инстансинг. Модельная матрица — per-instance атрибут `iModel`
+  (binding 1, локации 3–6) вместо push-константы; push теперь только цвет (фрагментный).
+  `renderFrame` батчит `frame.items` по (mesh, material), раскладывает матрицы в
+  per-frame инстанс-буфер (host-visible, `kMaxInstances`=512) и рисует каждый батч
+  одним `vkCmdDrawIndexed(instanceCount, firstInstance=...)`. Кольцо 48 кубов = 1 draw
+  (всего ~8 draw вместо 55). Валидация чиста.
+- ✅ **Фаза 4** — скиннинг (лиса). Кости — в per-frame **SSBO** (set 2, `mat4 bones[]`,
+  `kMaxBones`=512), смещение модели в `uBoneOffset` (push). Отдельный skinned-пайплайн
+  и layout (set0 Frame + set1 albedo + set2 bones; push = model+color+boneOffset,
+  VERTEX|FRAGMENT); vertex-формат `SkinnedVertex` (16 float). `renderFrame` раскладывает
+  кости всех `frame.skinned` в SSBO и рисует каждый объект своим `uBoneOffset`. Текстуры
+  скиннинга — свои set 1 (`textureSets_` + `whiteSet_`). Лиса рисуется, валидация чиста.
+- **Фаза 5** — HUD (шрифт `Font`) + ImGui (`imgui_impl_vulkan`).
+- **Фаза 6** — сборка и выбор бэкенда на Android (`VulkanProbe`, surface через
+  `vkCreateAndroidSurfaceKHR`, загрузчик через dlopen libvulkan).
+
+**⚠️ Сборка (важно):** инкрементальный NMake-билд НЕ пересобирает `desktop/main.cpp`
+при изменении заголовка `VulkanRenderer.h`. Т.к. `main.cpp` создаёт `VulkanRenderer`
+на стеке, устаревший layout объекта = запись за его границы = порча памяти (симптом:
+зависание/краш на старте, `frames_` с мусорным размером). **После правок заголовков
+делать чистую пересборку** (`rm -rf desktop/build` перед `build.bat`). Диагностику
+ловит synchronization validation (включена в `createInstance` при наличии SDK).
+
+**Дальше по контракту (в рамках фаз 1–5):**
+- Переписать под `Renderer`/`RenderFrame`:
   меши/текстуры/материалы/скиннинг, per-object матрицы, **depth-буфер**,
   пересоздание swapchain при ресайзе.
 - Вернуть компиляцию шейдеров glslc→SPIR-V (в `app/.../CMakeLists.txt` был блок,

@@ -26,6 +26,8 @@ add_executable(vbase_desktop
         ${APP}/Scene.cpp
         ${APP}/SceneLoader.cpp
         ${APP}/GlRenderer.cpp
+        ${APP}/VkApi.cpp
+        ${APP}/VulkanRenderer.cpp
         ${APP}/GameUi.cpp
         ${APP}/Font.cpp
         ${IMGUI}/imgui.cpp
@@ -44,11 +46,34 @@ add_executable(vbase_desktop
         ${ENET}/win32.c)
 
 # ImGui — БЕЗ IMGUI_IMPL_OPENGL_ES3: на десктопе бэкенд использует полный GL 3.3.
+# vulkan/include — вендоренные заголовки Khronos (линковки не требуют: функции
+# грузятся динамически через glfwGetInstanceProcAddress, vulkan-1.lib не нужен).
 target_include_directories(vbase_desktop PRIVATE
-        "${APP}" "${ENET}/include" "${TP}/cgltf" "${TP}/stb" "${IMGUI}" "${IMGUI}/backends")
+        "${APP}" "${ENET}/include" "${TP}/cgltf" "${TP}/stb" "${IMGUI}" "${IMGUI}/backends"
+        "${TP}/vulkan/include")
 
 if(MSVC)
     target_compile_options(vbase_desktop PRIVATE /utf-8)
 endif()
 
 target_link_libraries(vbase_desktop glfw opengl32 ws2_32 winmm)
+
+# --- Vulkan-шейдеры: GLSL -> SPIR-V через glslc, в assets/shaders/vk (грузятся
+# рендером через AssetSource). glslc из Vulkan SDK (переопределяется -DGLSLC=...).
+set(GLSLC "C:/VulkanSDK/1.4.350.0/Bin/glslc.exe" CACHE FILEPATH "Путь к glslc")
+set(VK_SHADER_SRC "${APP}/shaders")
+set(VK_SHADER_OUT "${APP}/../assets/shaders/vk")
+file(MAKE_DIRECTORY "${VK_SHADER_OUT}")
+set(VK_SHADERS lit.vert lit.frag unlit.frag phong.vert phong.frag skin.vert skin.frag)
+set(VK_SPV "")
+foreach(s ${VK_SHADERS})
+    add_custom_command(
+            OUTPUT "${VK_SHADER_OUT}/${s}.spv"
+            COMMAND "${GLSLC}" "${VK_SHADER_SRC}/${s}" -o "${VK_SHADER_OUT}/${s}.spv"
+            DEPENDS "${VK_SHADER_SRC}/${s}"
+            COMMENT "glslc ${s} -> ${s}.spv"
+            VERBATIM)
+    list(APPEND VK_SPV "${VK_SHADER_OUT}/${s}.spv")
+endforeach()
+add_custom_target(vk_shaders DEPENDS ${VK_SPV})
+add_dependencies(vbase_desktop vk_shaders)

@@ -1,7 +1,8 @@
-// Десктопный клиент VBase (Windows): окно GLFW + desktop OpenGL 3.3, тот же
-// кроссплатформенный GlRenderer и общий игровой слой Scene, что и на Android.
-// Полный рендер (сцена, лиса со скиннингом, HUD, ImGui). Ввод — клавиатура WASD,
-// GUI — мышь/клавиатура через imgui_impl_glfw. Подключается к серверу.
+// Десктопный клиент VBase (Windows): окно GLFW + рендер-бэкенд на выбор —
+// OpenGL 3.3 (по умолчанию) или Vulkan (флаг --vk). Общий игровой слой Scene,
+// как и на Android. Ввод — клавиатура WASD. Подключается к серверу.
+
+#include "VulkanRenderer.h"  // тянет vulkan.h ДО GLFW (чтобы GLFW увидел VK-типы)
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -13,6 +14,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <string>
 
 #include "imgui.h"
@@ -36,6 +38,58 @@ int keyAxis(GLFWwindow* w, int pos, int neg) {
     return v;
 }
 
+// Vulkan-ветка (Фаза 0): тот же цикл симуляции, но без ImGui/HUD и без
+// glfwSwapBuffers — Vulkan презентует сам. Окно создано с GLFW_NO_API.
+int runVulkan(GLFWwindow* window, const std::string& assetsDir,
+              const char* serverIp, const char* scenePath) {
+    FileAssetSource assets(assetsDir);
+    VulkanRenderer renderer;
+    // Окно передаём как непрозрачный указатель (на десктопе это GLFWwindow*).
+    if (!renderer.init((ANativeWindow*)window, nullptr, assets)) {
+        std::fprintf(stderr, "VulkanRenderer.init failed\n");
+        return 1;
+    }
+    Scene scene;
+    scene.build(renderer, assets, scenePath);
+    scene.joinGame(serverIp);
+    std::printf("Клиент запущен (Vulkan), сервер %s, сцена %s. WASD — движение, ESC — выход.\n",
+                serverIp, scenePath);
+
+    auto last = std::chrono::steady_clock::now();
+    float accumulator = 0.0f;
+    while (!glfwWindowShouldClose(window)) {
+        glfwPollEvents();
+        if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) break;
+
+        auto now = std::chrono::steady_clock::now();
+        float dt = std::chrono::duration<float>(now - last).count();
+        last = now;
+        if (dt > 0.25f) dt = 0.25f;
+
+        float jx = (float)keyAxis(window, GLFW_KEY_D, GLFW_KEY_A);
+        float jy = (float)keyAxis(window, GLFW_KEY_W, GLFW_KEY_S);
+        scene.setMoveInput(jx, jy);
+
+        accumulator += dt;
+        while (accumulator >= kTick) {
+            scene.fixedUpdate(kTick);
+            accumulator -= kTick;
+        }
+        float alpha = accumulator / kTick;
+
+        int fbw = 0, fbh = 0;
+        glfwGetFramebufferSize(window, &fbw, &fbh);
+        float aspect = fbh > 0 ? (float)fbw / (float)fbh : 1.0f;
+
+        RenderFrame frame = scene.render(alpha, aspect, dt);
+        frame.deltaTime = dt;
+        renderer.setSurfaceSize(fbw, fbh);
+        renderer.renderFrame(frame);  // Vulkan сам презентует (без glfwSwapBuffers)
+    }
+    scene.leaveGame();
+    return 0;  // ~VulkanRenderer здесь, до glfwDestroyWindow
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -48,19 +102,38 @@ int main(int argc, char** argv) {
     std::string assetsDir = (argc > 2) ? argv[2] : "../../app/src/main/assets";
     const char* scenePath = (argc > 3) ? argv[3] : "scenes/default.scene";
 
+    // Выбор бэкенда рендера: по умолчанию GL, --vk где-либо в аргументах -> Vulkan.
+    bool useVk = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--vk") == 0) useVk = true;
+    }
+
     if (!glfwInit()) {
         std::fprintf(stderr, "glfwInit failed\n");
         return 1;
     }
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    if (useVk) {
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);  // Vulkan: без GL-контекста
+    } else {
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    }
     GLFWwindow* window = glfwCreateWindow(1280, 720, "VBase Desktop", nullptr, nullptr);
     if (window == nullptr) {
         std::fprintf(stderr, "glfwCreateWindow failed\n");
         glfwTerminate();
         return 1;
     }
+
+    // Vulkan-ветка: свой цикл (Фаза 0). GL-ветка ниже — без изменений.
+    if (useVk) {
+        int rc = runVulkan(window, assetsDir, serverIp, scenePath);
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return rc;
+    }
+
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
 

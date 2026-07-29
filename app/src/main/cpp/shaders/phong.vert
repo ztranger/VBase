@@ -1,0 +1,27 @@
+#version 450
+
+// Vulkan Phong vertex shader: как lit.vert (инстансная матрица iModel), но
+// дополнительно отдаёт мировую позицию для вектора взгляда.
+
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNormal;
+layout(location = 2) in vec2 aUV;
+layout(location = 3) in mat4 iModel;  // per-instance (локации 3,4,5,6)
+
+layout(set = 0, binding = 0) uniform Frame {
+    mat4 uViewProj;
+    vec4 uLightDir;
+    vec4 uViewPos;
+} frame;
+
+layout(location = 0) out vec3 vNormal;
+layout(location = 1) out vec2 vUV;
+layout(location = 2) out vec3 vWorldPos;
+
+void main() {
+    vec4 world = iModel * vec4(aPos, 1.0);
+    vWorldPos = world.xyz;
+    gl_Position = frame.uViewProj * world;
+    vNormal = mat3(iModel) * aNormal;
+    vUV = aUV;
+}

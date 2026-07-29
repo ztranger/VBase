@@ -34,3 +34,6 @@ google-services.json
 *.hprof
 
 .kotlin/
+
+# Скомпилированные SPIR-V шейдеры (генерируются glslc из cpp/shaders/*.vert|frag)
+app/src/main/assets/shaders/vk/

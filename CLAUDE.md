@@ -45,5 +45,8 @@
   `Mesh`, `MathUtil`, `Input`, `FollowCamera`, `Assets`, `AssetSource` не должны
   тянуть Android/GL/ImGui. Рендер и платформа — за интерфейсами (`Renderer`,
   `AssetSource`).
-- **Vulkan-бэкенд** (`VulkanRenderer.*`, `shaders/`) сейчас ИСКЛЮЧЁН из сборки
-  (портируется под контракт `RenderFrame`); GLES-бэкенд `GlRenderer` активен.
+- **Vulkan-бэкенд** (`VulkanRenderer.*` + загрузчик `VkApi.*`) портируется под
+  `Renderer`/`RenderFrame` **фазами на десктопе** (флаг `--vk`; заголовки Vulkan
+  вендорены в `third_party/vulkan/`, функции грузятся динамически — SDK не нужен).
+  Сейчас Фаза 0: очистка экрана (present-цикл). На Android пока НЕ собирается
+  (в `app/.../CMakeLists.txt` исключён). GL-бэкенд `GlRenderer` — основной.
