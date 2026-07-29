@@ -19,6 +19,7 @@
 #include "RenderFrame.h"
 #include "Scene.h"
 #include "VulkanProbe.h"
+#include "VulkanRenderer.h"
 
 namespace {
 // Источник ассетов Android поверх AAssetManager (файлы из APK).
@@ -39,68 +40,68 @@ private:
 };
 }  // namespace
 
-// NB: VulkanRenderer временно отключён от сборки, пока портируется под
-// новый контракт RenderFrame (см. CMakeLists.txt). VulkanProbe оставлен,
-// чтобы логировать доступность Vulkan.
-
 namespace {
 
 struct Engine {
     std::unique_ptr<Renderer> renderer;
     std::unique_ptr<Scene> scene;
     bool vulkanSupported = false;
+    int backend = 0;         // текущий бэкенд: 0 = GL ES3, 1 = Vulkan
     std::chrono::steady_clock::time_point lastTime{};
     bool haveTime = false;
     float accumulator = 0.0f; // накопитель времени для фиксированного тика
     float uiScale = 1.0f;    // масштаб UI по плотности экрана
-    GameUiState ui;          // состояние панели (fps/угол света/IP) — общее с десктопом
+    GameUiState ui;          // состояние панели — общее с десктопом
 };
 
 // Частота симуляции. Рендер идёт быстрее и интерполирует между тиками.
-// Именно на этом тике позже будет крутиться и сетевая симуляция.
 constexpr float kTick = 1.0f / 30.0f;
+
+// Создать рендер по engine->backend (0 = GL, 1 = Vulkan) из окна и построить мир.
+// Оба бэкенда создают surface из одного ANativeWindow, поэтому переключение —
+// это reset + повторный createRenderer.
+bool createRenderer(Engine* engine, android_app* app) {
+    // Источник ассетов нужен и рендеру (шейдеры), и сцене (модели/текстуры).
+    AndroidAssetSource assets(app->activity->assetManager);
+    if (engine->backend == 1) {
+        auto r = std::make_unique<VulkanRenderer>();
+        if (!r->init(app->window, nullptr, assets)) { LOGE("VulkanRenderer init failed"); return false; }
+        engine->renderer = std::move(r);
+    } else {
+        auto r = std::make_unique<GlRenderer>();
+        if (!r->init(app->window, nullptr, assets)) { LOGE("GlRenderer init failed"); return false; }
+        engine->renderer = std::move(r);
+    }
+    // Мир строится после init рендера: нужны живой GPU-контекст и AAssetManager.
+    engine->scene = std::make_unique<Scene>();
+    engine->scene->build(*engine->renderer, assets);
+    engine->haveTime = false;
+
+    // Масштаб UI по плотности экрана (иначе на HiDPI интерфейс крошечный).
+    int density = AConfiguration_getDensity(app->config);
+    float scale = 2.5f;
+    if (density > 0 && density <= 1000) scale = (float)density / 160.0f;
+    if (scale < 1.0f) scale = 1.0f;
+    if (scale > 4.0f) scale = 4.0f;
+    engine->uiScale = scale;
+    engine->scene->setUiScale(scale);
+    // Контекст ImGui создаёт рендер в init — стиль масштабируем на свежем контексте.
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.ScaleAllSizes(scale);
+    style.FontScaleDpi = scale;
+
+    engine->ui.backend = engine->backend;
+    engine->ui.requestBackend = -1;
+    LOGI("Renderer: %s, UI scale %.2f", engine->backend == 1 ? "Vulkan" : "GL ES3", (double)scale);
+    return true;
+}
 
 void handleCmd(android_app* app, int32_t cmd) {
     auto* engine = static_cast<Engine*>(app->userData);
 
     switch (cmd) {
         case APP_CMD_INIT_WINDOW:
-            if (app->window != nullptr) {
-                auto renderer = std::make_unique<GlRenderer>();
-                // Источник ассетов нужен и рендеру (шейдеры), и сцене (модели/
-                // текстуры) — один на оба, живёт весь init/build.
-                AndroidAssetSource assets(app->activity->assetManager);
-                if (renderer->init(app->window, nullptr, assets)) {
-                    engine->renderer = std::move(renderer);
-                    // Мир строится после инициализации рендера: ему нужны
-                    // живой GPU-контекст (залить меши/текстуры) и AAssetManager
-                    // (загрузить модели/картинки из APK).
-                    engine->scene = std::make_unique<Scene>();
-                    engine->scene->build(*engine->renderer, assets);
-                    engine->haveTime = false;
-
-                    // Масштаб UI по плотности экрана — иначе на телефоне с высоким
-                    // DPI весь интерфейс рендерится в физ. пикселях 1:1 и крошечный.
-                    int density = AConfiguration_getDensity(app->config);
-                    float scale = 2.5f;  // разумный дефолт, если density неопределён
-                    if (density > 0 && density <= 1000) {
-                        scale = (float)density / 160.0f;  // 160 dpi = mdpi baseline
-                    }
-                    if (scale < 1.0f) scale = 1.0f;
-                    if (scale > 4.0f) scale = 4.0f;
-                    engine->uiScale = scale;
-                    engine->scene->setUiScale(scale);  // джойстик под DPI
-
-                    // ImGui 1.92: FontScaleDpi даёт ЧЁТКОЕ масштабирование (шрифт
-                    // ре-растеризуется), ScaleAllSizes масштабирует отступы/паддинги.
-                    ImGuiStyle& style = ImGui::GetStyle();
-                    style.ScaleAllSizes(scale);
-                    style.FontScaleDpi = scale;
-                    LOGI("UI scale: %.2f (density %d dpi)", (double)scale, density);
-                } else {
-                    LOGE("Renderer init failed");
-                }
-            }
+            if (app->window != nullptr) createRenderer(engine, app);
             break;
 
         case APP_CMD_TERM_WINDOW:
@@ -170,6 +171,7 @@ extern "C" void android_main(android_app* app) {
 
     Engine engine;
     engine.vulkanSupported = VulkanProbe::isSupported();
+    engine.ui.vulkanAvailable = engine.vulkanSupported;  // кнопка Vulkan в GameUi
     LOGI("Vulkan supported: %s", engine.vulkanSupported ? "yes" : "no");
 
     app->userData = &engine;
@@ -230,6 +232,18 @@ extern "C" void android_main(android_app* app) {
             frame.ui = [e]() { GameUi::build(e->ui, *e->scene); };
 
             engine.renderer->renderFrame(frame);
+
+            // Переключение бэкенда по кнопке в GameUi: сносим рендер+мир и
+            // пересоздаём из того же окна (surface поддерживают оба бэкенда).
+            if (engine.ui.requestBackend >= 0 && engine.ui.requestBackend != engine.backend &&
+                app->window != nullptr) {
+                int nb = engine.ui.requestBackend;
+                if (nb == 1 && !engine.vulkanSupported) nb = 0;
+                engine.scene.reset();
+                engine.renderer.reset();
+                engine.backend = nb;
+                createRenderer(&engine, app);
+            }
         }
     }
 

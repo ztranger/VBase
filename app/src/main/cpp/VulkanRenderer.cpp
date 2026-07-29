@@ -1,10 +1,14 @@
 #include "VulkanRenderer.h"
 
-// Платформенные куски (создание surface, bootstrap загрузчика) — на десктопе
-// через GLFW. Файл пока собирается только в десктоп-цели (см. CMake); Android-
-// путь (vkCreateAndroidSurfaceKHR + dlopen libvulkan) добавится отдельной фазой.
+// Платформенные куски (surface, bootstrap загрузчика) под #ifdef: десктоп — GLFW,
+// Android — vkCreateAndroidSurfaceKHR + dlopen libvulkan. Ядро (пайплайны/дескрипторы/
+// отрисовка) общее.
+#ifdef __ANDROID__
+#include <dlfcn.h>
+#else
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
+#endif
 
 #include <cstring>
 #include <vector>
@@ -110,10 +114,19 @@ bool VulkanRenderer::init(ANativeWindow* window, void* (*glGetProc)(const char*)
     assets_ = &assets;  // источник SPIR-V шейдеров
     window_ = window;  // на десктопе это GLFWwindow*, переданный из main
 
-    // Bootstrap загрузчика: получаем vkGetInstanceProcAddr у GLFW (он сам dlopen'ит
-    // vulkan-1.dll). Никакого vulkan-1.lib для линковки не требуется.
+    // Bootstrap загрузчика: получаем vkGetInstanceProcAddr. Десктоп — у GLFW,
+    // Android — dlsym из libvulkan.so.
+#ifdef __ANDROID__
+    void* vklib = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
+    if (vklib == nullptr) {
+        LOGE("Vulkan: не удалось dlopen libvulkan.so");
+        return false;
+    }
+    auto gipa = (PFN_vkGetInstanceProcAddr)dlsym(vklib, "vkGetInstanceProcAddr");
+#else
     auto gipa = (PFN_vkGetInstanceProcAddr)glfwGetInstanceProcAddress(
         VK_NULL_HANDLE, "vkGetInstanceProcAddr");
+#endif
     if (!vkApiInitGlobal(gipa)) {
         LOGE("Vulkan: не удалось загрузить глобальные функции");
         return false;
@@ -181,7 +194,11 @@ bool VulkanRenderer::createInstance() {
     app.pApplicationName = "VBase";
     app.apiVersion = VK_API_VERSION_1_0;
 
-    // Расширения инстанса: то, что требует GLFW (VK_KHR_surface + платформенное).
+    // Расширения инстанса: surface + платформенное. Десктоп — список от GLFW,
+    // Android — VK_KHR_surface + VK_KHR_android_surface.
+#ifdef __ANDROID__
+    std::vector<const char*> exts = {"VK_KHR_surface", "VK_KHR_android_surface"};
+#else
     uint32_t glfwExtCount = 0;
     const char** glfwExt = glfwGetRequiredInstanceExtensions(&glfwExtCount);
     if (glfwExt == nullptr) {
@@ -189,6 +206,7 @@ bool VulkanRenderer::createInstance() {
         return false;
     }
     std::vector<const char*> exts(glfwExt, glfwExt + glfwExtCount);
+#endif
 
     // Validation layers — если установлены (Vulkan SDK). На машинах без них
     // (или на Android) просто не включаем, рендер работает как есть.
@@ -233,8 +251,16 @@ bool VulkanRenderer::createInstance() {
 }
 
 bool VulkanRenderer::createSurface() {
+#ifdef __ANDROID__
+    VkAndroidSurfaceCreateInfoKHR ci{};
+    ci.sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
+    ci.window = (ANativeWindow*)window_;
+    VK_CHECK(vkCreateAndroidSurfaceKHR(instance_, &ci, nullptr, &surface_),
+             "vkCreateAndroidSurfaceKHR");
+#else
     VK_CHECK(glfwCreateWindowSurface(instance_, (GLFWwindow*)window_, nullptr, &surface_),
              "glfwCreateWindowSurface");
+#endif
     return true;
 }
 
@@ -1629,7 +1655,12 @@ void VulkanRenderer::renderFrame(const RenderFrame& frame) {
     // --- ImGui поверх всего (панель строит приложение в frame.ui) ---
     if (imguiReady_ && frame.ui) {
         ImGui_ImplVulkan_NewFrame();
-        // Platform-бэкенд (ImGui_ImplGlfw_NewFrame) вызывается в main до renderFrame.
+#ifdef __ANDROID__
+        // На Android нет ImGui_ImplGlfw — размер/dt подаём сами (ввод кормит main).
+        ImGuiIO& io = ImGui::GetIO();
+        io.DisplaySize = ImVec2((float)swapchainExtent_.width, (float)swapchainExtent_.height);
+        io.DeltaTime = frame.deltaTime > 0.0f ? frame.deltaTime : (1.0f / 60.0f);
+#endif  // на десктопе размер/dt/ввод даёт ImGui_ImplGlfw_NewFrame (вызван в main)
         ImGui::NewFrame();
         frame.ui();
         ImGui::Render();

@@ -7,11 +7,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # GameActivity приходит через Prefab из AAR androidx.games:games-activity
 find_package(game-activity REQUIRED CONFIG)
 
-# Сборка: игровой слой (Scene/Mesh) + GL-бэкенд + probe доступности Vulkan.
-# VulkanRenderer.cpp временно исключён — портируется под контракт RenderFrame.
-# (Шейдеры Vulkan через glslc вернутся вместе с ним.)
-# Dear ImGui (вендрится в third_party/imgui). GL ES 3 бэкенд + ядро.
+# Сборка: игровой слой + оба рендер-бэкенда (GL ES3 и Vulkan). Vulkan-функции
+# грузятся динамически (VkApi, dlopen libvulkan) — libvulkan НЕ линкуется, иначе
+# имена-указатели VkApi конфликтуют с экспортами. Заголовки Vulkan — вендоренные.
+# Dear ImGui (вендрится в third_party/imgui): GL ES3 + Vulkan бэкенды + ядро.
 set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/imgui")
+set(VULKAN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/vulkan")
 
 # ENet (UDP-транспорт). Компилируем исходники напрямую, минуя его CMake.
 # win32.c пропущен — на Android нужен unix.c (гарды внутри файлов).
@@ -47,26 +48,31 @@ add_library(vbase SHARED
         GlRenderer.cpp
         GameUi.cpp
         VulkanProbe.cpp
+        VkApi.cpp
+        VulkanRenderer.cpp
         ${ENET_SOURCES}
         ${IMGUI_DIR}/imgui.cpp
         ${IMGUI_DIR}/imgui_draw.cpp
         ${IMGUI_DIR}/imgui_tables.cpp
         ${IMGUI_DIR}/imgui_widgets.cpp
-        ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp)
+        ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
+        ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp)
 
-target_include_directories(vbase PRIVATE "${IMGUI_DIR}" "${IMGUI_DIR}/backends" "${CGLTF_DIR}" "${STB_DIR}" "${ENET_DIR}/include")
-# Заставляет imgui_impl_opengl3 использовать GLES3, а не десктопный GL.
-target_compile_definitions(vbase PRIVATE IMGUI_IMPL_OPENGL_ES3)
+target_include_directories(vbase PRIVATE "${IMGUI_DIR}" "${IMGUI_DIR}/backends"
+        "${VULKAN_DIR}/include" "${CGLTF_DIR}" "${STB_DIR}" "${ENET_DIR}/include")
+# imgui_impl_opengl3 -> GLES3; imgui_impl_vulkan -> загрузка функций (VK_NO_PROTOTYPES).
+target_compile_definitions(vbase PRIVATE IMGUI_IMPL_OPENGL_ES3 IMGUI_IMPL_VULKAN_NO_PROTOTYPES)
 
 # GameActivity подгружается из Java через JNI-символ в статической библиотеке —
 # заставляем линкер не выбрасывать его
 set(CMAKE_SHARED_LINKER_FLAGS
         "${CMAKE_SHARED_LINKER_FLAGS} -u Java_com_google_androidgamesdk_GameActivity_initializeNativeCode")
 
+# libvulkan НЕ линкуем — грузим через dlopen (см. VkApi). Нужен только dl (dlopen).
 target_link_libraries(vbase
         game-activity::game-activity_static
         android
         EGL
         GLESv3
-        vulkan
+        dl
         log)

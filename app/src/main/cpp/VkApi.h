@@ -6,6 +6,9 @@
 // статические прототипы — вместо них указатели ниже. Работает и на Android
 // (bootstrap-функцию платформа передаёт снаружи: GLFW на десктопе, dlsym на Android).
 
+#ifdef __ANDROID__
+#define VK_USE_PLATFORM_ANDROID_KHR  // для vkCreateAndroidSurfaceKHR / VkAndroidSurfaceCreateInfoKHR
+#endif
 #define VK_NO_PROTOTYPES
 #include <vulkan/vulkan.h>
 
@@ -102,10 +105,18 @@
     X(vkCreateSampler)             \
     X(vkDestroySampler)
 
+// Платформенная surface-функция инстанса (только Android).
+#ifdef __ANDROID__
+#define VK_PLATFORM_INSTANCE_FUNCS(X) X(vkCreateAndroidSurfaceKHR)
+#else
+#define VK_PLATFORM_INSTANCE_FUNCS(X)
+#endif
+
 // Объявления указателей на функции.
 #define VK_DECLARE(n) extern PFN_##n n;
 VK_GLOBAL_FUNCS(VK_DECLARE)
 VK_INSTANCE_FUNCS(VK_DECLARE)
+VK_PLATFORM_INSTANCE_FUNCS(VK_DECLARE)
 VK_DEVICE_FUNCS(VK_DECLARE)
 #undef VK_DECLARE
 

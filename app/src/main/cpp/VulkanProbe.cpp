@@ -1,53 +1,64 @@
 #include "VulkanProbe.h"
 
-#include <vulkan/vulkan.h>
+#include <dlfcn.h>
 
 #include <vector>
 
+#include "VkApi.h"  // динамический загрузчик (без линковки libvulkan)
 #include "Log.h"
 
 namespace VulkanProbe {
 
+// Проверка через тот же загрузчик, что и VulkanRenderer: libvulkan НЕ линкуется
+// (иначе имена-указатели VkApi конфликтуют с экспортами libvulkan).
 bool isSupported() {
-    VkApplicationInfo appInfo{};
-    appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    appInfo.pApplicationName = "VBase";
-    appInfo.apiVersion = VK_API_VERSION_1_0;
-
-    VkInstanceCreateInfo createInfo{};
-    createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-    createInfo.pApplicationInfo = &appInfo;
-
-    VkInstance instance = VK_NULL_HANDLE;
-    VkResult res = vkCreateInstance(&createInfo, nullptr, &instance);
-    if (res != VK_SUCCESS) {
-        LOGW("Vulkan: vkCreateInstance failed (%d) — GL fallback", res);
+    void* lib = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
+    if (lib == nullptr) {
+        LOGW("Vulkan: нет libvulkan.so — GL fallback");
         return false;
     }
+    auto gipa = (PFN_vkGetInstanceProcAddr)dlsym(lib, "vkGetInstanceProcAddr");
+    if (!vkApiInitGlobal(gipa)) {
+        LOGW("Vulkan: не удалось загрузить функции — GL fallback");
+        dlclose(lib);
+        return false;
+    }
+
+    VkApplicationInfo app{};
+    app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+    app.pApplicationName = "VBase";
+    app.apiVersion = VK_API_VERSION_1_0;
+
+    VkInstanceCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    ci.pApplicationInfo = &app;
+
+    VkInstance instance = VK_NULL_HANDLE;
+    if (vkCreateInstance(&ci, nullptr, &instance) != VK_SUCCESS) {
+        LOGW("Vulkan: vkCreateInstance failed — GL fallback");
+        dlclose(lib);
+        return false;
+    }
+    vkApiLoadInstance(instance);
 
     uint32_t count = 0;
     vkEnumeratePhysicalDevices(instance, &count, nullptr);
-    if (count == 0) {
-        LOGW("Vulkan: loader есть, но нет физических устройств — GL fallback");
-        vkDestroyInstance(instance, nullptr);
-        return false;
-    }
-
-    std::vector<VkPhysicalDevice> devices(count);
-    vkEnumeratePhysicalDevices(instance, &count, devices.data());
-    for (VkPhysicalDevice device : devices) {
+    bool ok = count > 0;
+    if (ok) {
+        std::vector<VkPhysicalDevice> devices(count);
+        vkEnumeratePhysicalDevices(instance, &count, devices.data());
         VkPhysicalDeviceProperties props{};
-        vkGetPhysicalDeviceProperties(device, &props);
-        LOGI("Vulkan device: %s, API %u.%u.%u, driver 0x%x",
-             props.deviceName,
-             VK_VERSION_MAJOR(props.apiVersion),
-             VK_VERSION_MINOR(props.apiVersion),
-             VK_VERSION_PATCH(props.apiVersion),
-             props.driverVersion);
+        vkGetPhysicalDeviceProperties(devices[0], &props);
+        LOGI("Vulkan device: %s, API %u.%u.%u", props.deviceName,
+             VK_VERSION_MAJOR(props.apiVersion), VK_VERSION_MINOR(props.apiVersion),
+             VK_VERSION_PATCH(props.apiVersion));
+    } else {
+        LOGW("Vulkan: нет физических устройств — GL fallback");
     }
 
     vkDestroyInstance(instance, nullptr);
-    return true;
+    dlclose(lib);
+    return ok;
 }
 
-} // namespace VulkanProbe
+}  // namespace VulkanProbe

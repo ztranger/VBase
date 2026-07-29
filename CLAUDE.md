@@ -45,8 +45,13 @@
   `Mesh`, `MathUtil`, `Input`, `FollowCamera`, `Assets`, `AssetSource` не должны
   тянуть Android/GL/ImGui. Рендер и платформа — за интерфейсами (`Renderer`,
   `AssetSource`).
-- **Vulkan-бэкенд** (`VulkanRenderer.*` + загрузчик `VkApi.*`) портируется под
-  `Renderer`/`RenderFrame` **фазами на десктопе** (флаг `--vk`; заголовки Vulkan
-  вендорены в `third_party/vulkan/`, функции грузятся динамически — SDK не нужен).
-  Сейчас Фаза 0: очистка экрана (present-цикл). На Android пока НЕ собирается
-  (в `app/.../CMakeLists.txt` исключён). GL-бэкенд `GlRenderer` — основной.
+- **Два рендер-бэкенда за интерфейсом `Renderer`**: `GlRenderer` (GL ES3 / desktop
+  GL3.3) и `VulkanRenderer` (+ динамический загрузчик `VkApi.*`). Vulkan рисует всё:
+  окружение (инстансинг, Lit/Unlit/Phong, текстуры), скиннинг (лиса, кости в SSBO),
+  HUD, ImGui. Заголовки Vulkan вендорены в `third_party/vulkan/`, функции грузятся
+  динамически (desktop: GLFW; Android: dlopen libvulkan) — **libvulkan НЕ линкуется**
+  (иначе имена-указатели `VkApi` конфликтуют с экспортами). Бэкенд переключается
+  **кнопкой в панели `GameUi`** в рантайме (Vulkan disabled, если недоступен);
+  на десктопе окно пересоздаётся (`runClient`), на Android — рендер из того же окна.
+  Десктоп проверен запуском; Android-путь пока только `-fsyntax-only` (на устройстве
+  не гонялся — сборка/отладка в Android Studio по logcat).

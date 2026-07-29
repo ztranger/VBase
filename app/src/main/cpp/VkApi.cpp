@@ -6,6 +6,7 @@ static PFN_vkGetInstanceProcAddr g_gipa = nullptr;
 #define VK_DEFINE(n) PFN_##n n = nullptr;
 VK_GLOBAL_FUNCS(VK_DEFINE)
 VK_INSTANCE_FUNCS(VK_DEFINE)
+VK_PLATFORM_INSTANCE_FUNCS(VK_DEFINE)
 VK_DEVICE_FUNCS(VK_DEFINE)
 #undef VK_DEFINE
 
@@ -22,6 +23,7 @@ bool vkApiInitGlobal(PFN_vkGetInstanceProcAddr gipa) {
 void vkApiLoadInstance(VkInstance instance) {
     #define VK_LOAD(n) n = (PFN_##n)g_gipa(instance, #n);
     VK_INSTANCE_FUNCS(VK_LOAD)
+    VK_PLATFORM_INSTANCE_FUNCS(VK_LOAD)
     #undef VK_LOAD
 }
 
