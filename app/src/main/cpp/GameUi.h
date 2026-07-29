@@ -12,6 +12,11 @@ class Scene;
 struct GameUiState {
     float fps = 0.0f;               // сглаженный FPS (считает приложение)
     char joinIp[64] = "127.0.0.1";  // адрес сервера для Join
+
+    // Переключение графического бэкенда через панель.
+    bool vulkanAvailable = false;   // доступен ли Vulkan (иначе кнопка disabled)
+    int backend = 0;                // текущий бэкенд: 0 = OpenGL, 1 = Vulkan (ставит платформа)
+    int requestBackend = -1;        // запрошенный кнопкой (-1 = нет; читает и сбрасывает платформа)
 };
 
 namespace GameUi {

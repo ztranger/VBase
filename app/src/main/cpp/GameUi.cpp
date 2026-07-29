@@ -22,6 +22,21 @@ void build(GameUiState& state, Scene& scene) {
         scene.setLightDir(Vec3{dir[0], dir[1], dir[2]});
     }
 
+    ImGui::SeparatorText("Renderer");
+    // Кнопка текущего бэкенда неактивна; Vulkan неактивен, если недоступен.
+    bool isGl = (state.backend == 0);
+    ImGui::BeginDisabled(isGl);
+    if (ImGui::Button("OpenGL")) state.requestBackend = 0;
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(!isGl || !state.vulkanAvailable);
+    if (ImGui::Button("Vulkan")) state.requestBackend = 1;
+    ImGui::EndDisabled();
+    if (!state.vulkanAvailable) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(недоступен)");
+    }
+
     ImGui::SeparatorText("Character");
     ImGui::Text("Speed: %.2f", (double)scene.characterSpeed());
     float yawOff = scene.modelYawOffset();

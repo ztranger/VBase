@@ -1,6 +1,6 @@
 // Десктопный клиент VBase (Windows): окно GLFW + рендер-бэкенд на выбор —
-// OpenGL 3.3 (по умолчанию) или Vulkan (флаг --vk). Общий игровой слой Scene,
-// как и на Android. Ввод — клавиатура WASD. Подключается к серверу.
+// OpenGL 3.3 или Vulkan. Бэкенд переключается кнопкой в панели GameUi в рантайме
+// (окно и рендер пересоздаются). Общий игровой слой Scene, как и на Android.
 
 #include "VulkanRenderer.h"  // тянет vulkan.h ДО GLFW (чтобы GLFW увидел VK-типы)
 
@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <string>
 
 #include "imgui.h"
@@ -25,6 +26,7 @@
 #include "GlRenderer.h"
 #include "MathUtil.h"
 #include "Net.h"
+#include "Renderer.h"
 #include "Scene.h"
 
 namespace {
@@ -38,28 +40,64 @@ int keyAxis(GLFWwindow* w, int pos, int neg) {
     return v;
 }
 
-// Vulkan-ветка (Фаза 0): тот же цикл симуляции, но без ImGui/HUD и без
-// glfwSwapBuffers — Vulkan презентует сам. Окно создано с GLFW_NO_API.
-int runVulkan(GLFWwindow* window, const std::string& assetsDir,
+// Запустить клиент на заданном бэкенде (0 = OpenGL, 1 = Vulkan). Создаёт своё окно
+// и рендер. Возвращает следующий бэкенд для перезапуска (по кнопке в GameUi) либо
+// -1, если окно закрыто/ESC (выход). ui переживает переключения (свет/камера/FPS).
+int runClient(int backend, GameUiState& ui, const std::string& assetsDir,
               const char* serverIp, const char* scenePath) {
-    FileAssetSource assets(assetsDir);
-    VulkanRenderer renderer;
-    // Окно передаём как непрозрачный указатель (на десктопе это GLFWwindow*).
-    if (!renderer.init((ANativeWindow*)window, nullptr, assets)) {
-        std::fprintf(stderr, "VulkanRenderer.init failed\n");
-        return 1;
+    const bool useVk = (backend == 1);
+
+    glfwDefaultWindowHints();
+    if (useVk) {
+        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);  // Vulkan: без GL-контекста
+    } else {
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     }
-    // Platform-бэкенд ImGui (контекст уже создан в renderer.init).
-    ImGui_ImplGlfw_InitForVulkan(window, true);
+    GLFWwindow* window = glfwCreateWindow(1280, 720, "VBase Desktop", nullptr, nullptr);
+    if (window == nullptr) {
+        std::fprintf(stderr, "glfwCreateWindow failed\n");
+        return -1;
+    }
+
+    FileAssetSource assets(assetsDir);
+    std::unique_ptr<Renderer> renderer;
+    if (useVk) {
+        auto r = std::make_unique<VulkanRenderer>();
+        if (!r->init((ANativeWindow*)window, nullptr, assets)) {
+            std::fprintf(stderr, "VulkanRenderer.init failed — откат на OpenGL\n");
+            glfwDestroyWindow(window);
+            return 0;  // graceful fallback на GL
+        }
+        ImGui_ImplGlfw_InitForVulkan(window, true);
+        renderer = std::move(r);
+    } else {
+        glfwMakeContextCurrent(window);
+        glfwSwapInterval(1);
+        auto r = std::make_unique<GlRenderer>();
+        if (!r->init(nullptr, [](const char* n) { return (void*)glfwGetProcAddress(n); }, assets)) {
+            std::fprintf(stderr, "GlRenderer.init failed\n");
+            glfwDestroyWindow(window);
+            return -1;
+        }
+        ImGui_ImplGlfw_InitForOpenGL(window, true);
+        renderer = std::move(r);
+    }
+
     Scene scene;
-    scene.build(renderer, assets, scenePath);
+    scene.build(*renderer, assets, scenePath);
     scene.joinGame(serverIp);
-    GameUiState ui;
-    std::printf("Клиент запущен (Vulkan), сервер %s, сцена %s. WASD — движение, ESC — выход.\n",
-                serverIp, scenePath);
+
+    ui.backend = backend;
+    ui.requestBackend = -1;  // сбросить возможный запрос предыдущего бэкенда
+    std::printf("Клиент запущен (%s), сервер %s, сцена %s.\n",
+                useVk ? "Vulkan" : "OpenGL", serverIp, scenePath);
 
     auto last = std::chrono::steady_clock::now();
     float accumulator = 0.0f;
+    int next = -1;  // -1 = выход
+
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
         if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) break;
@@ -91,25 +129,37 @@ int runVulkan(GLFWwindow* window, const std::string& assetsDir,
         RenderFrame frame = scene.render(alpha, aspect, dt);
         frame.deltaTime = dt;
 
-        // FPS в HUD (как на GL/Android).
+        // FPS в HUD.
         if (dt > 0.0f) ui.fps = ui.fps * 0.92f + (1.0f / dt) * 0.08f;
         char hud[32];
         std::snprintf(hud, sizeof(hud), "FPS: %.0f", (double)ui.fps);
         frame.hud.push_back({hud, 24.0f, 24.0f, 40.0f, {1.0f, 0.85f, 0.2f}});
 
-        // Панель — общий модуль GameUi (тот же, что на GL/Android).
+        // Панель — общий модуль GameUi (тот же, что на Android). Тут же кнопки
+        // переключения бэкенда пишут ui.requestBackend.
         frame.ui = [&ui, &scene]() { GameUi::build(ui, scene); };
 
-        // Platform-бэкенд ImGui: подать ввод/размер — до ImGui::NewFrame() в renderFrame.
+        // Platform-бэкенд ImGui: до ImGui::NewFrame() (его делает renderer.renderFrame).
         ImGui_ImplGlfw_NewFrame();
 
-        renderer.setSurfaceSize(fbw, fbh);
-        renderer.renderFrame(frame);  // Vulkan сам презентует (без glfwSwapBuffers)
+        renderer->setSurfaceSize(fbw, fbh);
+        renderer->renderFrame(frame);
+        if (!useVk) glfwSwapBuffers(window);  // Vulkan презентует сам
+
+        // Запрошено переключение бэкенда кнопкой — выходим из цикла на перезапуск.
+        if (ui.requestBackend >= 0 && ui.requestBackend != backend) {
+            next = ui.requestBackend;
+            break;
+        }
     }
+
     scene.leaveGame();
-    // Platform-бэкенд гасим до ~VulkanRenderer (renderer-бэкенд + ImGui-контекст).
+    // Platform-бэкенд гасим до разрушения рендера (его деструктор сносит
+    // renderer-бэкенд ImGui + контекст). Порядок важен.
     ImGui_ImplGlfw_Shutdown();
-    return 0;  // ~VulkanRenderer здесь, до glfwDestroyWindow
+    renderer.reset();  // GL: контекст ещё текущий; VK: vkDeviceWaitIdle в деструкторе
+    glfwDestroyWindow(window);
+    return next;
 }
 
 }  // namespace
@@ -124,131 +174,28 @@ int main(int argc, char** argv) {
     std::string assetsDir = (argc > 2) ? argv[2] : "../../app/src/main/assets";
     const char* scenePath = (argc > 3) ? argv[3] : "scenes/default.scene";
 
-    // Выбор бэкенда рендера: по умолчанию GL, --vk где-либо в аргументах -> Vulkan.
-    bool useVk = false;
+    // Начальный бэкенд: по умолчанию GL, --vk -> Vulkan. Дальше — кнопки в GameUi.
+    int backend = 0;
     for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--vk") == 0) useVk = true;
+        if (std::strcmp(argv[i], "--vk") == 0) backend = 1;
     }
 
     if (!glfwInit()) {
         std::fprintf(stderr, "glfwInit failed\n");
         return 1;
     }
-    if (useVk) {
-        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);  // Vulkan: без GL-контекста
-    } else {
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    }
-    GLFWwindow* window = glfwCreateWindow(1280, 720, "VBase Desktop", nullptr, nullptr);
-    if (window == nullptr) {
-        std::fprintf(stderr, "glfwCreateWindow failed\n");
-        glfwTerminate();
-        return 1;
+
+    const bool vulkanAvailable = (glfwVulkanSupported() == GLFW_TRUE);
+    if (backend == 1 && !vulkanAvailable) backend = 0;  // запрошен --vk, но нет Vulkan
+
+    GameUiState ui;
+    ui.vulkanAvailable = vulkanAvailable;
+
+    // Цикл перезапуска: runClient возвращает следующий бэкенд или -1 (выход).
+    while (backend >= 0) {
+        backend = runClient(backend, ui, assetsDir, serverIp, scenePath);
     }
 
-    // Vulkan-ветка: свой цикл (Фаза 0). GL-ветка ниже — без изменений.
-    if (useVk) {
-        int rc = runVulkan(window, assetsDir, serverIp, scenePath);
-        glfwDestroyWindow(window);
-        glfwTerminate();
-        return rc;
-    }
-
-    glfwMakeContextCurrent(window);
-    glfwSwapInterval(1);
-
-    int exitCode = 0;
-    // Внутренняя область видимости: деструктор GlRenderer (сносит ImGui-контекст
-    // и GL-объекты) должен отработать ДО glfwTerminate, пока GL-контекст ещё есть.
-    {
-        // Источник ассетов нужен и рендеру (шейдеры), и сцене (модели/текстуры).
-        FileAssetSource assets(assetsDir);
-        GlRenderer renderer;
-        // Контекст уже текущий (GLFW); передаём загрузчик адресов GL-функций.
-        if (!renderer.init(nullptr, [](const char* n) { return (void*)glfwGetProcAddress(n); },
-                           assets)) {
-            std::fprintf(stderr, "renderer.init failed\n");
-            exitCode = 1;
-        } else {
-            // GlRenderer::init уже создал ImGui-контекст и renderer-бэкенд
-            // (imgui_impl_opengl3). Добавляем platform-бэкенд GLFW: мышь,
-            // клавиатура, скролл, курсоры, буфер обмена. true — ставим цепочечные
-            // GLFW-колбэки (наш поллинг WASD работает независимо от них).
-            ImGui_ImplGlfw_InitForOpenGL(window, true);
-
-            Scene scene;
-            scene.build(renderer, assets, scenePath);
-            scene.joinGame(serverIp);  // подключиться к серверу (если запущен)
-            GameUiState ui;
-            std::printf("Клиент запущен, сервер %s, сцена %s. WASD — движение, ESC — выход.\n",
-                        serverIp, scenePath);
-
-            auto last = std::chrono::steady_clock::now();
-            float accumulator = 0.0f;
-
-            while (!glfwWindowShouldClose(window)) {
-                glfwPollEvents();
-                if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) break;
-
-                auto now = std::chrono::steady_clock::now();
-                float dt = std::chrono::duration<float>(now - last).count();
-                last = now;
-                if (dt > 0.25f) dt = 0.25f;
-
-                // Клавиатура -> внешняя ось движения (тот же путь, что тач-джойстик).
-                // Если ImGui захватил клавиатуру (курсор в поле ввода IP) — не двигаемся.
-                float jx = 0.0f, jy = 0.0f;
-                if (!ImGui::GetIO().WantCaptureKeyboard) {
-                    jx = (float)keyAxis(window, GLFW_KEY_D, GLFW_KEY_A);
-                    jy = (float)keyAxis(window, GLFW_KEY_W, GLFW_KEY_S);
-                }
-                scene.setMoveInput(jx, jy);
-
-                accumulator += dt;
-                while (accumulator >= kTick) {
-                    scene.fixedUpdate(kTick);
-                    accumulator -= kTick;
-                }
-                float alpha = accumulator / kTick;
-
-                int fbw = 0, fbh = 0;
-                glfwGetFramebufferSize(window, &fbw, &fbh);
-                float aspect = fbh > 0 ? (float)fbw / (float)fbh : 1.0f;
-
-                RenderFrame frame = scene.render(alpha, aspect, dt);
-                frame.deltaTime = dt;
-
-                // Свет задаёт сцена (из файла), правится слайдером в GameUi.
-
-                // FPS — забота приложения (тайминг здесь), а не игровой логики.
-                if (dt > 0.0f) ui.fps = ui.fps * 0.92f + (1.0f / dt) * 0.08f;
-                char hud[32];
-                std::snprintf(hud, sizeof(hud), "FPS: %.0f", (double)ui.fps);
-                frame.hud.push_back({hud, 24.0f, 24.0f, 40.0f, {1.0f, 0.85f, 0.2f}});
-
-                // Панель строит общий модуль GameUi (тот же, что на Android).
-                frame.ui = [&ui, &scene]() { GameUi::build(ui, scene); };
-
-                // Platform-бэкенд ImGui: подать ввод/размер/dt. Обязан идти до
-                // ImGui::NewFrame(), который вызывает renderer.renderFrame().
-                ImGui_ImplGlfw_NewFrame();
-
-                renderer.setSurfaceSize(fbw, fbh);
-                renderer.renderFrame(frame);
-
-                glfwSwapBuffers(window);
-            }
-
-            scene.leaveGame();
-            // Platform-бэкенд гасим до разрушения GlRenderer (его деструктор
-            // делает ImGui_ImplOpenGL3_Shutdown + ImGui::DestroyContext).
-            ImGui_ImplGlfw_Shutdown();
-        }
-    }  // <- здесь ~GlRenderer, GL-контекст ещё текущий
-
-    glfwDestroyWindow(window);
     glfwTerminate();
-    return exitCode;
+    return 0;
 }

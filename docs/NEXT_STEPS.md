@@ -71,9 +71,25 @@ imgui + `Scene`, не ломает платформонезависимость 
   `vkApiLoader`), `DescriptorPoolSize>0` (пул создаёт бэкенд), `PipelineInfoMain.RenderPass`;
   контекст создаёт `VulkanRenderer`, platform-бэкенд `ImGui_ImplGlfw_InitForVulkan` — в main.
   Панель `GameUi` та же, что на GL/Android. Полный паритет с GL, валидация чиста.
-- **Фаза 6** — сборка и выбор бэкенда на Android (`VulkanProbe`, surface через
-  `vkCreateAndroidSurfaceKHR`, загрузчик через dlopen libvulkan). Единственное
-  отличие от десктопа — создание surface и bootstrap загрузчика; ядро переиспользуется.
+- ✅ **Рантайм-переключение бэкенда (десктоп)** — кнопки OpenGL/Vulkan в панели
+  `GameUi` (`GameUiState.backend`/`requestBackend`/`vulkanAvailable`; кнопка текущего
+  и недоступного бэкенда — disabled, доступность по `glfwVulkanSupported`). Десктоп-main
+  унифицирован в `runClient(backend)`: создаёт своё окно (у GL и Vulkan разный
+  GLFW client-API) + рендер + сцену, по нажатию возвращает следующий бэкенд, `main`
+  перезапускает. Проверено (переключение GL↔Vulkan в рантайме работает).
+- **Фаза 6 — Android (осталось, тестируется только на устройстве).** Ядро
+  (`VulkanRenderer`/`VkApi`/шейдеры/пайплайны) переиспользуется; отличия под `#ifdef __ANDROID__`:
+  - surface: `vkCreateAndroidSurfaceKHR` (+ расширение `VK_KHR_android_surface`) вместо GLFW;
+  - bootstrap загрузчика: `dlopen("libvulkan.so")` + `dlsym("vkGetInstanceProcAddr")`;
+  - `VkApi.h`: на Android `#define VK_USE_PLATFORM_ANDROID_KHR` до `vulkan.h`;
+  - ImGui: без `imgui_impl_glfw` — ввод в IO кормится вручную (как сейчас в Android
+    `main.cpp`), `DisplaySize/DeltaTime` в `VulkanRenderer::renderFrame` под `#ifdef __ANDROID__`.
+  - **⚠️ Готча линковки:** имена-указатели в `VkApi.cpp` (`vkCreateInstance` и т.д.)
+    конфликтуют с символами слинкованного `libvulkan`. На Android надо УБРАТЬ `vulkan`
+    из `target_link_libraries` и провести `VulkanProbe` тоже через загрузчик (dlopen),
+    иначе duplicate symbol.
+  - `app/.../CMakeLists.txt`: добавить `VulkanRenderer.cpp`/`VkApi.cpp`/`imgui_impl_vulkan.cpp`
+    (+ `IMGUI_IMPL_VULKAN_NO_PROTOTYPES`); в Android `main.cpp` — выбор/переключение бэкенда.
 
 **⚠️ Сборка (важно):** инкрементальный NMake-билд НЕ пересобирает `desktop/main.cpp`
 при изменении заголовка `VulkanRenderer.h`. Т.к. `main.cpp` создаёт `VulkanRenderer`
