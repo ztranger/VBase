@@ -25,7 +25,7 @@ imgui + `Scene`, не ломает платформонезависимость 
 кейпад для тача. Осталось по желанию: своя `assets/textures/crate.png` для
 текстурированного куба.
 
-## Шаг 2 — порт Vulkan-бэкенда под контракт RenderFrame (в работе, фазами)
+## Шаг 2 — порт Vulkan-бэкенда под контракт RenderFrame ✅ СДЕЛАНО (десктоп + Android)
 
 **Цель:** второй бэкенд под тем же `Renderer`/`RenderFrame`. Делаем **десктоп-first,
 кроссплатформенно**: разрабатываем и запускаем на десктопе (GLFW+Vulkan, флаг
@@ -77,8 +77,8 @@ imgui + `Scene`, не ломает платформонезависимость 
   унифицирован в `runClient(backend)`: создаёт своё окно (у GL и Vulkan разный
   GLFW client-API) + рендер + сцену, по нажатию возвращает следующий бэкенд, `main`
   перезапускает. Проверено (переключение GL↔Vulkan в рантайме работает).
-- ✅ **Фаза 6 — Android (написано, проверено только `-fsyntax-only`; на устройстве
-  НЕ запускалось).** Ядро (`VulkanRenderer`/`VkApi`/шейдеры/пайплайны) переиспользовано;
+- ✅ **Фаза 6 — Android (проверено на устройстве: работает корректно).** Ядро
+  (`VulkanRenderer`/`VkApi`/шейдеры/пайплайны) переиспользовано;
   отличия под `#ifdef __ANDROID__`:
   - surface — `vkCreateAndroidSurfaceKHR` (+ расширение `VK_KHR_android_surface`);
   - bootstrap загрузчика — `dlopen("libvulkan.so")` + `dlsym("vkGetInstanceProcAddr")`;
@@ -93,9 +93,8 @@ imgui + `Scene`, не ломает платформонезависимость 
     (+ `IMGUI_IMPL_VULKAN_NO_PROTOTYPES`, вендоренные заголовки Vulkan); в Android `main.cpp` —
     `createRenderer(backend)` + переключение по `GameUiState.requestBackend` (тот же путь, что на десктопе).
 
-  **Осталось проверить на устройстве** (Android Studio, отладка по logcat): реальный запуск
-  Vulkan-пути, корректность переключения GL↔Vulkan из панели (пересоздание рендера на живом
-  ANativeWindow), ImGui-панель под Vulkan на телефоне.
+  **Проверено на устройстве:** запуск Vulkan-пути, переключение GL↔Vulkan из панели
+  (пересоздание рендера на живом ANativeWindow) и ImGui-панель под Vulkan — работают.
 
 **⚠️ Сборка (важно):** инкрементальный NMake-билд НЕ пересобирает `desktop/main.cpp`
 при изменении заголовка `VulkanRenderer.h`. Т.к. `main.cpp` создаёт `VulkanRenderer`

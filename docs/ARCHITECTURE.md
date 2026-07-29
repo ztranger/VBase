@@ -45,7 +45,8 @@
   renderFrame/aspectRatio`. Реализация — **`GlRenderer` кроссплатформенный**:
   Android GLES3+EGL и desktop GL 3.3+GLFW под `#ifdef __ANDROID__` (контекст/своп/
   размер платформенные; версия шейдеров — макрос `GLSL_VERSION`; на десктопе
-  GL-функции грузит `GlApi.h`). `VulkanRenderer` — под тот же интерфейс, исключён.
+  GL-функции грузит `GlApi.h`). `VulkanRenderer` — второй бэкенд под тем же
+  интерфейсом (в сборке обеих целей, десктоп и Android).
 - **Геометрия/данные**: `Mesh` (Vertex pos+normal+uv, генераторы plane/cube/sphere),
   `Model` (`SkinnedModel`: вершины со скиннингом, скелет, анимации; sampleAnimation/
   sampleBlend), `Texture` (TextureData, MaterialDesc, ShaderType), `MathUtil`
@@ -83,7 +84,8 @@
 даже в комментариях принимают не все GL-драйверы).
 
 NB: не путать с `app/src/main/cpp/shaders/` — там GLSL-исходники **Vulkan**
-(`*.vert/.frag`, glslc→SPIR-V), сейчас исключены из сборки вместе с VulkanRenderer.
+(`*.vert/.frag`, glslc→SPIR-V в `assets/shaders/vk/`, git-ignored); используются
+`VulkanRenderer`.
 
 ## 4. Неткод
 
@@ -114,9 +116,10 @@ NB: не путать с `app/src/main/cpp/shaders/` — там GLSL-исход�
   через `#ifdef`), `GlApi.h` (GL: GLES3 на Android / загрузчик на десктопе), `Font.*`.
 - Кроссплатформенный GUI: `GameUi.{h,cpp}` — построение ImGui-панели (imgui+`Scene`),
   общее для Android и десктопа; вызывается из `RenderFrame::ui`.
-- Android-специфичное: `main.cpp` (GameActivity, ввод, цикл, EGL через GlRenderer,
-  `AndroidAssetSource`), `VulkanProbe.*`.
-- Исключено из сборки: `VulkanRenderer.*`, `shaders/`.
+- Кроссплатформенный Vulkan-рендер: `VulkanRenderer.*`, `VkApi.*` (динамический
+  загрузчик), `shaders/` (Vulkan GLSL→SPIR-V), `VulkanProbe.*` (проверка доступности).
+- Android-специфичное: `main.cpp` (GameActivity, ввод, цикл, EGL/Vulkan-surface из
+  окна, `AndroidAssetSource`, переключение бэкендов).
 - `CMakeLists.txt` — сборка `libvbase.so`.
 
 `server/`: `main.cpp`, `CMakeLists.txt`, `build.bat` (переиспользует `Net.cpp`,
@@ -180,13 +183,12 @@ OBJ-загрузчика). Директивы:
 2. ✅ **Порт Vulkan-бэкенда** под `RenderFrame` — сделано (`VulkanRenderer.*` + загрузчик
    `VkApi.*`). Рисует всё: инстансное окружение (Lit/Unlit/Phong, текстуры), скиннинг
    (кости в SSBO), HUD, ImGui. Бэкенд переключается кнопкой в `GameUi` (Vulkan disabled,
-   если недоступен). Десктоп проверен запуском; Android — только `-fsyntax-only`
-   (на устройстве не запускался). Детали и фазы — NEXT_STEPS §2.
-3. **Проверить Android** (единственное непроверенное в Vulkan-порте): собрать в Android
-   Studio, запустить Vulkan-путь и переключение GL↔Vulkan на устройстве, отладить по logcat.
-4. **Неткод — доведение**: delta-сжатие снапшотов; lag compensation (когда появится
+   если недоступен). **Проверен запуском на обеих целях: десктоп и Android** (рендер,
+   переключение GL↔Vulkan, ImGui под Vulkan). Детали и фазы — NEXT_STEPS §2.
+3. **Неткод — доведение**: delta-сжатие снапшотов; lag compensation (когда появится
    боёвка/хиты — сейчас неприменима); вынести настройку сервера/адреса.
-5. Мелочи: своя `crate.png` для текстурированного куба.
+4. **Геймплей**: мир из многих сущностей, коллизии/границы, прыжок.
+5. Мелочи: своя `crate.png` для текстурированного куба, текстура лисы на десктопе.
 
 Идея-ориентир: всё, что «над рендером» и «над платформой», держать
 платформонезависимым; новые фичи вводить как данные в `RenderFrame`/`Scene` и
