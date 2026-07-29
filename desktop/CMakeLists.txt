@@ -10,6 +10,19 @@ set(ENET "${TP}/enet")
 set(GLFW_DIR "${TP}/glfw")
 set(IMGUI "${TP}/imgui")
 
+# --- Jolt Physics (вендорено в third_party/jolt) ---
+# Через родной CMake-таргет Jolt: он PUBLIC-ом раздаёт JPH-дефайны и include-путь,
+# поэтому дефайны либы и потребителя совпадают автоматически. GPU-compute (DX12/VK/MTL)
+# кинематике не нужен и тянет dxc/glslc — выключаем; CPU-compute (чистый C++) оставляем.
+set(JPH_USE_DX12 OFF CACHE BOOL "" FORCE)
+set(JPH_USE_VK OFF CACHE BOOL "" FORCE)
+set(JPH_USE_MTL OFF CACHE BOOL "" FORCE)
+set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)          # не ломать /WX на новом MSVC
+set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE) # без LTO — мешает миксу со static-либой
+set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)  # /MD, как у наших целей
+set(ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory("${TP}/jolt/Build" jolt_build)
+
 # GLFW из исходников (только сама либа, без примеров/тестов/доки).
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
@@ -25,6 +38,7 @@ add_executable(vbase_desktop
         ${APP}/Model.cpp
         ${APP}/Scene.cpp
         ${APP}/SceneLoader.cpp
+        ${APP}/CollisionWorld.cpp
         ${APP}/GlRenderer.cpp
         ${APP}/VkApi.cpp
         ${APP}/VulkanRenderer.cpp
@@ -61,7 +75,7 @@ if(MSVC)
     target_compile_options(vbase_desktop PRIVATE /utf-8)
 endif()
 
-target_link_libraries(vbase_desktop glfw opengl32 ws2_32 winmm)
+target_link_libraries(vbase_desktop glfw opengl32 ws2_32 winmm Jolt)
 
 # --- Vulkan-шейдеры: GLSL -> SPIR-V через glslc, в assets/shaders/vk (грузятся
 # рендером через AssetSource). glslc из Vulkan SDK (переопределяется -DGLSLC=...).

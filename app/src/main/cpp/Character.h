@@ -5,6 +5,8 @@
 #include "Input.h"
 #include "MathUtil.h"
 
+class CollisionWorld;
+
 // Управляемый персонаж — ЧИСТАЯ СИМУЛЯЦИЯ (без рендера и модели), чтобы этот
 // код компилировался и на клиенте (Android/GL), и на выделенном сервере.
 // Отрисовку (модель, скиннинг) строит клиентский слой по состоянию Character.
@@ -31,6 +33,11 @@ struct Character {
     float maxSpeed = 6.0f;
     float turnRate = 10.0f;
 
+    // Хэндл кинематического контроллера в CollisionWorld (0 — нет физики, fallback).
+    uint32_t collider = 0;
+
     void snapshot();  // зафиксировать текущее как «предыдущее»
-    void simulate(float dt, const InputCommand& in);  // шаг симуляции
+    // Шаг симуляции. Если задан world и есть collider — движение через collide-and-slide,
+    // иначе — прямое интегрирование позиции (fallback без коллизий).
+    void simulate(float dt, const InputCommand& in, CollisionWorld* world = nullptr);
 };

@@ -39,6 +39,7 @@ void build(GameUiState& state, Scene& scene) {
 
     ImGui::SeparatorText("Character");
     ImGui::Text("Speed: %.2f", (double)scene.characterSpeed());
+    if (ImGui::Button("Jump (Space)")) scene.requestJump();  // прыжок: кнопка (тач) или пробел
     float yawOff = scene.modelYawOffset();
     if (ImGui::SliderFloat("Model yaw", &yawOff, -3.15f, 3.15f)) {
         scene.setModelYawOffset(yawOff);  // подгонка "морда по движению"

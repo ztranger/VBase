@@ -6,7 +6,22 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Общий код клиента (симуляция + сеть) и ENet.
 set(APP "${CMAKE_CURRENT_SOURCE_DIR}/../app/src/main/cpp")
-set(ENET "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/enet")
+set(TP "${CMAKE_CURRENT_SOURCE_DIR}/../third_party")
+set(ENET "${TP}/enet")
+
+# --- Jolt Physics (вендорено в third_party/jolt) ---
+# Подключаем через РОДНОЙ CMake-таргет Jolt: он PUBLIC-ом раздаёт JPH-дефайны и
+# include-путь, поэтому дефайны либы и потребителя совпадают автоматически
+# (рассинхрон дефайнов Jolt = порча памяти). GPU-compute (DX12/VK/MTL) кинематике
+# не нужен и тянет dxc/glslc — выключаем; CPU-compute (чистый C++) оставляем.
+set(JPH_USE_DX12 OFF CACHE BOOL "" FORCE)
+set(JPH_USE_VK OFF CACHE BOOL "" FORCE)
+set(JPH_USE_MTL OFF CACHE BOOL "" FORCE)
+set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)          # не ломать сборку /WX на новом MSVC
+set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE) # без LTO — мешает миксу со static-либой
+set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)  # /MD, как у наших целей
+set(ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory("${TP}/jolt/Build" jolt_build)
 
 # ENet: на Windows нужен win32.c (+ ws2_32/winmm), на Unix — unix.c.
 if(WIN32)
@@ -19,6 +34,8 @@ add_executable(vbase_server
         main.cpp
         ${APP}/Net.cpp
         ${APP}/Character.cpp
+        ${APP}/CollisionWorld.cpp
+        ${APP}/SceneLoader.cpp
         ${ENET}/callbacks.c
         ${ENET}/compress.c
         ${ENET}/host.c
@@ -44,3 +61,6 @@ endif()
 if(WIN32)
     target_link_libraries(vbase_server ws2_32 winmm)
 endif()
+
+# Jolt: линковка таргета тянет и его PUBLIC-дефайны/include (см. выше).
+target_link_libraries(vbase_server Jolt)

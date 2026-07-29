@@ -2,6 +2,8 @@
 
 #include <cmath>
 
+#include "CollisionWorld.h"
+
 namespace {
 float clamp01(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v); }
 }  // namespace
@@ -13,18 +15,26 @@ void Character::snapshot() {
     prevAnimTime = animTime;
 }
 
-void Character::simulate(float dt, const InputCommand& in) {
+void Character::simulate(float dt, const InputCommand& in, CollisionWorld* world) {
     float mag = in.magnitude;
     Vec3 moveDir{in.moveX, 0.0f, in.moveZ};
 
     speed01 += (clamp01(mag) - speed01) * clamp01(dt * 10.0f);
 
+    Vec3 horizVel{0.0f, 0.0f, 0.0f};  // желаемая горизонтальная скорость
     if (mag > 0.05f) {
-        position = position + moveDir * (mag * maxSpeed * dt);
+        horizVel = moveDir * (mag * maxSpeed);
         if (in.faceMove) {
             float desired = std::atan2(moveDir.x, moveDir.z);
             facingYaw = lerpAngle(facingYaw, desired, clamp01(dt * turnRate));
         }
+    }
+
+    if (world != nullptr && collider != 0) {
+        // Контроллер прогоняем КАЖДЫЙ тик (гравитация/земля/прыжок), даже стоя на месте.
+        position = world->moveCharacter(collider, horizVel, in.jump, dt);
+    } else {
+        position = position + horizVel * dt;  // fallback без коллизий/гравитации
     }
 
     // Локомоция: 0 стоим -> 1 идём -> 2 бежим (бег только при сильном отклонении).

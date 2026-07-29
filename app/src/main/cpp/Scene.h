@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <vector>
 
 #include "AssetSource.h"
@@ -11,9 +12,11 @@
 #include "Model.h"
 #include "Net.h"
 #include "RenderFrame.h"
+#include "SceneDesc.h"
 #include "Texture.h"
 
 class Renderer;
+class CollisionWorld;
 
 // Снапшот состояния во времени (для буфера интерполяции чужих игроков).
 struct TimedState {
@@ -67,6 +70,9 @@ struct GameObject {
  */
 class Scene {
 public:
+    Scene();
+    ~Scene();  // из-за unique_ptr<CollisionWorld> (неполный тип в заголовке)
+
     // Построить сцену из файла (scenePath — через AssetSource, напр. "scenes/default.scene").
     void build(Renderer& renderer, AssetSource& assets,
                const char* scenePath = "scenes/default.scene");
@@ -79,6 +85,7 @@ public:
 
     void onPointer(float x, float y, bool pressed);  // -> джойстик (тач)
     void setMoveInput(float x, float y) { extX_ = x; extY_ = y; }  // внешняя ось (клавиатура)
+    void requestJump() { jumpQueued_ = true; }  // прыжок на следующем тике (клавиша/кнопка)
 
     void setUiScale(float s);  // масштаб джойстика под DPI
 
@@ -116,8 +123,10 @@ private:
     float foxScale_ = 0.03f;
     float foxYawOffset_ = 0.0f;
     Character player_;        // управляемый актор (симуляция)
+    std::unique_ptr<CollisionWorld> collision_;  // кинематическая физика (Jolt)
     VirtualJoystick joystick_;
     float extX_ = 0.0f, extY_ = 0.0f;  // внешняя ось движения (клавиатура на десктопе)
+    bool jumpQueued_ = false;          // запрошен прыжок (сбрасывается в fixedUpdate)
     float uiScale_ = 1.0f;
     Vec3 lightDir_{0.4f, 1.0f, 0.6f};  // направление НА свет (из файла сцены)
 
@@ -127,6 +136,7 @@ private:
     // Сеть.
     NetClient client_;
     NetServer server_;
+    SceneDesc sceneDesc_;  // сохранённое описание (host-режим отдаёт его серверу)
     bool host_ = false;
     uint32_t inputSeq_ = 0;
     std::vector<RemotePlayer> remotes_;

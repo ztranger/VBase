@@ -3,9 +3,12 @@
 #include <enet/enet.h>
 
 #include <cstring>
+#include <memory>
 
 #include "Character.h"
+#include "CollisionWorld.h"
 #include "Log.h"
+#include "SceneDesc.h"
 
 namespace {
 
@@ -22,6 +25,7 @@ struct InputMsg {
     uint32_t seq;
     float moveX, moveZ, magnitude;
     uint8_t faceMove;
+    uint8_t jump;
 };
 struct SnapshotHeader {
     uint8_t type;
@@ -117,7 +121,11 @@ void NetClient::sendInput(const InputCommand& cmd) {
     msg.moveZ = cmd.moveZ;
     msg.magnitude = cmd.magnitude;
     msg.faceMove = cmd.faceMove ? 1 : 0;
-    ENetPacket* pkt = enet_packet_create(&msg, sizeof(msg), 0);  // ненадёжно (realtime)
+    msg.jump = cmd.jump ? 1 : 0;
+    // Обычный ввод — ненадёжно (realtime). Прыжок — надёжно, чтобы не потерять
+    // одноразовое событие (иначе клиент подпрыгнет в предсказании, а сервер — нет).
+    uint32_t flags = cmd.jump ? ENET_PACKET_FLAG_RELIABLE : 0;
+    ENetPacket* pkt = enet_packet_create(&msg, sizeof(msg), flags);
     enet_peer_send(impl_->peer, 0, pkt);
 }
 
@@ -180,6 +188,12 @@ struct NetServer::Impl {
     std::vector<ServerClient> clients;
     std::vector<uint8_t> scratch;  // буфер снапшота
 
+    // Мир коллизий (та же геометрия, что у клиента). Может быть пуст — тогда fallback.
+    std::unique_ptr<CollisionWorld> world;
+    Vec3 spawnPos{0.0f, 0.0f, 0.0f};
+    float capsuleRadius = 0.3f;
+    float capsuleCylHalf = 0.3f;
+
     ServerClient* byPeer(ENetPeer* p) {
         for (auto& c : clients) if (c.peer == p) return &c;
         return nullptr;
@@ -213,7 +227,20 @@ void NetServer::stop() {
         impl_->host = nullptr;
     }
     impl_->clients.clear();
+    impl_->world.reset();  // сносим мир (контроллеры клиентов уйдут вместе с ним)
     impl_->nextId = 1;
+}
+
+void NetServer::configureWorld(const SceneDesc& desc) {
+    impl_->world = std::make_unique<CollisionWorld>();
+    for (const ColliderSpec& cs : desc.colliders) {
+        impl_->world->addBox(cs.center, cs.half);
+    }
+    impl_->world->finalize();
+    impl_->spawnPos = desc.player.pos;
+    impl_->capsuleRadius = desc.player.colliderRadius;
+    impl_->capsuleCylHalf = desc.player.colliderCylHalf;
+    LOGI("NetServer: мир коллизий — %d статичных коллайдеров", (int)desc.colliders.size());
 }
 
 bool NetServer::running() const { return impl_->host != nullptr; }
@@ -228,6 +255,13 @@ void NetServer::poll() {
                 ServerClient c;
                 c.peer = ev.peer;
                 c.id = impl_->nextId++;
+                // Спавн: авторитетная позиция + кинематический контроллер в мире.
+                c.ch.position = impl_->spawnPos;
+                c.ch.snapshot();
+                if (impl_->world) {
+                    c.ch.collider = impl_->world->addCharacter(
+                        impl_->spawnPos, impl_->capsuleRadius, impl_->capsuleCylHalf);
+                }
                 impl_->clients.push_back(c);
                 WelcomeMsg w{MSG_WELCOME, c.id};
                 ENetPacket* pkt = enet_packet_create(&w, sizeof(w), ENET_PACKET_FLAG_RELIABLE);
@@ -248,6 +282,7 @@ void NetServer::poll() {
                         c->input.moveZ = m.moveZ;
                         c->input.magnitude = m.magnitude;
                         c->input.faceMove = (m.faceMove != 0);
+                        c->input.jump = (m.jump != 0);
                     }
                 }
                 enet_packet_destroy(ev.packet);
@@ -257,6 +292,9 @@ void NetServer::poll() {
                 for (size_t i = 0; i < impl_->clients.size(); ++i) {
                     if (impl_->clients[i].peer == ev.peer) {
                         LOGI("NetServer: клиент id=%u отключён", impl_->clients[i].id);
+                        if (impl_->world && impl_->clients[i].ch.collider != 0) {
+                            impl_->world->removeCharacter(impl_->clients[i].ch.collider);
+                        }
                         impl_->clients.erase(impl_->clients.begin() + i);
                         break;
                     }
@@ -273,10 +311,12 @@ void NetServer::tick(float dt) {
     if (impl_->host == nullptr) return;
     impl_->tickCount++;
 
-    // Авторитетная симуляция: каждый клиент — свой Character по его вводу.
+    // Авторитетная симуляция: каждый клиент — свой Character по его вводу,
+    // через общий мир коллизий (тот же код, что предсказывает клиент).
     for (auto& c : impl_->clients) {
         c.ch.snapshot();
-        c.ch.simulate(dt, c.input);
+        c.ch.simulate(dt, c.input, impl_->world.get());
+        c.input.jump = false;  // прыжок одноразовый: гасим после применения (не залипал между пакетами)
     }
 
     // Снапшот со всеми сущностями (states одинаковы для всех, ackSeq — свой).

@@ -50,12 +50,23 @@ struct ObjectSpec {
     float ringY = 0.0f;
 };
 
+// Статичный коллайдер для физики (независим от визуальных мешей — коллизия может
+// отличаться от отрисовки). Пока только бокс (AABB, без поворота).
+struct ColliderSpec {
+    enum Kind { Box } kind = Box;
+    Vec3 center{0.0f, 0.0f, 0.0f};
+    Vec3 half{0.5f, 0.5f, 0.5f};  // полуразмеры бокса
+};
+
 struct PlayerSpec {
     bool present = false;
     std::string model;   // путь к glTF (скиннинг)
     Vec3 pos{0.0f, 0.0f, 0.0f};
     float scale = 0.03f;
     float yawOffset = 0.0f;  // подгонка "морда по движению"
+    // Капсула контроллера (кинематическая физика). cylHalf — половина высоты цилиндра.
+    float colliderRadius = 0.3f;
+    float colliderCylHalf = 0.3f;
 };
 
 struct CameraSpec {
@@ -72,6 +83,7 @@ struct SceneDesc {
     std::vector<MaterialSpec> materials;
     std::vector<MeshSpec> meshes;
     std::vector<ObjectSpec> objects;  // включая кольцевые (ring=true)
+    std::vector<ColliderSpec> colliders;  // статичная геометрия для физики
     PlayerSpec player;
     CameraSpec camera;
     Vec3 lightDir{0.4f, 1.0f, 0.6f};  // направление НА источник света

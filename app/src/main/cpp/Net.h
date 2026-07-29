@@ -5,6 +5,8 @@
 
 #include "Input.h"
 
+struct SceneDesc;  // описание сцены (коллайдеры + спавн) — из SceneDesc.h
+
 // Порт по умолчанию.
 constexpr uint16_t kNetPort = 7777;
 
@@ -54,6 +56,11 @@ public:
     bool start(uint16_t port);
     void stop();
     bool running() const;
+
+    // Построить мир коллизий из описания сцены (коллайдеры + спавн игрока). Вызывать
+    // после start. Без него сервер симулирует без коллизий (fallback). Та же геометрия,
+    // что у клиента, — иначе предсказание у стены будет расходиться с авторитетом.
+    void configureWorld(const SceneDesc& desc);
 
     void poll();          // принять подключения и входящий ввод
     void tick(float dt);  // симулировать всех + разослать снапшот

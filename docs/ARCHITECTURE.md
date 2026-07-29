@@ -112,6 +112,9 @@ NB: не путать с `app/src/main/cpp/shaders/` — там GLSL-исход�
   `Input.h`, `MathUtil.h`, `Mesh.*`, `Model.*`, `Texture.h`, `RenderFrame.h`,
   `Renderer.h`, `Net.*`, `Assets.*`, `AssetSource.h`, `FileAssetSource.h`,
   `SceneDesc.h`/`SceneLoader.*` (описание+парсер сцены), `Log.h` (переносимый).
+- Физика (платформонезависима, за интерфейсом): `CollisionWorld.*` — обёртка Jolt
+  (pimpl, Jolt не течёт в заголовок), статика арены + кинематические капсулы
+  (`CharacterVirtual`). `Character::simulate` двигает через неё; см. NEXT_STEPS §2.5.
 - Кроссплатформенный рендер: `GlRenderer.*` (Android GLES3+EGL и desktop GL 3.3+GLFW
   через `#ifdef`), `GlApi.h` (GL: GLES3 на Android / загрузчик на десктопе), `Font.*`.
 - Кроссплатформенный GUI: `GameUi.{h,cpp}` — построение ImGui-панели (imgui+`Scene`),
@@ -149,7 +152,10 @@ OBJ-загрузчика). Директивы:
 - `mesh <name> plane <size> [uvTiles]` | `cube <size>` | `sphere <r> [stacks] [slices]`
 - `object <mesh> mat <mat> [pos x y z] [rot x y z] [scale s] [spin s]`
 - `ring <mesh> mat <mat> count <n> radius <r> [y <y>] [scale s] [spin s]` — инстансинг по кольцу
-- `player model <path> [pos x y z] [scale s] [yaw o]` — glTF-персонаж (скиннинг)
+- `collider box center <x y z> half <hx hy hz>` — статичный коллайдер физики (Jolt);
+  независим от визуальных мешей (коллизия ≠ отрисовка).
+- `player model <path> [pos x y z] [scale s] [yaw o] [capsule <radius> <cylHalf>]` —
+  glTF-персонаж (скиннинг) + капсула кинематического контроллера (по умолчанию 0.3 0.3)
 - `light dir <x> <y> <z>` — направление на свет (правится слайдером в `GameUi`)
 - `camera [distance d] [height h] [lookHeight l] [fov f] [near n] [far f]`
 
@@ -185,10 +191,14 @@ OBJ-загрузчика). Директивы:
    (кости в SSBO), HUD, ImGui. Бэкенд переключается кнопкой в `GameUi` (Vulkan disabled,
    если недоступен). **Проверен запуском на обеих целях: десктоп и Android** (рендер,
    переключение GL↔Vulkan, ImGui под Vulkan). Детали и фазы — NEXT_STEPS §2.
-3. **Неткод — доведение**: delta-сжатие снапшотов; lag compensation (когда появится
+3. ✅ **Физика — кинематический контроллер на Jolt** — сделано (`CollisionWorld.*`,
+   Jolt v5.6.0). Коллизии/границы поля/скольжение по стенам + гравитация/прыжок; клиент
+   предсказывает, сервер авторитетно — общий код и геометрия. Проверено на десктопе,
+   сервере (`--selftest`) и Android-устройстве. Детали и фазы — NEXT_STEPS §2.5.
+4. **Неткод — доведение**: delta-сжатие снапшотов; lag compensation (когда появится
    боёвка/хиты — сейчас неприменима); вынести настройку сервера/адреса.
-4. **Геймплей**: мир из многих сущностей, коллизии/границы, прыжок.
-5. Мелочи: своя `crate.png` для текстурированного куба, текстура лисы на десктопе.
+5. **Геймплей**: мир из многих сущностей (акторы в список; `Character` уже обобщён).
+6. Мелочи: своя `crate.png` для текстурированного куба, текстура лисы на десктопе.
 
 Идея-ориентир: всё, что «над рендером» и «над платформой», держать
 платформонезависимым; новые фичи вводить как данные в `RenderFrame`/`Scene` и

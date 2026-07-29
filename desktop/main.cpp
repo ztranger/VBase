@@ -96,6 +96,7 @@ int runClient(int backend, GameUiState& ui, const std::string& assetsDir,
 
     auto last = std::chrono::steady_clock::now();
     float accumulator = 0.0f;
+    bool prevSpace = false;  // фронт нажатия пробела -> прыжок
     int next = -1;  // -1 = выход
 
     while (!glfwWindowShouldClose(window)) {
@@ -114,6 +115,12 @@ int runClient(int backend, GameUiState& ui, const std::string& assetsDir,
             jy = (float)keyAxis(window, GLFW_KEY_W, GLFW_KEY_S);
         }
         scene.setMoveInput(jx, jy);
+
+        // Пробел (по фронту нажатия) -> прыжок.
+        bool space = !ImGui::GetIO().WantCaptureKeyboard &&
+                     glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
+        if (space && !prevSpace) scene.requestJump();
+        prevSpace = space;
 
         accumulator += dt;
         while (accumulator >= kTick) {

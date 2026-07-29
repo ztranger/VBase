@@ -32,7 +32,9 @@
 
 ## Вендоренные зависимости (`third_party/`)
 
-`imgui` (GUI), `enet` (UDP), `cgltf` (glTF), `stb` (stb_image), `glfw` (окно на десктопе).
+`imgui` (GUI), `enet` (UDP), `cgltf` (glTF), `stb` (stb_image), `glfw` (окно на десктопе),
+`vulkan` (заголовки Khronos, не линкуются), `jolt` (Jolt Physics v5.6.0 — кинематический
+контроллер; подключается родным CMake-таргетом, см. NEXT_STEPS §2.5).
 `glew/` — пустой остаток неудачной загрузки, **не используется**, можно удалить.
 
 ## Ключевые правила
@@ -42,9 +44,15 @@
 - **Заголовок математики — `MathUtil.h`**, НЕ `Math.h` (на Windows столкнулся бы
   со стандартным `<math.h>` из-за регистронезависимой ФС).
 - **Не ломать платформонезависимость**: `Character`, `Scene`, `Net`, `Model`,
-  `Mesh`, `MathUtil`, `Input`, `FollowCamera`, `Assets`, `AssetSource` не должны
-  тянуть Android/GL/ImGui. Рендер и платформа — за интерфейсами (`Renderer`,
-  `AssetSource`).
+  `Mesh`, `MathUtil`, `Input`, `FollowCamera`, `Assets`, `AssetSource`,
+  `CollisionWorld` не должны тянуть Android/GL/ImGui. Рендер и платформа — за
+  интерфейсами (`Renderer`, `AssetSource`); физика (Jolt) — за `CollisionWorld`
+  (pimpl, Jolt не течёт в заголовок).
+- **Физика — кинематический контроллер на Jolt** (`CollisionWorld.*`): статика арены
+  (боксы) + капсулы `CharacterVirtual` (гравитация/прыжок/скольжение). `Character::simulate`
+  двигает через неё; клиент предсказывает, сервер авторитетно — один код, одна геометрия
+  (`.scene` c директивами `collider`). Подключение Jolt — родным CMake-таргетом (см.
+  NEXT_STEPS §2.5, готчи там же).
 - **Два рендер-бэкенда за интерфейсом `Renderer`**: `GlRenderer` (GL ES3 / desktop
   GL3.3) и `VulkanRenderer` (+ динамический загрузчик `VkApi.*`). Vulkan рисует всё:
   окружение (инстансинг, Lit/Unlit/Phong, текстуры), скиннинг (лиса, кости в SSBO),

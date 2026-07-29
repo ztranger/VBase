@@ -13,6 +13,20 @@ find_package(game-activity REQUIRED CONFIG)
 # Dear ImGui (вендрится в third_party/imgui): GL ES3 + Vulkan бэкенды + ядро.
 set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/imgui")
 set(VULKAN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/vulkan")
+set(JOLT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/jolt")
+
+# --- Jolt Physics (вендорено в third_party/jolt) ---
+# Через родной CMake-таргет Jolt: PUBLIC-дефайны и include-путь совпадают у либы и
+# потребителя автоматически. GPU-compute (DX12/VK/MTL) кинематике не нужен: на Android
+# JPH_USE_VK по умолчанию ON и потянул бы find_package(Vulkan)+glslc — выключаем всё,
+# CPU-compute (чистый C++) оставляем. Без LTO (на ARM ломает кодоген) и без /WX.
+set(JPH_USE_DX12 OFF CACHE BOOL "" FORCE)
+set(JPH_USE_VK OFF CACHE BOOL "" FORCE)
+set(JPH_USE_MTL OFF CACHE BOOL "" FORCE)
+set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)
+set(INTERPROCEDURAL_OPTIMIZATION OFF CACHE BOOL "" FORCE)
+set(ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+add_subdirectory("${JOLT_DIR}/Build" jolt_build)
 
 # ENet (UDP-транспорт). Компилируем исходники напрямую, минуя его CMake.
 # win32.c пропущен — на Android нужен unix.c (гарды внутри файлов).
@@ -45,6 +59,7 @@ add_library(vbase SHARED
         Net.cpp
         Scene.cpp
         SceneLoader.cpp
+        CollisionWorld.cpp
         GlRenderer.cpp
         GameUi.cpp
         VulkanProbe.cpp
@@ -69,10 +84,12 @@ set(CMAKE_SHARED_LINKER_FLAGS
         "${CMAKE_SHARED_LINKER_FLAGS} -u Java_com_google_androidgamesdk_GameActivity_initializeNativeCode")
 
 # libvulkan НЕ линкуем — грузим через dlopen (см. VkApi). Нужен только dl (dlopen).
+# Jolt: линковка таргета тянет и его PUBLIC-дефайны/include (см. выше).
 target_link_libraries(vbase
         game-activity::game-activity_static
         android
         EGL
         GLESv3
         dl
-        log)
+        log
+        Jolt)

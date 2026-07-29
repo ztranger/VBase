@@ -158,8 +158,24 @@ bool loadSceneDesc(AssetSource& assets, const char* path, SceneDesc& out) {
             }
             out.objects.push_back(o);
 
+        } else if (cmd == "collider") {
+            // collider box center <x y z> half <hx hy hz>
+            if (t.size() < 2) { LOGE("scene: строка %d: collider требует тип", line); return false; }
+            ColliderSpec c;
+            const std::string& kind = t[1];
+            if (kind != "box") { LOGE("scene: строка %d: неизвестный тип коллайдера '%s'", line, kind.c_str()); return false; }
+            c.kind = ColliderSpec::Box;
+            size_t i = 2;
+            while (i < t.size()) {
+                std::string k = t[i++];
+                if (k == "center") { if (!readVec3(t, i, line, c.center)) return false; }
+                else if (k == "half") { if (!readVec3(t, i, line, c.half)) return false; }
+                else { LOGE("scene: строка %d: неизвестный ключ collider '%s'", line, k.c_str()); return false; }
+            }
+            out.colliders.push_back(c);
+
         } else if (cmd == "player") {
-            // player model <path> [pos x y z] [scale s] [yaw o]
+            // player model <path> [pos x y z] [scale s] [yaw o] [capsule <radius> <cylHalf>]
             out.player.present = true;
             size_t i = 1;
             while (i < t.size()) {
@@ -168,6 +184,10 @@ bool loadSceneDesc(AssetSource& assets, const char* path, SceneDesc& out) {
                 else if (k == "pos") { if (!readVec3(t, i, line, out.player.pos)) return false; }
                 else if (k == "scale") { if (!readF(t, i, line, out.player.scale)) return false; }
                 else if (k == "yaw") { if (!readF(t, i, line, out.player.yawOffset)) return false; }
+                else if (k == "capsule") {
+                    if (!readF(t, i, line, out.player.colliderRadius)) return false;
+                    if (!readF(t, i, line, out.player.colliderCylHalf)) return false;
+                }
                 else { LOGE("scene: строка %d: неизвестный ключ player '%s'", line, k.c_str()); return false; }
             }
 

@@ -5,18 +5,24 @@
 #include <unordered_map>
 
 #include "Assets.h"
+#include "CollisionWorld.h"
 #include "Log.h"
 #include "Renderer.h"
 #include "SceneLoader.h"
 
+Scene::Scene() = default;
+Scene::~Scene() = default;
+
 void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath) {
     objects_.clear();
+    collision_ = std::make_unique<CollisionWorld>();  // свежий мир коллизий на каждую сборку
 
     SceneDesc desc;
     if (!loadSceneDesc(assets, scenePath, desc)) {
         LOGE("Не удалось загрузить сцену: %s", scenePath);
         return;  // пустая сцена — ошибки уже в логе
     }
+    sceneDesc_ = desc;  // сохраняем: host-режим отдаст ту же геометрию своему серверу
 
     // Свет и камера — прямо из описания.
     lightDir_ = desc.lightDir;
@@ -115,6 +121,13 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
         }
     }
 
+    // --- Статичные коллайдеры физики (из описания сцены) ---
+    for (const ColliderSpec& cs : desc.colliders) {
+        collision_->addBox(cs.center, cs.half);
+    }
+    collision_->finalize();  // оптимизация broad-phase после всей статики
+    LOGI("Физика: %d статичных коллайдеров", (int)desc.colliders.size());
+
     // --- Управляемый персонаж (glTF + скиннинг) ---
     if (desc.player.present) {
         if (loadGltfModel(assets, desc.player.model.c_str(), foxModel_)) {
@@ -124,11 +137,15 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
             }
             foxScale_ = desc.player.scale;
             foxYawOffset_ = desc.player.yawOffset;
-            player_.position = desc.player.pos;
-            player_.snapshot();  // prev = curr, чтобы первый кадр не «прыгнул»
         } else {
             LOGW("Не удалось загрузить модель игрока: %s", desc.player.model.c_str());
         }
+        // Позиция и кинематический контроллер — независимо от загрузки модели (это игра).
+        player_.position = desc.player.pos;
+        player_.collider = collision_->addCharacter(desc.player.pos,
+                                                    desc.player.colliderRadius,
+                                                    desc.player.colliderCylHalf);
+        player_.snapshot();  // prev = curr, чтобы первый кадр не «прыгнул»
     }
 }
 
@@ -193,6 +210,8 @@ void Scene::fixedUpdate(float dt) {
     }
     cmd.faceMove = iy >= 0.0f;                      // назад — пятимся
     cmd.magnitude = (iy < 0.0f) ? mag * 0.5f : mag;  // назад медленнее
+    cmd.jump = jumpQueued_;                          // одноразовый прыжок
+    jumpQueued_ = false;
 
     tickDt_ = dt;
 
@@ -203,8 +222,8 @@ void Scene::fixedUpdate(float dt) {
         pending_.push_back({cmd, dt});
     }
 
-    player_.snapshot();          // зафиксировать прошлое для интерполяции
-    player_.simulate(dt, cmd);   // локальное предсказание
+    player_.snapshot();                        // зафиксировать прошлое для интерполяции
+    player_.simulate(dt, cmd, collision_.get());  // локальное предсказание (с коллизиями)
 
     // Сервер (если хостим) — тем же кодом симуляции, затем рассылка снапшотов.
     if (host_) {
@@ -235,6 +254,11 @@ void Scene::applySnapshot() {
             player_.facingYaw = s.yaw;
             player_.speed01 = s.speed01;
             player_.animParam = s.animParam;
+            // Синхронизируем контроллер с авторитетной позицией перед реплеем,
+            // иначе collide-and-slide стартует от устаревшей внутренней позиции.
+            if (collision_ && player_.collider != 0) {
+                collision_->setCharacterPosition(player_.collider, player_.position);
+            }
 
             size_t w = 0;  // выкидываем подтверждённые (seq <= ack)
             for (size_t i = 0; i < pending_.size(); ++i) {
@@ -242,7 +266,7 @@ void Scene::applySnapshot() {
             }
             pending_.resize(w);
             for (const PendingInput& p : pending_) {
-                player_.simulate(p.dt, p.cmd);  // повторно применяем поверх сервера
+                player_.simulate(p.dt, p.cmd, collision_.get());  // реплей поверх сервера
             }
             continue;
         }
@@ -284,6 +308,7 @@ void Scene::applySnapshot() {
 void Scene::hostGame() {
     leaveGame();
     if (server_.start(kNetPort)) {
+        server_.configureWorld(sceneDesc_);  // тот же мир коллизий, что у клиента
         client_.connect("127.0.0.1", kNetPort);
         host_ = true;
         inputSeq_ = 0;

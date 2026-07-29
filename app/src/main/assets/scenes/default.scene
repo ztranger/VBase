@@ -37,5 +37,17 @@ object ball mat red  pos  4 0.6 4
 # Кольцо инстансных кубов по краю (демо инстансинга)
 ring box mat edge count 48 radius 10 y 0.4 scale 0.4 spin 1.2
 
+# --- Коллайдеры физики (независимы от визуальных мешей) ---
+# collider box center <x y z> half <hx hy hz>
+collider box center 0 -0.5 0  half 12 0.5 12       # пол (верх на y=0)
+collider box center 12 1 0    half 0.25 1 12        # стена +X (граница поля)
+collider box center -12 1 0   half 0.25 1 12        # стена -X
+collider box center 0 1 12    half 12 1 0.25         # стена +Z
+collider box center 0 1 -12   half 12 1 0.25         # стена -Z
+collider box center -4 0.5 -4 half 0.5 0.5 0.5       # куб-препятствие
+collider box center 0 0.5 -4  half 0.5 0.5 0.5
+collider box center 4 0.5 -4  half 0.5 0.5 0.5
+
 # --- Управляемый персонаж (glTF + скиннинг) ---
+# capsule <radius> <cylHalf> — кинематический контроллер (по умолчанию 0.3 0.3)
 player model models/Fox.glb pos 0 0 0 scale 0.03
