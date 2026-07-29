@@ -47,6 +47,7 @@ private:
     bool createDefaultTexture();
     bool createPipelines();
     bool createSkinnedPipeline();  // отдельный пайплайн/лейаут для скиннинга
+    bool createHud();              // шрифт-атлас, сэмплер, HUD-пайплайн, буферы
     bool createCommandBuffers();
     bool createSyncObjects();
 
@@ -114,7 +115,18 @@ private:
     VkImageView whiteView_ = VK_NULL_HANDLE;
     VkDescriptorSet whiteSet_ = VK_NULL_HANDLE;  // set 1 для белой (скиннинг без текстуры)
 
-    static constexpr uint32_t kMaxBones = 512;  // суммарно костей на кадр (все скиннинг-объекты)
+    static constexpr uint32_t kMaxBones = 512;      // суммарно костей на кадр
+    static constexpr uint32_t kMaxHudVerts = 8192;  // вершин HUD-текста на кадр
+
+    // HUD (2D-текст растровым шрифтом): свой пайплайн (alpha-blend, без depth),
+    // атлас шрифта + NEAREST-сэмплер, дескриптор атласа (set 0 = combined sampler).
+    VkPipelineLayout hudPipelineLayout_ = VK_NULL_HANDLE;
+    VkPipeline hudPipeline_ = VK_NULL_HANDLE;
+    VkImage fontImage_ = VK_NULL_HANDLE;
+    VkDeviceMemory fontMem_ = VK_NULL_HANDLE;
+    VkImageView fontView_ = VK_NULL_HANDLE;
+    VkSampler fontSampler_ = VK_NULL_HANDLE;
+    VkDescriptorSet fontSet_ = VK_NULL_HANDLE;
 
     // Ресурсы на кадр «в полёте»: кадровый UBO + дескриптор + инстанс-буфер
     // (матрицы модели всех объектов кадра, host-visible, обновляется каждый кадр).
@@ -131,6 +143,9 @@ private:
         VkDeviceMemory bonesMem = VK_NULL_HANDLE;
         void* bonesMapped = nullptr;
         VkDescriptorSet bonesSet = VK_NULL_HANDLE;  // set 2
+        VkBuffer hud = VK_NULL_HANDLE;       // динамический вершинный буфер HUD (x,y,u,v)
+        VkDeviceMemory hudMem = VK_NULL_HANDLE;
+        void* hudMapped = nullptr;
     };
     std::vector<FrameRes> frames_;
 
@@ -176,4 +191,5 @@ private:
     int desiredW_ = 1, desiredH_ = 1;  // запасной размер (setSurfaceSize)
     uint32_t nextHandle_ = 1;          // счётчик заглушечных handle'ов (Фаза 0)
     bool ready_ = false;
+    bool imguiReady_ = false;          // инициализирован ли ImGui + Vulkan-бэкенд
 };

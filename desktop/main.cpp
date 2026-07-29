@@ -49,9 +49,12 @@ int runVulkan(GLFWwindow* window, const std::string& assetsDir,
         std::fprintf(stderr, "VulkanRenderer.init failed\n");
         return 1;
     }
+    // Platform-бэкенд ImGui (контекст уже создан в renderer.init).
+    ImGui_ImplGlfw_InitForVulkan(window, true);
     Scene scene;
     scene.build(renderer, assets, scenePath);
     scene.joinGame(serverIp);
+    GameUiState ui;
     std::printf("Клиент запущен (Vulkan), сервер %s, сцена %s. WASD — движение, ESC — выход.\n",
                 serverIp, scenePath);
 
@@ -66,8 +69,12 @@ int runVulkan(GLFWwindow* window, const std::string& assetsDir,
         last = now;
         if (dt > 0.25f) dt = 0.25f;
 
-        float jx = (float)keyAxis(window, GLFW_KEY_D, GLFW_KEY_A);
-        float jy = (float)keyAxis(window, GLFW_KEY_W, GLFW_KEY_S);
+        // WASD -> ось движения; если ImGui захватил клавиатуру — не двигаемся.
+        float jx = 0.0f, jy = 0.0f;
+        if (!ImGui::GetIO().WantCaptureKeyboard) {
+            jx = (float)keyAxis(window, GLFW_KEY_D, GLFW_KEY_A);
+            jy = (float)keyAxis(window, GLFW_KEY_W, GLFW_KEY_S);
+        }
         scene.setMoveInput(jx, jy);
 
         accumulator += dt;
@@ -83,10 +90,25 @@ int runVulkan(GLFWwindow* window, const std::string& assetsDir,
 
         RenderFrame frame = scene.render(alpha, aspect, dt);
         frame.deltaTime = dt;
+
+        // FPS в HUD (как на GL/Android).
+        if (dt > 0.0f) ui.fps = ui.fps * 0.92f + (1.0f / dt) * 0.08f;
+        char hud[32];
+        std::snprintf(hud, sizeof(hud), "FPS: %.0f", (double)ui.fps);
+        frame.hud.push_back({hud, 24.0f, 24.0f, 40.0f, {1.0f, 0.85f, 0.2f}});
+
+        // Панель — общий модуль GameUi (тот же, что на GL/Android).
+        frame.ui = [&ui, &scene]() { GameUi::build(ui, scene); };
+
+        // Platform-бэкенд ImGui: подать ввод/размер — до ImGui::NewFrame() в renderFrame.
+        ImGui_ImplGlfw_NewFrame();
+
         renderer.setSurfaceSize(fbw, fbh);
         renderer.renderFrame(frame);  // Vulkan сам презентует (без glfwSwapBuffers)
     }
     scene.leaveGame();
+    // Platform-бэкенд гасим до ~VulkanRenderer (renderer-бэкенд + ImGui-контекст).
+    ImGui_ImplGlfw_Shutdown();
     return 0;  // ~VulkanRenderer здесь, до glfwDestroyWindow
 }
 

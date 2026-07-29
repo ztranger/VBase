@@ -64,9 +64,16 @@ imgui + `Scene`, не ломает платформонезависимость 
   VERTEX|FRAGMENT); vertex-формат `SkinnedVertex` (16 float). `renderFrame` раскладывает
   кости всех `frame.skinned` в SSBO и рисует каждый объект своим `uBoneOffset`. Текстуры
   скиннинга — свои set 1 (`textureSets_` + `whiteSet_`). Лиса рисуется, валидация чиста.
-- **Фаза 5** — HUD (шрифт `Font`) + ImGui (`imgui_impl_vulkan`).
+- ✅ **Фаза 5** — HUD + ImGui. HUD: атлас `Font` → текстура (NEAREST/CLAMP-сэмплер),
+  свой пайплайн (alpha-blend, без depth), per-frame динамический буфер квадов, push =
+  screen+color; NDC без Y-флипа (Vulkan Y вниз). ImGui: `imgui_impl_vulkan` c
+  `IMGUI_IMPL_VULKAN_NO_PROTOTYPES` + `ImGui_ImplVulkan_LoadFunctions` (наш загрузчик
+  `vkApiLoader`), `DescriptorPoolSize>0` (пул создаёт бэкенд), `PipelineInfoMain.RenderPass`;
+  контекст создаёт `VulkanRenderer`, platform-бэкенд `ImGui_ImplGlfw_InitForVulkan` — в main.
+  Панель `GameUi` та же, что на GL/Android. Полный паритет с GL, валидация чиста.
 - **Фаза 6** — сборка и выбор бэкенда на Android (`VulkanProbe`, surface через
-  `vkCreateAndroidSurfaceKHR`, загрузчик через dlopen libvulkan).
+  `vkCreateAndroidSurfaceKHR`, загрузчик через dlopen libvulkan). Единственное
+  отличие от десктопа — создание surface и bootstrap загрузчика; ядро переиспользуется.
 
 **⚠️ Сборка (важно):** инкрементальный NMake-билд НЕ пересобирает `desktop/main.cpp`
 при изменении заголовка `VulkanRenderer.h`. Т.к. `main.cpp` создаёт `VulkanRenderer`

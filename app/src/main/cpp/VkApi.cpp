@@ -31,3 +31,5 @@ void vkApiLoadDevice(VkDevice device) {
     VK_DEVICE_FUNCS(VK_LOAD)
     #undef VK_LOAD
 }
+
+PFN_vkGetInstanceProcAddr vkApiLoader() { return g_gipa; }

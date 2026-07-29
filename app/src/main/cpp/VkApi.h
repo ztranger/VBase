@@ -93,6 +93,7 @@
     X(vkCmdBindVertexBuffers)      \
     X(vkCmdBindIndexBuffer)        \
     X(vkCmdPushConstants)          \
+    X(vkCmdDraw)                   \
     X(vkCmdDrawIndexed)            \
     X(vkCmdSetViewport)            \
     X(vkCmdSetScissor)             \
@@ -113,3 +114,4 @@ VK_DEVICE_FUNCS(VK_DECLARE)
 bool vkApiInitGlobal(PFN_vkGetInstanceProcAddr gipa);  // грузит глобальные функции
 void vkApiLoadInstance(VkInstance instance);           // после vkCreateInstance
 void vkApiLoadDevice(VkDevice device);                 // после vkCreateDevice
+PFN_vkGetInstanceProcAddr vkApiLoader();               // bootstrap-загрузчик (для ImGui)

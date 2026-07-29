@@ -9,7 +9,11 @@
 #include <cstring>
 #include <vector>
 
+#include "imgui.h"
+#include "backends/imgui_impl_vulkan.h"
+
 #include "AssetSource.h"
+#include "Font.h"
 #include "Log.h"
 #include "RenderFrame.h"
 
@@ -39,6 +43,11 @@ VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
     return VK_FALSE;  // не прерывать вызов, вызвавший сообщение
 }
 
+// Загрузчик Vulkan-функций для imgui_impl_vulkan (user = VkInstance).
+PFN_vkVoidFunction imguiVkLoader(const char* name, void* user) {
+    return vkApiLoader()((VkInstance)user, name);
+}
+
 // Настройки messenger'а — общие для pNext инстанса и постоянного messenger'а.
 VkDebugUtilsMessengerCreateInfoEXT makeDebugInfo() {
     VkDebugUtilsMessengerCreateInfoEXT ci{};
@@ -62,6 +71,12 @@ struct FrameUBOData {
 // Push-константы окружения: только цвет материала (модельная матрица — инстансный
 // атрибут). 16 байт, фрагментный шейдер.
 struct PushData {
+    float color[4];
+};
+
+// Push-константы HUD: размер экрана (xy) + цвет текста (rgb). 32 байта.
+struct HudPushData {
+    float screen[4];
     float color[4];
 };
 
@@ -120,8 +135,36 @@ bool VulkanRenderer::init(ANativeWindow* window, void* (*glGetProc)(const char*)
     if (!createSwapchain() || !createImageViews() || !createDepthResources() ||
         !createRenderPass() || !createFramebuffers() || !createDescriptors() ||
         !createSampler() || !createCommandBuffers() || !createDefaultTexture() ||
-        !createPipelines() || !createSkinnedPipeline() || !createSyncObjects()) {
+        !createPipelines() || !createSkinnedPipeline() || !createHud() ||
+        !createSyncObjects()) {
         return false;
+    }
+
+    // ImGui: контекст + Vulkan renderer-бэкенд. Функции грузятся через наш
+    // загрузчик (VK_NO_PROTOTYPES). Пул дескрипторов бэкенд создаёт сам
+    // (DescriptorPoolSize > 0). Platform-бэкенд (glfw) поднимает main.
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::StyleColorsDark();
+    ImGui::GetIO().IniFilename = nullptr;
+    ImGui_ImplVulkan_LoadFunctions(VK_API_VERSION_1_0, imguiVkLoader, instance_);
+    ImGui_ImplVulkan_InitInfo ii{};
+    ii.ApiVersion = VK_API_VERSION_1_0;
+    ii.Instance = instance_;
+    ii.PhysicalDevice = physicalDevice_;
+    ii.Device = device_;
+    ii.QueueFamily = queueFamily_;
+    ii.Queue = queue_;
+    ii.DescriptorPoolSize = 16;
+    ii.MinImageCount = 2;
+    ii.ImageCount = (uint32_t)swapchainImages_.size();
+    ii.PipelineInfoMain.RenderPass = renderPass_;
+    ii.PipelineInfoMain.Subpass = 0;
+    ii.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    if (ImGui_ImplVulkan_Init(&ii)) {
+        imguiReady_ = true;
+    } else {
+        LOGW("Vulkan: ImGui_ImplVulkan_Init failed (панель не будет рисоваться)");
     }
 
     ready_ = true;
@@ -889,6 +932,172 @@ bool VulkanRenderer::createSkinnedPipeline() {
     return true;
 }
 
+bool VulkanRenderer::createHud() {
+    // Атлас шрифта (RGBA, альфа = покрытие глифа) -> GPU-текстура.
+    TextureData atlas = makeFontAtlas();
+    VkTexture ft;
+    if (!uploadTexture(atlas.width, atlas.height, atlas.rgba.data(), ft)) return false;
+    fontImage_ = ft.image;
+    fontMem_ = ft.mem;
+    fontView_ = ft.view;
+
+    // NEAREST + CLAMP — чёткий пиксельный шрифт без затекания соседних глифов.
+    VkSamplerCreateInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    si.magFilter = VK_FILTER_NEAREST;
+    si.minFilter = VK_FILTER_NEAREST;
+    si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    si.maxLod = 0.0f;
+    VK_CHECK(vkCreateSampler(device_, &si, nullptr, &fontSampler_), "fontSampler");
+
+    // Дескриптор атласа (set 0 в HUD-пайплайне = тот же combined-sampler layout).
+    VkDescriptorSetAllocateInfo dai{};
+    dai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    dai.descriptorPool = descriptorPool_;
+    dai.descriptorSetCount = 1;
+    dai.pSetLayouts = &setLayout1_;
+    VK_CHECK(vkAllocateDescriptorSets(device_, &dai, &fontSet_), "fontSet");
+    VkDescriptorImageInfo img{};
+    img.sampler = fontSampler_;
+    img.imageView = fontView_;
+    img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet ws{};
+    ws.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    ws.dstSet = fontSet_;
+    ws.dstBinding = 0;
+    ws.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    ws.descriptorCount = 1;
+    ws.pImageInfo = &img;
+    vkUpdateDescriptorSets(device_, 1, &ws, 0, nullptr);
+
+    // Per-frame динамический вершинный буфер HUD (x,y,u,v на вершину).
+    const VkDeviceSize hudSize = (VkDeviceSize)kMaxHudVerts * 4 * sizeof(float);
+    for (FrameRes& f : frames_) {
+        if (!createBuffer(hudSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                          VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                              VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                          f.hud, f.hudMem)) {
+            return false;
+        }
+        vkMapMemory(device_, f.hudMem, 0, hudSize, 0, &f.hudMapped);
+    }
+
+    // Пайплайн HUD: layout = [setLayout1_] + push (uScreen + uColor).
+    VkPushConstantRange pcr{};
+    pcr.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pcr.offset = 0;
+    pcr.size = sizeof(HudPushData);
+    VkPipelineLayoutCreateInfo pli{};
+    pli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pli.setLayoutCount = 1;
+    pli.pSetLayouts = &setLayout1_;
+    pli.pushConstantRangeCount = 1;
+    pli.pPushConstantRanges = &pcr;
+    VK_CHECK(vkCreatePipelineLayout(device_, &pli, nullptr, &hudPipelineLayout_), "hudPipelineLayout");
+
+    VkShaderModule vs = loadShaderModule("shaders/vk/hud.vert.spv");
+    VkShaderModule fs = loadShaderModule("shaders/vk/hud.frag.spv");
+    if (vs == VK_NULL_HANDLE || fs == VK_NULL_HANDLE) return false;
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vs;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fs;
+    stages[1].pName = "main";
+
+    VkVertexInputBindingDescription bind{};
+    bind.binding = 0;
+    bind.stride = 4 * sizeof(float);
+    bind.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    VkVertexInputAttributeDescription attrs[2]{};
+    attrs[0] = {0, 0, VK_FORMAT_R32G32_SFLOAT, 0};              // pos (пиксели)
+    attrs[1] = {1, 0, VK_FORMAT_R32G32_SFLOAT, 2 * sizeof(float)};  // uv
+    VkPipelineVertexInputStateCreateInfo vin{};
+    vin.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vin.vertexBindingDescriptionCount = 1;
+    vin.pVertexBindingDescriptions = &bind;
+    vin.vertexAttributeDescriptionCount = 2;
+    vin.pVertexAttributeDescriptions = attrs;
+
+    VkPipelineInputAssemblyStateCreateInfo ia{};
+    ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo vp{};
+    vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rs{};
+    rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode = VK_CULL_MODE_NONE;
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms{};
+    ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo ds{};
+    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    ds.depthTestEnable = VK_FALSE;   // оверлей поверх всего
+    ds.depthWriteEnable = VK_FALSE;
+
+    VkPipelineColorBlendAttachmentState cba{};
+    cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                         VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    cba.blendEnable = VK_TRUE;
+    cba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    cba.colorBlendOp = VK_BLEND_OP_ADD;
+    cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    cba.alphaBlendOp = VK_BLEND_OP_ADD;
+    VkPipelineColorBlendStateCreateInfo cb{};
+    cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    cb.attachmentCount = 1;
+    cb.pAttachments = &cba;
+
+    VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynState{};
+    dynState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynState.dynamicStateCount = 2;
+    dynState.pDynamicStates = dyn;
+
+    VkGraphicsPipelineCreateInfo gp{};
+    gp.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    gp.stageCount = 2;
+    gp.pStages = stages;
+    gp.pVertexInputState = &vin;
+    gp.pInputAssemblyState = &ia;
+    gp.pViewportState = &vp;
+    gp.pRasterizationState = &rs;
+    gp.pMultisampleState = &ms;
+    gp.pDepthStencilState = &ds;
+    gp.pColorBlendState = &cb;
+    gp.pDynamicState = &dynState;
+    gp.layout = hudPipelineLayout_;
+    gp.renderPass = renderPass_;
+    gp.subpass = 0;
+
+    VkResult r = vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gp, nullptr, &hudPipeline_);
+    vkDestroyShaderModule(device_, vs, nullptr);
+    vkDestroyShaderModule(device_, fs, nullptr);
+    if (r != VK_SUCCESS) {
+        LOGE("Vulkan: hud vkCreateGraphicsPipelines (VkResult=%d)", (int)r);
+        return false;
+    }
+    return true;
+}
+
 bool VulkanRenderer::createCommandBuffers() {
     VkCommandPoolCreateInfo pci{};
     pci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -1363,7 +1572,69 @@ void VulkanRenderer::renderFrame(const RenderFrame& frame) {
             vkCmdDrawIndexed(cmd, m.indexCount, 1, 0, 0, 0);
         }
     }
-    // HUD/ImGui — следующая фаза.
+    // --- HUD-текст (растровый шрифт, оверлей с alpha-blend, без depth) ---
+    if (!frame.hud.empty() && hudPipeline_ != VK_NULL_HANDLE) {
+        float* hudBase = (float*)frames_[currentFrame_].hudMapped;
+        uint32_t vtx = 0;
+        const int gc = font::glyphCount();
+        const float atlasW = (float)(gc * font::kGlyphW);
+        struct Run { uint32_t first; uint32_t count; Vec3 color; };
+        std::vector<Run> runs;
+        for (const HudText& t : frame.hud) {
+            float scale = t.pixelHeight / (float)font::kGlyphH;
+            float advance = (float)(font::kGlyphW + 1) * scale;
+            float gw = (float)font::kGlyphW * scale;
+            float gh = (float)font::kGlyphH * scale;
+            uint32_t first = vtx;
+            float penX = t.x;
+            for (char ch : t.text) {
+                int gi = font::glyphIndex(ch);
+                if (gi >= 0 && vtx + 6 <= kMaxHudVerts) {
+                    float x0 = penX, y0 = t.y, x1 = penX + gw, y1 = t.y + gh;
+                    float u0 = (float)(gi * font::kGlyphW) / atlasW;
+                    float u1 = (float)((gi + 1) * font::kGlyphW) / atlasW;
+                    const float q[24] = {
+                        x0, y0, u0, 0.0f,  x1, y0, u1, 0.0f,  x1, y1, u1, 1.0f,
+                        x0, y0, u0, 0.0f,  x1, y1, u1, 1.0f,  x0, y1, u0, 1.0f,
+                    };
+                    std::memcpy(hudBase + (size_t)vtx * 4, q, sizeof(q));
+                    vtx += 6;
+                }
+                penX += advance;
+            }
+            runs.push_back({first, vtx - first, t.color});
+        }
+        if (vtx > 0) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, hudPipeline_);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, hudPipelineLayout_, 0, 1,
+                                    &fontSet_, 0, nullptr);
+            VkDeviceSize off0 = 0;
+            vkCmdBindVertexBuffers(cmd, 0, 1, &frames_[currentFrame_].hud, &off0);
+            HudPushData push{};
+            push.screen[0] = (float)swapchainExtent_.width;
+            push.screen[1] = (float)swapchainExtent_.height;
+            for (const Run& run : runs) {
+                if (run.count == 0) continue;
+                push.color[0] = run.color.x;
+                push.color[1] = run.color.y;
+                push.color[2] = run.color.z;
+                push.color[3] = 1.0f;
+                vkCmdPushConstants(cmd, hudPipelineLayout_,
+                                   VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                                   sizeof(HudPushData), &push);
+                vkCmdDraw(cmd, run.count, 1, run.first, 0);
+            }
+        }
+    }
+    // --- ImGui поверх всего (панель строит приложение в frame.ui) ---
+    if (imguiReady_ && frame.ui) {
+        ImGui_ImplVulkan_NewFrame();
+        // Platform-бэкенд (ImGui_ImplGlfw_NewFrame) вызывается в main до renderFrame.
+        ImGui::NewFrame();
+        frame.ui();
+        ImGui::Render();
+        ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
+    }
 
     vkCmdEndRenderPass(cmd);
     vkEndCommandBuffer(cmd);
@@ -1400,6 +1671,14 @@ void VulkanRenderer::renderFrame(const RenderFrame& frame) {
 
 void VulkanRenderer::cleanup() {
     if (device_ != VK_NULL_HANDLE) vkDeviceWaitIdle(device_);
+
+    // ImGui сносим первым (пока device/пул живы), platform-бэкенд гасит main.
+    if (imguiReady_) {
+        ImGui_ImplVulkan_Shutdown();
+        ImGui::DestroyContext();
+        imguiReady_ = false;
+    }
+
     cleanupSwapchain();
 
     // Текстуры + дефолтная белая + сэмплер.
@@ -1438,6 +1717,8 @@ void VulkanRenderer::cleanup() {
         if (f.instMem) vkFreeMemory(device_, f.instMem, nullptr);
         if (f.bones) vkDestroyBuffer(device_, f.bones, nullptr);
         if (f.bonesMem) vkFreeMemory(device_, f.bonesMem, nullptr);
+        if (f.hud) vkDestroyBuffer(device_, f.hud, nullptr);
+        if (f.hudMem) vkFreeMemory(device_, f.hudMem, nullptr);
     }
     frames_.clear();
     materials_.clear();
@@ -1451,8 +1732,21 @@ void VulkanRenderer::cleanup() {
         pl = VK_NULL_HANDLE;
     }
     if (skinnedPipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, skinnedPipeline_, nullptr);
+    if (hudPipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, hudPipeline_, nullptr);
     if (pipelineLayout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);
     if (skinnedPipelineLayout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, skinnedPipelineLayout_, nullptr);
+    if (hudPipelineLayout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, hudPipelineLayout_, nullptr);
+    // Ресурсы шрифта HUD.
+    if (fontSampler_ != VK_NULL_HANDLE) vkDestroySampler(device_, fontSampler_, nullptr);
+    if (fontView_ != VK_NULL_HANDLE) vkDestroyImageView(device_, fontView_, nullptr);
+    if (fontImage_ != VK_NULL_HANDLE) vkDestroyImage(device_, fontImage_, nullptr);
+    if (fontMem_ != VK_NULL_HANDLE) vkFreeMemory(device_, fontMem_, nullptr);
+    hudPipeline_ = VK_NULL_HANDLE;
+    hudPipelineLayout_ = VK_NULL_HANDLE;
+    fontSampler_ = VK_NULL_HANDLE;
+    fontView_ = VK_NULL_HANDLE;
+    fontImage_ = VK_NULL_HANDLE;
+    fontMem_ = VK_NULL_HANDLE;
     descriptorPool_ = VK_NULL_HANDLE;
     setLayout0_ = VK_NULL_HANDLE;
     setLayout1_ = VK_NULL_HANDLE;

@@ -36,6 +36,7 @@ add_executable(vbase_desktop
         ${IMGUI}/imgui_widgets.cpp
         ${IMGUI}/backends/imgui_impl_opengl3.cpp
         ${IMGUI}/backends/imgui_impl_glfw.cpp
+        ${IMGUI}/backends/imgui_impl_vulkan.cpp
         ${ENET}/callbacks.c
         ${ENET}/compress.c
         ${ENET}/host.c
@@ -52,6 +53,10 @@ target_include_directories(vbase_desktop PRIVATE
         "${APP}" "${ENET}/include" "${TP}/cgltf" "${TP}/stb" "${IMGUI}" "${IMGUI}/backends"
         "${TP}/vulkan/include")
 
+# imgui_impl_vulkan должен грузить Vulkan-функции через ImGui_ImplVulkan_LoadFunctions
+# (у нас VK_NO_PROTOTYPES, линковать vulkan-1 не с чем).
+target_compile_definitions(vbase_desktop PRIVATE IMGUI_IMPL_VULKAN_NO_PROTOTYPES)
+
 if(MSVC)
     target_compile_options(vbase_desktop PRIVATE /utf-8)
 endif()
@@ -64,7 +69,7 @@ set(GLSLC "C:/VulkanSDK/1.4.350.0/Bin/glslc.exe" CACHE FILEPATH "Путь к gls
 set(VK_SHADER_SRC "${APP}/shaders")
 set(VK_SHADER_OUT "${APP}/../assets/shaders/vk")
 file(MAKE_DIRECTORY "${VK_SHADER_OUT}")
-set(VK_SHADERS lit.vert lit.frag unlit.frag phong.vert phong.frag skin.vert skin.frag)
+set(VK_SHADERS lit.vert lit.frag unlit.frag phong.vert phong.frag skin.vert skin.frag hud.vert hud.frag)
 set(VK_SPV "")
 foreach(s ${VK_SHADERS})
     add_custom_command(
