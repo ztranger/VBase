@@ -18,8 +18,13 @@
 | Выделенный сервер | `server/` | `server\build.bat` (MSVC) | авторитетный сервер, headless |
 | Десктоп-клиент | `desktop/` | `desktop\build.bat` (MSVC) | GLFW + desktop GL 3.3, переиспользует ядро |
 
-Нативный код клиента живёт в `app/src/main/cpp/`. Сервер и десктоп переиспользуют
-из него платформонезависимые файлы (симуляция, сеть, загрузчики, математика).
+Нативный код клиента живёт в `app/src/main/cpp/`, разложен по слоям:
+`platform/` (Android-точка входа), `engine/{core,render,assets,physics,net}`
+(переиспользуемый движок), `game/` (геймплей: Scene, Character, здания, загрузчики).
+Include — **квалифицированные** от корня `cpp/` (напр. `#include "engine/net/Net.h"`,
+`#include "game/Scene.h"`); корень `cpp/` добавлен в include-пути всех трёх целей.
+Сервер и десктоп переиспользуют платформонезависимые файлы (симуляция, сеть, загрузчики,
+математика) прямо из этого дерева. Полная карта — ARCHITECTURE §5.
 
 **Сборка из корня:** `build-server.cmd` / `build-desktop.cmd` — тонкие обёртки над
 `server\build.bat` / `desktop\build.bat` (те находят свои пути через `%~dp0`, работают
@@ -54,10 +59,11 @@
   `project(... C CXX)`, иначе `.c` молча не компилируются.
 - **Заголовок математики — `MathUtil.h`**, НЕ `Math.h` (на Windows столкнулся бы
   со стандартным `<math.h>` из-за регистронезависимой ФС).
-- **Не ломать платформонезависимость**: `Character`, `Scene`, `Net`, `Model`,
-  `Mesh`, `MathUtil`, `Input`, `FollowCamera`, `Assets`, `AssetSource`,
-  `CollisionWorld` не должны тянуть Android/GL/ImGui. Рендер и платформа — за
-  интерфейсами (`Renderer`, `AssetSource`); физика (Jolt) — за `CollisionWorld`
+- **Не ломать платформонезависимость**: `game/*` и `engine/{core,assets,physics,net}`
+  (`Character`, `Scene`, `Net`, `Model`, `Mesh`, `MathUtil`, `Input`, `FollowCamera`,
+  `Assets`, `AssetSource`, `CollisionWorld`, …) не должны тянуть Android/GL/ImGui.
+  GL/ImGui/Android живут **только** в `engine/render/*` и `platform/`. Рендер и платформа —
+  за интерфейсами (`Renderer`, `AssetSource`); физика (Jolt) — за `CollisionWorld`
   (pimpl, Jolt не течёт в заголовок).
 - **Физика — кинематический контроллер на Jolt** (`CollisionWorld.*`): статика арены
   (боксы) + капсулы `CharacterVirtual` (гравитация/прыжок/скольжение). `Character::simulate`

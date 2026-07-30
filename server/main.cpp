@@ -20,11 +20,11 @@
 #include <unistd.h>
 #endif
 
-#include "CollisionWorld.h"
-#include "FileAssetSource.h"
-#include "Net.h"
-#include "SceneDesc.h"
-#include "SceneLoader.h"
+#include "engine/physics/CollisionWorld.h"
+#include "engine/assets/FileAssetSource.h"
+#include "engine/net/Net.h"
+#include "game/SceneDesc.h"
+#include "game/SceneLoader.h"
 
 namespace {
 

@@ -131,34 +131,54 @@ NB: не путать с `app/src/main/cpp/shaders/` — там GLSL-исход�
 
 ## 5. Карта файлов
 
-`app/src/main/cpp/` (общее ядро; используется всеми целями):
-- Платформонезависимое (игра/данные/сеть): `Character.*`, `Scene.*`, `FollowCamera.h`,
-  `Input.h`, `MathUtil.h`, `Mesh.*`, `Model.*`, `Texture.h`, `RenderFrame.h`,
-  `Renderer.h`, `Net.*`, `Assets.*`, `AssetSource.h`, `FileAssetSource.h`,
-  `SceneDesc.h`/`SceneLoader.*` (описание+парсер сцены), `BuildingConfig.h` (типы зданий:
-  параметры+тексты, парсер в `SceneLoader`), `Log.h` (переносимый).
-- Физика (платформонезависима, за интерфейсом): `CollisionWorld.*` — обёртка Jolt
-  (pimpl, Jolt не течёт в заголовок), статика арены + кинематические капсулы
-  (`CharacterVirtual`). `Character::simulate` двигает через неё; см. NEXT_STEPS §2.5.
-- Кроссплатформенный рендер: `GlRenderer.*` (Android GLES3+EGL и desktop GL 3.3+GLFW
-  через `#ifdef`), `GlApi.h` (GL: GLES3 на Android / загрузчик на десктопе), `Font.*`.
-- Кроссплатформенный GUI: `GameUi.{h,cpp}` — построение ImGui-панели (imgui+`Scene`),
-  общее для Android и десктопа; вызывается из `RenderFrame::ui`. Шрифт —
-  `GameUi::loadFont`; skin — `GameUi::loadSkin` / `unloadSkin` (см. §3 UiSkin).
-- Skin ImGui: `UiSkin.{h,cpp}` — 9-slice панели и image-кнопки (текстуры через
-  `Renderer::getImGuiTexture`).
-- Кроссплатформенный Vulkan-рендер: `VulkanRenderer.*`, `VkApi.*` (динамический
-  загрузчик), `shaders/` (Vulkan GLSL→SPIR-V), `VulkanProbe.*` (проверка доступности).
-- Android-специфичное: `main.cpp` (GameActivity, ввод, цикл, EGL/Vulkan-surface из
-  окна, `AndroidAssetSource`, переключение бэкендов).
-- `CMakeLists.txt` — сборка `libvbase.so`.
+`app/src/main/cpp/` разложен по слоям (include — квалифицированные, напр.
+`#include "engine/net/Net.h"`; корень `cpp/` добавлен в include-пути всех трёх целей).
+Структура:
 
-`server/`: `main.cpp`, `CMakeLists.txt`, `build.bat` (переиспользует `Net.cpp`,
-`Character.cpp` + enet).
+```
+app/src/main/cpp/
+  CMakeLists.txt              сборка libvbase.so
+  shaders/                    Vulkan GLSL (→SPIR-V), грузятся рендером через AssetSource
+  platform/  main.cpp         Android-точка входа: GameActivity, ввод, цикл, EGL/Vulkan-
+                              surface из окна, AndroidAssetSource, переключение бэкендов
+  engine/                     переиспользуемый движок
+    core/    MathUtil.h Log.h Input.h Camera.h FollowCamera.h Renderer.h RenderFrame.h Texture.h
+    render/  GlRenderer.* GlApi.h VkApi.* VulkanRenderer.* VulkanProbe.* GameUi.* UiSkin.*
+    assets/  Assets.* AssetSource.h FileAssetSource.h Model.* Mesh.* Font.*
+    physics/ CollisionWorld.*   обёртка Jolt (pimpl, Jolt не течёт в заголовок)
+    net/     Net.*              транспорт ENet + авторитетный серверный тик (+геймплей, см. ниже)
+  game/      Scene.* Character.* SceneDesc.h BuildingConfig.h SceneLoader.*
+```
+
+Слои по смыслу:
+- **engine/core** — платформонезависимая инфраструктура: математика, логи (переносимый
+  `Log.h`), ввод, камеры, интерфейсы рендера (`Renderer.h`) и POD-описание кадра
+  (`RenderFrame.h`), `Texture.h`. Нейтрально: тянется и симуляцией, и рендером.
+- **engine/render** — два бэкенда за интерфейсом `Renderer` + ImGui: `GlRenderer.*`
+  (Android GLES3+EGL и desktop GL 3.3+GLFW через `#ifdef`), `GlApi.h`, Vulkan
+  (`VulkanRenderer.*`, `VkApi.*` динамический загрузчик, `VulkanProbe.*`), GUI
+  (`GameUi.*` — панель ImGui, вызывается из `RenderFrame::ui`; шрифт `loadFont`, skin
+  `loadSkin`/`unloadSkin`, см. §3) и skin (`UiSkin.*` — 9-slice панели + image-кнопки).
+- **engine/assets** — загрузка ресурсов: `Assets.*`, `AssetSource.h`/`FileAssetSource.h`,
+  `Model.*`, `Mesh.*`, `Font.*`.
+- **engine/physics** — `CollisionWorld.*`: статика арены + кинематические капсулы
+  (`CharacterVirtual`). `Character::simulate` двигает через неё; см. NEXT_STEPS §2.5.
+- **engine/net** — `Net.*`: транспорт ENet + авторитетный серверный `tick()`. Сейчас
+  тик содержит и игровую логику (экономика/спавнеры/сущности) — известный шов, при
+  разрастании геймплея логику стоит вынести в `game/`.
+- **game** — геймплей: `Scene.*` (клиентский мир, предсказание, реконсиляция, рендер-
+  диспетч), `Character.*` (POD-симуляция героя/врага), `SceneDesc.h`/`SceneLoader.*`
+  (описание+парсер сцены), `BuildingConfig.h` (типы зданий: параметры+тексты).
+
+Что нужно каждой цели (общий код лежит в `app/.../cpp`, компилируется прямо из него):
+- **server** (headless): `engine/net/Net`, `game/Character`, `engine/physics/CollisionWorld`,
+  `game/SceneLoader` + enet.
+- **desktop**: то же + `engine/render/*`, `engine/assets/*`, `game/Scene` + imgui/glfw.
+- **Android**: всё + `platform/main.cpp`.
+
+`server/`: `main.cpp`, `CMakeLists.txt`, `build.bat`.
 
 `desktop/`: `main.cpp` (GLFW-окно, WASD, цикл), `CMakeLists.txt`, `build.bat`.
-Переиспользует из `app/.../cpp` общий `GlRenderer` + `Scene` + `FileAssetSource` +
-`Model/Assets/Mesh/Net/Character/Font` + imgui (desktop-режим) + glfw + enet.
 (Старые `DesktopRenderer.*`/`GlCore.h` удалены — их заменил кроссплатформенный GlRenderer.)
 
 `third_party/`: `imgui`, `enet`, `cgltf`, `stb`, `glfw`. (`glew/` — пустой, удалить.)

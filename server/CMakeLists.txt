@@ -32,10 +32,10 @@ endif()
 
 add_executable(vbase_server
         main.cpp
-        ${APP}/Net.cpp
-        ${APP}/Character.cpp
-        ${APP}/CollisionWorld.cpp
-        ${APP}/SceneLoader.cpp
+        ${APP}/engine/net/Net.cpp
+        ${APP}/game/Character.cpp
+        ${APP}/engine/physics/CollisionWorld.cpp
+        ${APP}/game/SceneLoader.cpp
         ${ENET}/callbacks.c
         ${ENET}/compress.c
         ${ENET}/host.c

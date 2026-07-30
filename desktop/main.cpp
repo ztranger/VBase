@@ -2,7 +2,7 @@
 // OpenGL 3.3 или Vulkan. Бэкенд переключается кнопкой в панели GameUi в рантайме
 // (окно и рендер пересоздаются). Общий игровой слой Scene, как и на Android.
 
-#include "VulkanRenderer.h"  // тянет vulkan.h ДО GLFW (чтобы GLFW увидел VK-типы)
+#include "engine/render/VulkanRenderer.h"  // тянет vulkan.h ДО GLFW (чтобы GLFW увидел VK-типы)
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -21,13 +21,13 @@
 #include "imgui.h"
 #include "backends/imgui_impl_glfw.h"
 
-#include "FileAssetSource.h"
-#include "GameUi.h"
-#include "GlRenderer.h"
-#include "MathUtil.h"
-#include "Net.h"
-#include "Renderer.h"
-#include "Scene.h"
+#include "engine/assets/FileAssetSource.h"
+#include "engine/render/GameUi.h"
+#include "engine/render/GlRenderer.h"
+#include "engine/core/MathUtil.h"
+#include "engine/net/Net.h"
+#include "engine/core/Renderer.h"
+#include "game/Scene.h"
 
 namespace {
 

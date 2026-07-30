@@ -31,20 +31,20 @@ add_subdirectory("${GLFW_DIR}" glfw_build)
 
 add_executable(vbase_desktop
         main.cpp
-        ${APP}/Character.cpp
-        ${APP}/Mesh.cpp
-        ${APP}/Net.cpp
-        ${APP}/Assets.cpp
-        ${APP}/Model.cpp
-        ${APP}/Scene.cpp
-        ${APP}/SceneLoader.cpp
-        ${APP}/CollisionWorld.cpp
-        ${APP}/GlRenderer.cpp
-        ${APP}/VkApi.cpp
-        ${APP}/VulkanRenderer.cpp
-        ${APP}/GameUi.cpp
-        ${APP}/UiSkin.cpp
-        ${APP}/Font.cpp
+        ${APP}/game/Character.cpp
+        ${APP}/engine/assets/Mesh.cpp
+        ${APP}/engine/net/Net.cpp
+        ${APP}/engine/assets/Assets.cpp
+        ${APP}/engine/assets/Model.cpp
+        ${APP}/game/Scene.cpp
+        ${APP}/game/SceneLoader.cpp
+        ${APP}/engine/physics/CollisionWorld.cpp
+        ${APP}/engine/render/GlRenderer.cpp
+        ${APP}/engine/render/VkApi.cpp
+        ${APP}/engine/render/VulkanRenderer.cpp
+        ${APP}/engine/render/GameUi.cpp
+        ${APP}/engine/render/UiSkin.cpp
+        ${APP}/engine/assets/Font.cpp
         ${IMGUI}/imgui.cpp
         ${IMGUI}/imgui_draw.cpp
         ${IMGUI}/imgui_tables.cpp

@@ -1,0 +1,285 @@
+#include <game-activity/native_app_glue/android_native_app_glue.h>
+#include <android/asset_manager.h>
+#include <android/configuration.h>
+#include <android/input.h>
+#include <android/native_window.h>
+
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <memory>
+#include <string>
+
+#include "imgui.h"
+
+#include "engine/assets/AssetSource.h"
+#include "engine/render/GameUi.h"
+#include "engine/render/GlRenderer.h"
+#include "engine/core/Log.h"
+#include "engine/core/RenderFrame.h"
+#include "game/Scene.h"
+#include "engine/render/VulkanProbe.h"
+#include "engine/render/VulkanRenderer.h"
+
+namespace {
+// Источник ассетов Android поверх AAssetManager (файлы из APK).
+class AndroidAssetSource : public AssetSource {
+public:
+    explicit AndroidAssetSource(AAssetManager* mgr) : mgr_(mgr) {}
+    bool read(const char* path, std::vector<uint8_t>& out) override {
+        AAsset* a = AAssetManager_open(mgr_, path, AASSET_MODE_BUFFER);
+        if (a == nullptr) return false;
+        off_t len = AAsset_getLength(a);
+        out.resize((size_t)len);
+        int r = AAsset_read(a, out.data(), (size_t)len);
+        AAsset_close(a);
+        return r == (int)len;
+    }
+private:
+    AAssetManager* mgr_;
+};
+}  // namespace
+
+namespace {
+
+struct Engine {
+    std::unique_ptr<Renderer> renderer;
+    std::unique_ptr<Scene> scene;
+    bool vulkanSupported = false;
+    int backend = 0;         // текущий бэкенд: 0 = GL ES3, 1 = Vulkan
+    std::chrono::steady_clock::time_point lastTime{};
+    bool haveTime = false;
+    float accumulator = 0.0f; // накопитель времени для фиксированного тика
+    float uiScale = 1.0f;    // масштаб UI по плотности экрана
+    GameUiState ui;          // состояние панели — общее с десктопом
+
+    // Касание кадра: pumpInput кормит им ImGui и ЗАПОМИНАЕТ, а в геймплей (джойстик/
+    // пикинг) диспатчим ПОСЛЕ renderFrame — тогда WantCaptureMouse уже посчитан ImGui
+    // по этому касанию (иначе тап по GUI проскакивает и включает джойстик лисы).
+    bool touchHad = false;      // было ли касание-событие в кадре
+    float touchX = 0.0f, touchY = 0.0f;
+    bool touchPressed = false;  // палец на экране (по последнему событию кадра)
+    bool touchDownEdge = false; // был DOWN/POINTER_DOWN (для пикинга)
+};
+
+// Частота симуляции. Рендер идёт быстрее и интерполирует между тиками.
+constexpr float kTick = 1.0f / 30.0f;
+
+// Создать рендер по engine->backend (0 = GL, 1 = Vulkan) из окна и построить мир.
+// Оба бэкенда создают surface из одного ANativeWindow, поэтому переключение —
+// это reset + повторный createRenderer.
+bool createRenderer(Engine* engine, android_app* app) {
+    // Источник ассетов нужен и рендеру (шейдеры), и сцене (модели/текстуры).
+    AndroidAssetSource assets(app->activity->assetManager);
+    if (engine->backend == 1) {
+        auto r = std::make_unique<VulkanRenderer>();
+        if (!r->init(app->window, nullptr, assets)) { LOGE("VulkanRenderer init failed"); return false; }
+        engine->renderer = std::move(r);
+    } else {
+        auto r = std::make_unique<GlRenderer>();
+        if (!r->init(app->window, nullptr, assets)) { LOGE("GlRenderer init failed"); return false; }
+        engine->renderer = std::move(r);
+    }
+    // Мир строится после init рендера: нужны живой GPU-контекст и AAssetManager.
+    engine->scene = std::make_unique<Scene>();
+    engine->scene->build(*engine->renderer, assets);
+    engine->haveTime = false;
+
+    // Масштаб UI по плотности экрана (иначе на HiDPI интерфейс крошечный).
+    int density = AConfiguration_getDensity(app->config);
+    float scale = 2.5f;
+    if (density > 0 && density <= 1000) scale = (float)density / 160.0f;
+    if (scale < 1.0f) scale = 1.0f;
+    if (scale > 4.0f) scale = 4.0f;
+    engine->uiScale = scale;
+    engine->scene->setUiScale(scale);
+    // Контекст ImGui создаёт рендер в init — стиль масштабируем на свежем контексте.
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.ScaleAllSizes(scale);
+    style.FontScaleDpi = scale;
+
+    engine->ui.backend = engine->backend;
+    engine->ui.requestBackend = -1;
+    LOGI("Renderer: %s, UI scale %.2f", engine->backend == 1 ? "Vulkan" : "GL ES3", (double)scale);
+    return true;
+}
+
+void handleCmd(android_app* app, int32_t cmd) {
+    auto* engine = static_cast<Engine*>(app->userData);
+
+    switch (cmd) {
+        case APP_CMD_INIT_WINDOW:
+            if (app->window != nullptr) createRenderer(engine, app);
+            break;
+
+        case APP_CMD_TERM_WINDOW:
+            // Поверхность уничтожается — сносим рендер (GPU-ресурсы) и мир.
+            engine->scene.reset();
+            engine->renderer.reset();
+            break;
+
+        default:
+            break;
+    }
+}
+
+// Касания -> ImGui (сразу) + ЗАПОМИНАЕМ в engine. Диспатч в геймплей — после рендера
+// (см. цикл), когда WantCaptureMouse свеж. Рендер к вводу не причастен.
+void pumpInput(android_app* app, Engine* engine) {
+    android_input_buffer* input = android_app_swap_input_buffers(app);
+    if (input == nullptr) {
+        return;
+    }
+
+    for (uint64_t i = 0; i < input->motionEventsCount; ++i) {
+        GameActivityMotionEvent& event = input->motionEvents[i];
+        const int actionMasked = event.action & AMOTION_EVENT_ACTION_MASK;
+
+        bool pressed;
+        switch (actionMasked) {
+            case AMOTION_EVENT_ACTION_DOWN:
+            case AMOTION_EVENT_ACTION_POINTER_DOWN:
+            case AMOTION_EVENT_ACTION_MOVE:
+                pressed = true;
+                break;
+            case AMOTION_EVENT_ACTION_UP:
+            case AMOTION_EVENT_ACTION_POINTER_UP:
+            case AMOTION_EVENT_ACTION_CANCEL:
+                pressed = false;
+                break;
+            default:
+                continue;
+        }
+
+        ImGuiIO& io = ImGui::GetIO();
+        if (event.pointerCount > 0) {
+            const float x = GameActivityPointerAxes_getX(&event.pointers[0]);
+            const float y = GameActivityPointerAxes_getY(&event.pointers[0]);
+            io.AddMousePosEvent(x, y);
+            engine->touchX = x;
+            engine->touchY = y;
+        }
+        io.AddMouseButtonEvent(0, pressed);
+
+        // Запоминаем — в геймплей отдадим после рендера (WantCaptureMouse будет свеж).
+        engine->touchHad = true;
+        engine->touchPressed = pressed;
+        if (actionMasked == AMOTION_EVENT_ACTION_DOWN ||
+            actionMasked == AMOTION_EVENT_ACTION_POINTER_DOWN) {
+            engine->touchDownEdge = true;
+        }
+    }
+    android_app_clear_motion_events(input);
+
+    if (input->keyEventsCount > 0) {
+        android_app_clear_key_events(input);
+    }
+}
+
+} // namespace
+
+extern "C" void android_main(android_app* app) {
+    LOGI("android_main started");
+
+    Engine engine;
+    engine.vulkanSupported = VulkanProbe::isSupported();
+    engine.ui.vulkanAvailable = engine.vulkanSupported;  // кнопка Vulkan в GameUi
+    LOGI("Vulkan supported: %s", engine.vulkanSupported ? "yes" : "no");
+
+    app->userData = &engine;
+    app->onAppCmd = handleCmd;
+
+    while (!app->destroyRequested) {
+        android_poll_source* source = nullptr;
+        int timeout = (engine.renderer && engine.scene) ? 0 : -1;
+        int result = ALooper_pollOnce(timeout, nullptr, nullptr,
+                                      reinterpret_cast<void**>(&source));
+        if (result == ALOOPER_POLL_ERROR) {
+            LOGE("ALooper_pollOnce returned an error");
+            break;
+        }
+        if (source != nullptr) {
+            source->process(app, source);
+        }
+
+        if (engine.renderer && engine.scene) {
+            pumpInput(app, &engine);
+
+            // Реальная дельта времени кадра.
+            auto now = std::chrono::steady_clock::now();
+            float dt = 0.0f;
+            if (engine.haveTime) {
+                dt = std::chrono::duration<float>(now - engine.lastTime).count();
+            }
+            engine.lastTime = now;
+            engine.haveTime = true;
+            if (dt > 0.25f) dt = 0.25f;  // защита от «спирали смерти» после паузы
+
+            // Фиксированный тик симуляции: сколько накопилось — столько шагов.
+            engine.accumulator += dt;
+            while (engine.accumulator >= kTick) {
+                engine.scene->fixedUpdate(kTick);
+                engine.accumulator -= kTick;
+            }
+            float alpha = engine.accumulator / kTick;  // доля до следующего тика
+
+            // Рендер с интерполяцией между тиками.
+            RenderFrame frame = engine.scene->render(alpha, engine.renderer->aspectRatio(), dt);
+            frame.deltaTime = dt;
+
+            // Свет задаёт сцена (из файла), правится слайдером в GameUi.
+
+            // FPS — забота приложения (тайминг здесь), а не игровой логики.
+            if (dt > 0.0f) {
+                engine.ui.fps = engine.ui.fps * 0.92f + (1.0f / dt) * 0.08f;
+            }
+            char hud[32];
+            std::snprintf(hud, sizeof(hud), "FPS: %.0f", (double)engine.ui.fps);
+            const float s = engine.uiScale;  // HUD тоже масштабируем по DPI
+            frame.hud.push_back({hud, 24.0f * s, 24.0f * s, 40.0f * s, {1.0f, 0.85f, 0.2f}});
+
+            // UI строит общий модуль GameUi (тот же на десктопе). Рендер вызовет
+            // это между ImGui NewFrame и Render.
+            Engine* e = &engine;
+            frame.ui = [e]() { GameUi::build(e->ui, *e->scene); };
+
+            engine.renderer->renderFrame(frame);
+
+            // Диспатч касания в геймплей ПОСЛЕ рендера: NewFrame внутри renderFrame уже
+            // пересчитал WantCaptureMouse по этому касанию. Тап по GUI (WantCaptureMouse)
+            // -> джойстик/пикинг не активируем. Релиз отдаём всегда (чтобы не залипал).
+            if (engine.touchHad && engine.scene) {
+                bool guiOwns = ImGui::GetIO().WantCaptureMouse;
+                if (engine.touchPressed) {
+                    if (!guiOwns) engine.scene->onPointer(engine.touchX, engine.touchY, true);
+                } else {
+                    engine.scene->onPointer(engine.touchX, engine.touchY, false);
+                }
+                if (engine.touchDownEdge && !guiOwns && app->window != nullptr) {
+                    float w = (float)ANativeWindow_getWidth(app->window);
+                    float h = (float)ANativeWindow_getHeight(app->window);
+                    engine.scene->onClick(engine.touchX, engine.touchY, w, h);
+                }
+                engine.touchHad = false;
+                engine.touchDownEdge = false;
+            }
+
+            // Переключение бэкенда по кнопке в GameUi: сносим рендер+мир и
+            // пересоздаём из того же окна (surface поддерживают оба бэкенда).
+            if (engine.ui.requestBackend >= 0 && engine.ui.requestBackend != engine.backend &&
+                app->window != nullptr) {
+                int nb = engine.ui.requestBackend;
+                if (nb == 1 && !engine.vulkanSupported) nb = 0;
+                engine.scene.reset();
+                engine.renderer.reset();
+                engine.backend = nb;
+                createRenderer(&engine, app);
+            }
+        }
+    }
+
+    engine.scene.reset();
+    engine.renderer.reset();
+    LOGI("android_main finished");
+}

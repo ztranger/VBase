@@ -50,22 +50,22 @@ set(CGLTF_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/cgltf")
 set(STB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/stb")
 
 add_library(vbase SHARED
-        main.cpp
-        Mesh.cpp
-        Assets.cpp
-        Font.cpp
-        Model.cpp
-        Character.cpp
-        Net.cpp
-        Scene.cpp
-        SceneLoader.cpp
-        CollisionWorld.cpp
-        GlRenderer.cpp
-        GameUi.cpp
-        UiSkin.cpp
-        VulkanProbe.cpp
-        VkApi.cpp
-        VulkanRenderer.cpp
+        platform/main.cpp
+        engine/assets/Mesh.cpp
+        engine/assets/Assets.cpp
+        engine/assets/Font.cpp
+        engine/assets/Model.cpp
+        game/Character.cpp
+        engine/net/Net.cpp
+        game/Scene.cpp
+        game/SceneLoader.cpp
+        engine/physics/CollisionWorld.cpp
+        engine/render/GlRenderer.cpp
+        engine/render/GameUi.cpp
+        engine/render/UiSkin.cpp
+        engine/render/VulkanProbe.cpp
+        engine/render/VkApi.cpp
+        engine/render/VulkanRenderer.cpp
         ${ENET_SOURCES}
         ${IMGUI_DIR}/imgui.cpp
         ${IMGUI_DIR}/imgui_draw.cpp
@@ -74,7 +74,8 @@ add_library(vbase SHARED
         ${IMGUI_DIR}/backends/imgui_impl_opengl3.cpp
         ${IMGUI_DIR}/backends/imgui_impl_vulkan.cpp)
 
-target_include_directories(vbase PRIVATE "${IMGUI_DIR}" "${IMGUI_DIR}/backends"
+target_include_directories(vbase PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${IMGUI_DIR}" "${IMGUI_DIR}/backends"
         "${VULKAN_DIR}/include" "${CGLTF_DIR}" "${STB_DIR}" "${ENET_DIR}/include")
 # imgui_impl_opengl3 -> GLES3; imgui_impl_vulkan -> загрузка функций (VK_NO_PROTOTYPES).
 target_compile_definitions(vbase PRIVATE IMGUI_IMPL_OPENGL_ES3 IMGUI_IMPL_VULKAN_NO_PROTOTYPES)
