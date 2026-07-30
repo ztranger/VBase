@@ -85,7 +85,12 @@
   процедурная генерация). Загрузка: `GameUi::loadSkin` **после** `ImGui_Impl*_Init`
   (Vulkan регистрирует дескрипторы через `ImGui_ImplVulkan_AddTexture`); перед
   Shutdown — `GameUi::unloadSkin` (обязательно на Vulkan). Рамка 9-slice ≈ 25% меньшей
-  стороны атласа. Перегенерация PNG: `python app/src/main/assets/ui/gen_ui_skin.py`.
+  стороны атласа. Панель: 9-slice + **полоса title** (drag, опциональный крестик при
+  `p_open`) + контент в `BeginChild` с inset (`frame` рамки + доп. `pad` внутри).
+  Инфо-панель зданий — `AlwaysAutoResize`. Перегенерация PNG:
+  `python app/src/main/assets/ui/gen_ui_skin.py`.
+  **Как рисовать PNG под 9-slice** (размеры, 25% border, чеклист) —
+  отдельный гайд: [UI_SKIN.md](UI_SKIN.md).
 
 Шейдеры GL лежат ассетами в **`app/src/main/assets/shaders/`** (`*.vert`/`*.frag` +
 `common.glsl`) и грузятся через `AssetSource` (`GlRenderer::init` его получает).
@@ -163,7 +168,8 @@ NB: не путать с `app/src/main/cpp/shaders/` — там GLSL-исход�
 `app/src/main/assets/scenes/`: файлы сцен (`*.scene`), грузятся `SceneLoader` (см. §5.1).
 `app/src/main/assets/fonts/`: `ui.ttf` — кириллический шрифт ImGui (см. §6).
 `app/src/main/assets/ui/`: skin ImGui — `panel.png` (9-slice), `button_*.png`,
-скрипт `gen_ui_skin.py` (перегенерация), `README.txt` (имена файлов).
+скрипт `gen_ui_skin.py`, краткий `README.txt`. Полный гайд по рисованию —
+[UI_SKIN.md](UI_SKIN.md).
 
 ## 5.1. Формат файла сцены
 

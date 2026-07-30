@@ -37,7 +37,8 @@ bool load(Renderer& renderer, AssetSource& assets, Assets& out);
 // Снять ImGui-дескрипторы (важно для Vulkan до ImGui_ImplVulkan_Shutdown).
 void unload(Renderer& renderer, Assets& assets);
 
-// Окно без стандартного фона/title bar + 9-slice рамка. Дальше — обычный ImGui-контент.
+// Окно: 9-slice рамка + полоса title + контент в BeginChild (с inset).
+// name — как у ImGui::Begin ("Title###id"); p_open — крестик закрытия в title.
 bool BeginPanel(const char* name, const Assets& skin, bool* p_open = nullptr,
                 ImGuiWindowFlags flags = 0);
 void EndPanel();

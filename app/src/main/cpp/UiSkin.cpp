@@ -13,6 +13,11 @@
 namespace UiSkin {
 namespace {
 
+thread_local int g_panelStylePush = 0;
+thread_local int g_panelChildPush = 0;
+thread_local int g_panelChildPadPush = 0;
+thread_local float g_panelBottomInset = 0.0f;  // для AlwaysAutoResize — запас под нижнюю рамку
+
 void putPixel(TextureData& t, uint32_t x, uint32_t y, uint8_t r, uint8_t g, uint8_t b,
               uint8_t a) {
     if (x >= t.width || y >= t.height) return;
@@ -187,41 +192,127 @@ void unload(Renderer& renderer, Assets& assets) {
 }
 
 bool BeginPanel(const char* name, const Assets& skin, bool* p_open, ImGuiWindowFlags flags) {
+    // frame — экранная толщина 9-slice; pad — воздух внутри чёрной зоны.
+    // inset = frame+pad — край контента (не вплотную к внутренней линии рамки).
+    const float font = ImGui::GetFontSize();
+    const float frame = std::max(16.0f, font * 0.95f);
+    const float pad = std::max(12.0f, font * 0.65f);
+    const float inset = frame + pad;
+    const float titleH = font * 1.75f;
+
+    if (skin.ready) {
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+        ++g_panelStylePush;
+    }
+
     flags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBackground;
     const bool open = ImGui::Begin(name, p_open, flags);
     if (!open) return false;
 
     if (skin.ready) {
         const ImVec2 p0 = ImGui::GetWindowPos();
-        const ImVec2 sz = ImGui::GetWindowSize();
-        const float border = std::max(8.0f, ImGui::GetFontSize() * 0.75f);
-        drawNineSlice(ImGui::GetWindowDrawList(), skin.panel, p0,
-                      ImVec2(p0.x + sz.x, p0.y + sz.y), border, skin.panelTexW, skin.panelTexH,
-                      skin.panelBorderTexels);
+        const ImVec2 wsz = ImGui::GetWindowSize();
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        drawNineSlice(dl, skin.panel, p0, ImVec2(p0.x + wsz.x, p0.y + wsz.y), frame,
+                      skin.panelTexW, skin.panelTexH, skin.panelBorderTexels);
+
+        // Полоса title между верхней рамкой и контентом.
+        const float titleTop = p0.y + frame;
+        const float titleBot = titleTop + titleH;
+        const float titleL = p0.x + frame;
+        const float titleR = p0.x + wsz.x - frame;
+        dl->AddRectFilled(ImVec2(titleL, titleTop), ImVec2(titleR, titleBot),
+                          IM_COL32(20, 40, 75, 220));
+        dl->AddLine(ImVec2(titleL + pad * 0.5f, titleBot - 1.0f),
+                    ImVec2(titleR - pad * 0.5f, titleBot - 1.0f),
+                    IM_COL32(110, 175, 255, 180), 1.5f);
+
+        // Перетаскивание окна за title.
+        ImGui::SetCursorPos(ImVec2(frame, frame));
+        ImGui::InvisibleButton("##uiskin_title_drag", ImVec2(wsz.x - frame * 2.0f, titleH));
+        if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+            const ImVec2 d = ImGui::GetIO().MouseDelta;
+            ImGui::SetWindowPos(ImVec2(p0.x + d.x, p0.y + d.y));
+        }
 
         const std::string title = titleOnly(name);
         if (!title.empty()) {
-            ImGui::GetWindowDrawList()->AddText(ImVec2(p0.x + border, p0.y + border * 0.35f),
-                                                ImGui::GetColorU32(ImGuiCol_Text),
-                                                title.c_str());
+            const ImVec2 ts = ImGui::CalcTextSize(title.c_str());
+            dl->AddText(ImVec2(titleL + pad, titleTop + (titleH - ts.y) * 0.5f),
+                        IM_COL32(200, 225, 255, 255), title.c_str());
         }
-        ImGui::SetCursorPos(ImVec2(border, border + ImGui::GetFontSize() * 1.15f));
+
+        // Крестик закрытия справа в title (если передали p_open).
+        if (p_open != nullptr) {
+            const float btn = font * 1.15f;
+            const ImVec2 cmin(titleR - pad - btn, titleTop + (titleH - btn) * 0.5f);
+            const ImVec2 cmax(cmin.x + btn, cmin.y + btn);
+            ImGui::SetCursorScreenPos(cmin);
+            if (ImGui::InvisibleButton("##uiskin_close", ImVec2(btn, btn))) *p_open = false;
+            const bool hov = ImGui::IsItemHovered();
+            dl->AddRectFilled(cmin, cmax,
+                              hov ? IM_COL32(70, 120, 200, 220) : IM_COL32(40, 70, 120, 180),
+                              4.0f);
+            const ImU32 xcol = IM_COL32(230, 240, 255, 255);
+            const float m = btn * 0.28f;
+            dl->AddLine(ImVec2(cmin.x + m, cmin.y + m), ImVec2(cmax.x - m, cmax.y - m), xcol,
+                        2.0f);
+            dl->AddLine(ImVec2(cmax.x - m, cmin.y + m), ImVec2(cmin.x + m, cmax.y - m), xcol,
+                        2.0f);
+        }
+
+        // Контент ниже title, с запасом от рамки.
+        const float bodyTop = frame + titleH + pad * 0.35f;
+        ImGui::SetCursorPos(ImVec2(inset, bodyTop));
+
+        const bool autoY = (flags & ImGuiWindowFlags_AlwaysAutoResize) != 0;
+        // При AutoResizeY child высотой 0 — родитель схлопывается по контенту и НЕ
+        // оставляет низ под рамку (в отличие от fixed: childSz.y = -inset).
+        g_panelBottomInset = autoY ? inset : 0.0f;
+        const ImVec2 childSz = autoY ? ImVec2(-inset, 0.0f) : ImVec2(-inset, -inset);
+        const ImGuiChildFlags childFlags =
+            autoY ? ImGuiChildFlags_AutoResizeY : ImGuiChildFlags_None;
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(pad * 0.35f, pad * 0.25f));
+        ++g_panelChildPadPush;
+        ImGui::BeginChild("##uiskin_body", childSz, childFlags,
+                          ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoSavedSettings);
+        ++g_panelChildPush;
     }
     return true;
 }
 
-void EndPanel() { ImGui::End(); }
+void EndPanel() {
+    if (g_panelChildPush > 0) {
+        ImGui::EndChild();
+        --g_panelChildPush;
+    }
+    if (g_panelChildPadPush > 0) {
+        ImGui::PopStyleVar();
+        --g_panelChildPadPush;
+    }
+    // Добираем низ: Dummy входит в размер AlwaysAutoResize-окна → кнопка над рамкой.
+    if (g_panelBottomInset > 0.0f) {
+        ImGui::Dummy(ImVec2(0.0f, g_panelBottomInset));
+        g_panelBottomInset = 0.0f;
+    }
+    ImGui::End();
+    if (g_panelStylePush > 0) {
+        ImGui::PopStyleVar();
+        --g_panelStylePush;
+    }
+}
 
 bool Button(const char* label, const Assets& skin, const ImVec2& size) {
     if (!skin.ready) return ImGui::Button(label, size);
 
     const ImVec2 labelSize = ImGui::CalcTextSize(label, nullptr, true);
+    const ImVec2 fp = ImGui::GetStyle().FramePadding;
     ImVec2 sz = size;
-    if (sz.x <= 0.0f) sz.x = labelSize.x + ImGui::GetStyle().FramePadding.x * 2.0f;
-    if (sz.y <= 0.0f) sz.y = labelSize.y + ImGui::GetStyle().FramePadding.y * 2.0f;
-    // Чуть больше дефолтной кнопки — текстура читается лучше на таче.
-    if (size.x <= 0.0f) sz.x = std::max(sz.x, ImGui::GetFontSize() * 3.0f);
-    if (size.y <= 0.0f) sz.y = std::max(sz.y, ImGui::GetFontSize() * 1.6f);
+    // Больше воздуха вокруг текста — иначе буквы упираются в край текстуры кнопки.
+    if (sz.x <= 0.0f) sz.x = labelSize.x + fp.x * 4.0f;
+    if (sz.y <= 0.0f) sz.y = labelSize.y + fp.y * 3.5f;
+    if (size.x <= 0.0f) sz.x = std::max(sz.x, ImGui::GetFontSize() * 3.2f);
+    if (size.y <= 0.0f) sz.y = std::max(sz.y, ImGui::GetFontSize() * 1.85f);
 
     const bool pressed = ImGui::InvisibleButton(label, sz);
     const bool hovered = ImGui::IsItemHovered();

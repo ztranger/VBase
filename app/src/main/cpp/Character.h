@@ -22,6 +22,7 @@ struct Character {
     float speed01 = 0.0f;
     float animParam = 0.0f;
     float animTime = 0.0f;
+    float velocityY = 0.0f;  // вертикальная скорость (гравитация/прыжок) — реконсилируется
 
     // Предыдущее состояние (для интерполяции при рендере на клиенте).
     Vec3 prevPosition{0.0f, 0.0f, 0.0f};

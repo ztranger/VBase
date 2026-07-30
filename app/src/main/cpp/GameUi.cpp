@@ -53,7 +53,7 @@ void unloadSkin(Renderer& renderer) { UiSkin::unload(renderer, g_skin); }
 
 void build(GameUiState& state, Scene& scene) {
     ImGui::SetNextWindowPos(ImVec2(20, 90), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(360, 560), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(420, 680), ImGuiCond_FirstUseEver);
     if (g_skin.ready) {
         UiSkin::BeginPanel("VBase", g_skin);
     } else {
@@ -159,11 +159,13 @@ void build(GameUiState& state, Scene& scene) {
     const BuildingInfo* info = scene.selectedInfo();
     if (selType >= 0 && info != nullptr) {
         ImGui::SetNextWindowPos(ImVec2(400, 90), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(320, 0), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(340, 0), ImGuiCond_Always);
         std::string title = (info->name.empty() ? "Здание" : info->name) + "###buildInfoPanel";
         bool open = true;
-        if (g_skin.ready) UiSkin::BeginPanel(title.c_str(), g_skin, &open);
-        else ImGui::Begin(title.c_str(), &open);
+        if (g_skin.ready)
+            UiSkin::BeginPanel(title.c_str(), g_skin, &open, ImGuiWindowFlags_AlwaysAutoResize);
+        else
+            ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_AlwaysAutoResize);
         if (!info->desc.empty()) ImGui::TextWrapped("%s", info->desc.c_str());
         ImGui::Separator();
         switch ((EntityType)selType) {
