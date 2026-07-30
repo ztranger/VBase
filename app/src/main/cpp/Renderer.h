@@ -37,7 +37,13 @@ public:
     virtual SkinnedHandle createSkinnedMesh(const SkinnedModel& model) = 0;
 
     // Залить пиксели текстуры в GPU.
-    virtual TextureHandle createTexture(const TextureData& data) = 0;
+    // clampEdges=true — CLAMP_TO_EDGE без mipmaps (UI / 9-slice).
+    virtual TextureHandle createTexture(const TextureData& data, bool clampEdges = false) = 0;
+
+    // ImTextureID для Dear ImGui (GL: GLuint; Vulkan: DescriptorSet через AddTexture).
+    // 0 = invalid. Vulkan кэширует дескриптор до releaseImGuiTexture / shutdown.
+    virtual uint64_t getImGuiTexture(TextureHandle handle) = 0;
+    virtual void releaseImGuiTexture(uint64_t /*imguiTexId*/) {}
 
     // Зарегистрировать материал (цвет + текстура). Рендер разрешит albedo=0
     // в встроенную белую текстуру, чтобы шейдер был один без ветвлений.

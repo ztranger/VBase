@@ -10,8 +10,18 @@
 #include "Input.h"  // VirtualJoystick (для оверлея джойстика)
 #include "Log.h"
 #include "Scene.h"
+#include "UiSkin.h"
 
 namespace GameUi {
+namespace {
+
+UiSkin::Assets g_skin;
+
+bool Btn(const char* label, const ImVec2& size = ImVec2(0, 0)) {
+    return UiSkin::Button(label, g_skin, size);
+}
+
+}  // namespace
 
 void loadFont(AssetSource& assets) {
     ImGuiIO& io = ImGui::GetIO();
@@ -33,10 +43,22 @@ void loadFont(AssetSource& assets) {
                                    io.Fonts->GetGlyphRangesCyrillic());
 }
 
+void loadSkin(Renderer& renderer, AssetSource& assets) {
+    if (!UiSkin::load(renderer, assets, g_skin)) {
+        LOGW("GameUi: skin не загружен — стандартный вид ImGui");
+    }
+}
+
+void unloadSkin(Renderer& renderer) { UiSkin::unload(renderer, g_skin); }
+
 void build(GameUiState& state, Scene& scene) {
     ImGui::SetNextWindowPos(ImVec2(20, 90), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(360, 560), ImGuiCond_FirstUseEver);
-    ImGui::Begin("VBase");
+    if (g_skin.ready) {
+        UiSkin::BeginPanel("VBase", g_skin);
+    } else {
+        ImGui::Begin("VBase");
+    }
     ImGui::Text("FPS: %.1f", (double)state.fps);
 
     ImGui::SeparatorText("Light");
@@ -50,11 +72,11 @@ void build(GameUiState& state, Scene& scene) {
     // Кнопка текущего бэкенда неактивна; Vulkan неактивен, если недоступен.
     bool isGl = (state.backend == 0);
     ImGui::BeginDisabled(isGl);
-    if (ImGui::Button("OpenGL")) state.requestBackend = 0;
+    if (Btn("OpenGL")) state.requestBackend = 0;
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(!isGl || !state.vulkanAvailable);
-    if (ImGui::Button("Vulkan")) state.requestBackend = 1;
+    if (Btn("Vulkan")) state.requestBackend = 1;
     ImGui::EndDisabled();
     if (!state.vulkanAvailable) {
         ImGui::SameLine();
@@ -67,7 +89,7 @@ void build(GameUiState& state, Scene& scene) {
 
     ImGui::SeparatorText("Character");
     ImGui::Text("Speed: %.2f", (double)scene.characterSpeed());
-    if (ImGui::Button("Jump (Space)")) scene.requestJump();  // прыжок: кнопка (тач) или пробел
+    if (Btn("Jump (Space)")) scene.requestJump();  // прыжок: кнопка (тач) или пробел
     float yawOff = scene.modelYawOffset();
     if (ImGui::SliderFloat("Model yaw", &yawOff, -3.15f, 3.15f)) {
         scene.setModelYawOffset(yawOff);  // подгонка "морда по движению"
@@ -87,7 +109,7 @@ void build(GameUiState& state, Scene& scene) {
     if (scene.netConnected()) {
         ImGui::Text("%s | remotes: %d", scene.netHost() ? "HOST" : "CLIENT",
                     scene.remoteCount());
-        if (ImGui::Button("Disconnect")) scene.leaveGame();
+        if (Btn("Disconnect")) scene.leaveGame();
     } else {
         // Поле ввода IP: на десктопе работает системная клавиатура. На Android
         // системная софт-клавиатура из ImGui не поднимается, поэтому ниже —
@@ -109,25 +131,26 @@ void build(GameUiState& state, Scene& scene) {
             for (int i = 0; i < 3; ++i) {
                 char lbl[2] = {rows[r][i], '\0'};
                 if (i > 0) ImGui::SameLine();
-                if (ImGui::Button(lbl, sz)) key(rows[r][i]);
+                if (Btn(lbl, sz)) key(rows[r][i]);
             }
         }
-        if (ImGui::Button("0", sz)) key('0');
+        if (Btn("0", sz)) key('0');
         ImGui::SameLine();
-        if (ImGui::Button(".", sz)) key('.');
+        if (Btn(".", sz)) key('.');
         ImGui::SameLine();
-        if (ImGui::Button("<-", sz)) {
+        if (Btn("<-", sz)) {
             size_t l = std::strlen(state.joinIp);
             if (l > 0) state.joinIp[l - 1] = '\0';
         }
         ImGui::SameLine();
-        if (ImGui::Button("Clr", sz)) state.joinIp[0] = '\0';
+        if (Btn("Clr", sz)) state.joinIp[0] = '\0';
 
-        if (ImGui::Button("Host")) scene.hostGame();
+        if (Btn("Host")) scene.hostGame();
         ImGui::SameLine();
-        if (ImGui::Button("Join")) scene.joinGame(state.joinIp);
+        if (Btn("Join")) scene.joinGame(state.joinIp);
     }
-    ImGui::End();
+    if (g_skin.ready) UiSkin::EndPanel();
+    else ImGui::End();
 
     // Панель информации о выделенном кликом/тапом здании. Содержимое — из конфига,
     // и разное по типу сущности. Стабильный ID окна (###) — позиция не скачет при
@@ -139,7 +162,8 @@ void build(GameUiState& state, Scene& scene) {
         ImGui::SetNextWindowSize(ImVec2(320, 0), ImGuiCond_FirstUseEver);
         std::string title = (info->name.empty() ? "Здание" : info->name) + "###buildInfoPanel";
         bool open = true;
-        ImGui::Begin(title.c_str(), &open);
+        if (g_skin.ready) UiSkin::BeginPanel(title.c_str(), g_skin, &open);
+        else ImGui::Begin(title.c_str(), &open);
         if (!info->desc.empty()) ImGui::TextWrapped("%s", info->desc.c_str());
         ImGui::Separator();
         switch ((EntityType)selType) {
@@ -157,8 +181,9 @@ void build(GameUiState& state, Scene& scene) {
             default:
                 break;
         }
-        if (ImGui::Button("Закрыть")) scene.clearSelection();
-        ImGui::End();
+        if (Btn("Закрыть")) scene.clearSelection();
+        if (g_skin.ready) UiSkin::EndPanel();
+        else ImGui::End();
         if (!open) scene.clearSelection();
     }
 

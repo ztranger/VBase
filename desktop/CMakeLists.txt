@@ -43,6 +43,7 @@ add_executable(vbase_desktop
         ${APP}/VkApi.cpp
         ${APP}/VulkanRenderer.cpp
         ${APP}/GameUi.cpp
+        ${APP}/UiSkin.cpp
         ${APP}/Font.cpp
         ${IMGUI}/imgui.cpp
         ${IMGUI}/imgui_draw.cpp

@@ -27,7 +27,8 @@ public:
     void setSurfaceSize(int width, int height) override;
     MeshHandle createMesh(const MeshData& data) override;
     SkinnedHandle createSkinnedMesh(const SkinnedModel& model) override;
-    TextureHandle createTexture(const TextureData& data) override;
+    TextureHandle createTexture(const TextureData& data, bool clampEdges = false) override;
+    uint64_t getImGuiTexture(TextureHandle handle) override;
     MaterialHandle createMaterial(const MaterialDesc& desc) override;
     void renderFrame(const RenderFrame& frame) override;
     float aspectRatio() const override;

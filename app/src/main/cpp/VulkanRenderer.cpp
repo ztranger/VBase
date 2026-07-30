@@ -170,7 +170,7 @@ bool VulkanRenderer::init(ANativeWindow* window, void* (*glGetProc)(const char*)
     ii.Device = device_;
     ii.QueueFamily = queueFamily_;
     ii.Queue = queue_;
-    ii.DescriptorPoolSize = 16;
+    ii.DescriptorPoolSize = 64;
     ii.MinImageCount = 2;
     ii.ImageCount = (uint32_t)swapchainImages_.size();
     ii.PipelineInfoMain.RenderPass = renderPass_;
@@ -178,6 +178,7 @@ bool VulkanRenderer::init(ANativeWindow* window, void* (*glGetProc)(const char*)
     ii.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
     if (ImGui_ImplVulkan_Init(&ii)) {
         imguiReady_ = true;
+        GameUi::loadSkin(*this, assets);
     } else {
         LOGW("Vulkan: ImGui_ImplVulkan_Init failed (панель не будет рисоваться)");
     }
@@ -1374,13 +1375,38 @@ MeshHandle VulkanRenderer::createMesh(const MeshData& data) {
     return (MeshHandle)meshes_.size();  // handle = индекс + 1
 }
 
-TextureHandle VulkanRenderer::createTexture(const TextureData& data) {
+TextureHandle VulkanRenderer::createTexture(const TextureData& data, bool /*clampEdges*/) {
     if (data.width == 0 || data.height == 0 || data.rgba.empty()) return 0;
     VkTexture t;
     if (!uploadTexture(data.width, data.height, data.rgba.data(), t)) return 0;
     textures_.push_back(t);
     textureSets_.push_back(allocMaterialSet(t.view));  // set 1 (для скиннинг-объектов)
+    imguiTextureSets_.push_back(VK_NULL_HANDLE);       // лениво в getImGuiTexture
     return (TextureHandle)textures_.size();  // handle = индекс + 1
+}
+
+uint64_t VulkanRenderer::getImGuiTexture(TextureHandle handle) {
+    if (!imguiReady_ || handle == 0 || handle > textures_.size()) return 0;
+    const size_t i = (size_t)handle - 1;
+    if (imguiTextureSets_.size() < textures_.size())
+        imguiTextureSets_.resize(textures_.size(), VK_NULL_HANDLE);
+    if (imguiTextureSets_[i] == VK_NULL_HANDLE) {
+        imguiTextureSets_[i] = ImGui_ImplVulkan_AddTexture(
+            textures_[i].view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+    return (uint64_t)(uintptr_t)imguiTextureSets_[i];
+}
+
+void VulkanRenderer::releaseImGuiTexture(uint64_t imguiTexId) {
+    if (imguiTexId == 0 || !imguiReady_) return;
+    auto* set = (VkDescriptorSet)(uintptr_t)imguiTexId;
+    for (VkDescriptorSet& s : imguiTextureSets_) {
+        if (s == set) {
+            ImGui_ImplVulkan_RemoveTexture(s);
+            s = VK_NULL_HANDLE;
+            return;
+        }
+    }
 }
 
 MaterialHandle VulkanRenderer::createMaterial(const MaterialDesc& desc) {
@@ -1707,6 +1733,7 @@ void VulkanRenderer::cleanup() {
 
     // ImGui сносим первым (пока device/пул живы), platform-бэкенд гасит main.
     if (imguiReady_) {
+        GameUi::unloadSkin(*this);
         ImGui_ImplVulkan_Shutdown();
         ImGui::DestroyContext();
         imguiReady_ = false;
@@ -1721,6 +1748,8 @@ void VulkanRenderer::cleanup() {
         if (t.mem) vkFreeMemory(device_, t.mem, nullptr);
     }
     textures_.clear();
+    textureSets_.clear();
+    imguiTextureSets_.clear();
     if (whiteView_) vkDestroyImageView(device_, whiteView_, nullptr);
     if (whiteImage_) vkDestroyImage(device_, whiteImage_, nullptr);
     if (whiteMem_) vkFreeMemory(device_, whiteMem_, nullptr);

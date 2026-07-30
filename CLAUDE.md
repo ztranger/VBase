@@ -69,3 +69,7 @@
   на десктопе окно пересоздаётся (`runClient`), на Android — рендер из того же окна.
   **Проверено запуском на обеих целях** (десктоп и Android: рендер, переключение
   GL↔Vulkan из панели, ImGui под Vulkan).
+- **ImGui skin (`UiSkin`)**: панели — 9-slice, кнопки — свои текстуры; логика и шрифт
+  ImGui не меняются. Ассеты в `app/src/main/assets/ui/` (`panel.png`, `button_*.png`);
+  перегенерация — `python .../ui/gen_ui_skin.py`. Загрузка `GameUi::loadSkin` после
+  init бэкенда ImGui, `unloadSkin` перед Shutdown. Подробности — ARCHITECTURE §3 / §6.

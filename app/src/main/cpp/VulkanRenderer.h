@@ -24,7 +24,9 @@ public:
     void setSurfaceSize(int width, int height) override;
     MeshHandle createMesh(const MeshData& data) override;
     SkinnedHandle createSkinnedMesh(const SkinnedModel& model) override;
-    TextureHandle createTexture(const TextureData& data) override;
+    TextureHandle createTexture(const TextureData& data, bool clampEdges = false) override;
+    uint64_t getImGuiTexture(TextureHandle handle) override;
+    void releaseImGuiTexture(uint64_t imguiTexId) override;
     MaterialHandle createMaterial(const MaterialDesc& desc) override;
     void renderFrame(const RenderFrame& frame) override;
     float aspectRatio() const override;
@@ -168,6 +170,8 @@ private:
     };
     std::vector<VkTexture> textures_;
     std::vector<VkDescriptorSet> textureSets_;  // set 1 на каждую текстуру (для скиннинга)
+    // ImGui user-textures: TextureHandle -> VkDescriptorSet (ImTextureID).
+    std::vector<VkDescriptorSet> imguiTextureSets_;  // параллельно textures_ (индекс = handle-1)
 
     // Материалы (handle = индекс + 1): тип шейдера, цвет, дескриптор albedo (set 1).
     struct VkMaterial {

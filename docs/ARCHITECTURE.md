@@ -42,11 +42,13 @@
   `HudText`, ui-callback (ImGui). Единственное, что игра отдаёт рендеру.
 - **Рендер** (`Renderer` интерфейс, `Renderer.h`): `init(window, glGetProc)` +
   `setSurfaceSize` + `createMesh/createSkinnedMesh/createTexture/createMaterial/
-  renderFrame/aspectRatio`. Реализация — **`GlRenderer` кроссплатформенный**:
-  Android GLES3+EGL и desktop GL 3.3+GLFW под `#ifdef __ANDROID__` (контекст/своп/
-  размер платформенные; версия шейдеров — макрос `GLSL_VERSION`; на десктопе
-  GL-функции грузит `GlApi.h`). `VulkanRenderer` — второй бэкенд под тем же
-  интерфейсом (в сборке обеих целей, десктоп и Android).
+  renderFrame/aspectRatio` + **`getImGuiTexture` / `releaseImGuiTexture`** (ImTextureID
+  для пользовательских текстур ImGui). `createTexture(data, clampEdges=false)` —
+  при `clampEdges=true` CLAMP_TO_EDGE без mipmaps (UI / 9-slice). Реализация —
+  **`GlRenderer` кроссплатформенный**: Android GLES3+EGL и desktop GL 3.3+GLFW под
+  `#ifdef __ANDROID__` (контекст/своп/размер платформенные; версия шейдеров — макрос
+  `GLSL_VERSION`; на десктопе GL-функции грузит `GlApi.h`). `VulkanRenderer` — второй
+  бэкенд под тем же интерфейсом (в сборке обеих целей, десктоп и Android).
 - **Геометрия/данные**: `Mesh` (Vertex pos+normal+uv, генераторы plane/cube/sphere),
   `Model` (`SkinnedModel`: вершины со скиннингом, скелет, анимации; sampleAnimation/
   sampleBlend), `Texture` (TextureData, MaterialDesc, ShaderType), `MathUtil`
@@ -75,6 +77,15 @@
   вне рендера — Android кормит ввод вручную (touch→mouse), десктоп через официальный
   `imgui_impl_glfw`. Содержимое панели — общий модуль `GameUi.{h,cpp}` (imgui+`Scene`),
   один на обе платформы; отдаётся рендеру через колбэк `RenderFrame::ui`.
+- **UiSkin** (`UiSkin.{h,cpp}`) — тонкий skin поверх ImGui: логика окон/кликов и шрифт
+  остаются у ImGui, меняется только отрисовка. `BeginPanel` — окно без стандартного
+  фона/title bar + **9-slice** рамка на `DrawList`; `Button` — `InvisibleButton` +
+  текстуры normal/hover/active + подпись шрифтом ImGui. Текстуры: `assets/ui/panel.png`,
+  `button_normal.png` / `button_hover.png` / `button_active.png` (если нет файлов —
+  процедурная генерация). Загрузка: `GameUi::loadSkin` **после** `ImGui_Impl*_Init`
+  (Vulkan регистрирует дескрипторы через `ImGui_ImplVulkan_AddTexture`); перед
+  Shutdown — `GameUi::unloadSkin` (обязательно на Vulkan). Рамка 9-slice ≈ 25% меньшей
+  стороны атласа. Перегенерация PNG: `python app/src/main/assets/ui/gen_ui_skin.py`.
 
 Шейдеры GL лежат ассетами в **`app/src/main/assets/shaders/`** (`*.vert`/`*.frag` +
 `common.glsl`) и грузятся через `AssetSource` (`GlRenderer::init` его получает).
@@ -126,7 +137,10 @@ NB: не путать с `app/src/main/cpp/shaders/` — там GLSL-исход�
 - Кроссплатформенный рендер: `GlRenderer.*` (Android GLES3+EGL и desktop GL 3.3+GLFW
   через `#ifdef`), `GlApi.h` (GL: GLES3 на Android / загрузчик на десктопе), `Font.*`.
 - Кроссплатформенный GUI: `GameUi.{h,cpp}` — построение ImGui-панели (imgui+`Scene`),
-  общее для Android и десктопа; вызывается из `RenderFrame::ui`.
+  общее для Android и десктопа; вызывается из `RenderFrame::ui`. Шрифт —
+  `GameUi::loadFont`; skin — `GameUi::loadSkin` / `unloadSkin` (см. §3 UiSkin).
+- Skin ImGui: `UiSkin.{h,cpp}` — 9-slice панели и image-кнопки (текстуры через
+  `Renderer::getImGuiTexture`).
 - Кроссплатформенный Vulkan-рендер: `VulkanRenderer.*`, `VkApi.*` (динамический
   загрузчик), `shaders/` (Vulkan GLSL→SPIR-V), `VulkanProbe.*` (проверка доступности).
 - Android-специфичное: `main.cpp` (GameActivity, ввод, цикл, EGL/Vulkan-surface из
@@ -147,6 +161,9 @@ NB: не путать с `app/src/main/cpp/shaders/` — там GLSL-исход�
 `app/src/main/assets/shaders/`: GL-шейдеры (`*.vert`/`*.frag` + `common.glsl`),
 грузятся рендером через `AssetSource` (см. §3).
 `app/src/main/assets/scenes/`: файлы сцен (`*.scene`), грузятся `SceneLoader` (см. §5.1).
+`app/src/main/assets/fonts/`: `ui.ttf` — кириллический шрифт ImGui (см. §6).
+`app/src/main/assets/ui/`: skin ImGui — `panel.png` (9-slice), `button_*.png`,
+скрипт `gen_ui_skin.py` (перегенерация), `README.txt` (имена файлов).
 
 ## 5.1. Формат файла сцены
 
@@ -198,6 +215,14 @@ OBJ-загрузчика). Директивы:
   Байты TTF держатся в `static` (`FontDataOwnedByAtlas=false`) — переживают пересоздание
   контекста при переключении бэкенда. В GlRenderer шрифт грузится в `initGlResources`
   (через член `assets_`), в VulkanRenderer — в `init` (параметр `assets`).
+- **UiSkin / кастомные текстуры ImGui.** Шрифт и hit-test остаются у ImGui; внешний вид
+  панелей/кнопок — `UiSkin` + PNG в `assets/ui/`. Жизненный цикл: `loadSkin` только
+  после `ImGui_Impl*_Init`; на Vulkan `getImGuiTexture` → `ImGui_ImplVulkan_AddTexture`
+  (пул: `DescriptorPoolSize` ≥ запаса под font+user textures, сейчас 64); перед
+  `ImGui_ImplVulkan_Shutdown` обязательно `unloadSkin` / `releaseImGuiTexture`. На GL
+  `ImTextureID` = `GLuint`. UI-текстуры создавать с `createTexture(..., clampEdges=true)`.
+  Слайдеры/сепараторы пока стандартные ImGui — при смене арта достаточно заменить PNG
+  или править `gen_ui_skin.py`.
 - **Скачивание с GitHub release assets** (GLEW zip, Fox.glb с raw) стабильно
   таймаутит; помогает **jsDelivr** для файлов репозиториев или git clone. GLEW
   не используется — GL-функции на десктопе грузит свой мини-загрузчик `GlApi.h`.
@@ -237,6 +262,7 @@ OBJ-загрузчика). Директивы:
    настройку сервера/адреса, переподключение.
 5. **Геймплей**: мир из многих сущностей (акторы в список; `Character` уже обобщён).
 6. Мелочи: своя `crate.png` для текстурированного куба (сейчас отсутствует → куб белый).
+   ✅ Skin ImGui (9-slice + кнопки, `UiSkin` + `assets/ui/`) — сделано, см. §3.
 
 Идея-ориентир: всё, что «над рендером» и «над платформой», держать
 платформонезависимым; новые фичи вводить как данные в `RenderFrame`/`Scene` и

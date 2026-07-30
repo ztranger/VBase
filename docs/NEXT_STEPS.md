@@ -22,7 +22,8 @@ GLFW снаружи + `setSurfaceSize`), версия шейдеров чере�
 Само содержимое панели вынесено в общий модуль `GameUi.{h,cpp}` (тянет только
 imgui + `Scene`, не ломает платформонезависимость ядра) и одинаково на телефоне
 и ПК. WASD гейтится по `io.WantCaptureKeyboard`, поле IP — `InputText` + свой
-кейпад для тача. Осталось по желанию: своя `assets/textures/crate.png` для
+кейпад для тача. Внешний вид панелей/кнопок — `UiSkin` + `assets/ui/` (см.
+ARCHITECTURE §3). Осталось по желанию: своя `assets/textures/crate.png` для
 текстурированного куба.
 
 ## Шаг 2 — порт Vulkan-бэкенда под контракт RenderFrame ✅ СДЕЛАНО (десктоп + Android)
@@ -304,6 +305,10 @@ imgui + `Scene`, не ломает платформонезависимость 
 
 ## Мелкие улучшения (по случаю)
 
+- ✅ **ImGui skin (9-slice + кнопки)** — сделано. Модуль `UiSkin.{h,cpp}`: `BeginPanel` /
+  `Button` поверх логики ImGui; PNG в `assets/ui/` (+ `gen_ui_skin.py`); `Renderer::
+  getImGuiTexture` / `createTexture(..., clampEdges)`; `GameUi::loadSkin`/`unloadSkin`.
+  Слайдеры и прочие виджеты пока дефолтные. См. ARCHITECTURE §3 (UiSkin) и §6.
 - **Фазовая синхронизация бленда** Walk↔Run (сейчас обе анимации от одного времени,
   лапы могут слегка рассинхрониться — вести нормализованную фазу и умножать на
   длительность каждой анимации).

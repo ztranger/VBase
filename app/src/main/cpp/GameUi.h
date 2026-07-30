@@ -6,6 +6,7 @@
 // ImGui NewFrame и Render.
 
 class Scene;
+class Renderer;
 struct AssetSource;
 
 // Небольшое состояние панели, которым владеет приложение, а не игровой слой.
@@ -26,6 +27,11 @@ namespace GameUi {
 // Вызывать после ImGui::CreateContext и ДО инициализации бэкенда (сборки атласа).
 // Байты шрифта держатся живыми весь процесс (нужны атласу).
 void loadFont(AssetSource& assets);
+
+// Загрузить skin (9-slice + кнопки). После ImGui_Impl*_Init. При пересоздании
+// рендера — снова; перед Shutdown — unloadSkin.
+void loadSkin(Renderer& renderer, AssetSource& assets);
+void unloadSkin(Renderer& renderer);
 
 // Собрать виджеты кадра. Тянет только imgui + Scene, ничего платформенного.
 void build(GameUiState& state, Scene& scene);

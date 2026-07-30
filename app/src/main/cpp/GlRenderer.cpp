@@ -138,6 +138,7 @@ bool GlRenderer::initGlResources() {
         return false;
     }
     imguiReady_ = true;
+    if (assets_ != nullptr) GameUi::loadSkin(*this, *assets_);
 
     LOGI("GL renderer initialized: %s / %s",
          glGetString(GL_RENDERER), glGetString(GL_VERSION));
@@ -572,20 +573,32 @@ MeshHandle GlRenderer::createMesh(const MeshData& data) {
     return (MeshHandle)meshes_.size();
 }
 
-TextureHandle GlRenderer::createTexture(const TextureData& data) {
+TextureHandle GlRenderer::createTexture(const TextureData& data, bool clampEdges) {
     GLuint tex = 0;
     glGenTextures(1, &tex);
     glBindTexture(GL_TEXTURE_2D, tex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, (GLsizei)data.width, (GLsizei)data.height, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, data.rgba.data());
-    glGenerateMipmap(GL_TEXTURE_2D);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    const GLint wrap = clampEdges ? GL_CLAMP_TO_EDGE : GL_REPEAT;
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
+    if (clampEdges) {
+        // UI/9-slice: без mipmaps — чёткие края рамки.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    } else {
+        glGenerateMipmap(GL_TEXTURE_2D);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    }
 
     textures_.push_back(tex);
     return (TextureHandle)textures_.size();
+}
+
+uint64_t GlRenderer::getImGuiTexture(TextureHandle handle) {
+    if (handle == 0 || handle > textures_.size()) return 0;
+    return (uint64_t)textures_[handle - 1];
 }
 
 MaterialHandle GlRenderer::createMaterial(const MaterialDesc& desc) {
@@ -749,6 +762,7 @@ void GlRenderer::shutdown() {
 
     // ImGui + GL-объекты сносим, пока контекст ещё текущий.
     if (imguiReady_) {
+        GameUi::unloadSkin(*this);
         ImGui_ImplOpenGL3_Shutdown();
         ImGui::DestroyContext();
         imguiReady_ = false;

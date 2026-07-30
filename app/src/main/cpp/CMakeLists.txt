@@ -62,6 +62,7 @@ add_library(vbase SHARED
         CollisionWorld.cpp
         GlRenderer.cpp
         GameUi.cpp
+        UiSkin.cpp
         VulkanProbe.cpp
         VkApi.cpp
         VulkanRenderer.cpp
