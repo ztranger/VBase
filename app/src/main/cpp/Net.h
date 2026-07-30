@@ -10,13 +10,31 @@ struct SceneDesc;  // описание сцены (коллайдеры + спа
 // Порт по умолчанию.
 constexpr uint16_t kNetPort = 7777;
 
-// Состояние одной сущности в снапшоте (то, что сервер шлёт клиентам).
+// Тип игровой сущности (тег в снапшоте; по нему клиент выбирает визуал/поведение).
+// Пока используется только Hero; остальные — задел под геймплей (генераторы,
+// хранилища, спавнеры, враги, башни, ядро базы).
+enum class EntityType : uint8_t {
+    Hero = 0,
+    Generator,
+    Storage,
+    Spawner,
+    Enemy,
+    Tower,
+    Core,
+};
+
+// Состояние одной сущности в снапшоте (то, что сервер шлёт клиентам). Обобщено под
+// систему сущностей: тип + команда + generic-слоты (hp / aux — ресурс/прогресс/…).
 struct EntityState {
     uint32_t id = 0;
+    uint8_t type = 0;      // EntityType
+    uint8_t team = 0;      // 0 = нейтрал/PvE; 1/2 — стороны (кооп/PvP)
     float x = 0.0f, y = 0.0f, z = 0.0f;
     float yaw = 0.0f;
     float animParam = 0.0f;
     float speed01 = 0.0f;
+    float hp = 0.0f;       // здоровье (герой/враг/здание); 0 = не используется
+    float aux = 0.0f;      // generic-слот по типу: ресурс в хранилище, прогресс, …
 };
 
 // Клиент: подключается к серверу, шлёт InputCommand, принимает снапшоты.
@@ -63,8 +81,9 @@ public:
     void configureWorld(const SceneDesc& desc);
 
     void poll();          // принять подключения и входящий ввод
-    void tick(float dt);  // симулировать всех + разослать снапшот
+    void tick(float dt);  // симулировать всех + разослать дельта-снапшот
     int clientCount() const;
+    int debugLastChanged() const;  // changedCount последнего снапшота (для самотеста дельты)
 
 private:
     struct Impl;

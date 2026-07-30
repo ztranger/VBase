@@ -110,7 +110,11 @@ int runServerPathTest() {
 
     float lastX = 0.0f;
     uint32_t seq = 0;
-    for (int i = 0; i < 400; ++i) {
+    // Фаза 1: гоним в стену. Фаза 2: простой (ввод mag=0) — состояние устаканивается,
+    // дельта должна схлопнуться до нуля (сущность не пересылается).
+    const int moveIters = 150, idleIters = 250;
+    for (int i = 0; i < moveIters + idleIters; ++i) {
+        if (i == moveIters) { cmd.moveX = 0.0f; cmd.magnitude = 0.0f; }  // -> простой
         server.poll();
         if (client.connected() && client.myId() != 0) {
             cmd.seq = ++seq;
@@ -124,10 +128,15 @@ int runServerPathTest() {
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(2));  // дать enet прокачать loopback
     }
+    int idleChanged = server.debugLastChanged();  // дельта на последнем (простойном) тике
 
     std::printf("[ServerTest] авторитетный x = %.3f (ждём <1.6, упор в стену; myId=%u)\n",
                 (double)lastX, client.myId());
-    bool ok = client.myId() != 0 && lastX > 1.0f && lastX < 1.6f;
+    std::printf("[ServerTest] дельта в простое: changed=%d (ждём 0 — сжатие работает)\n",
+                idleChanged);
+    bool posOk = client.myId() != 0 && lastX > 1.0f && lastX < 1.6f;  // дельта реконструирована верно
+    bool deltaOk = idleChanged == 0;                                   // сжатие схлопнулось
+    bool ok = posOk && deltaOk;
     std::printf("[ServerTest] %s\n", ok ? "OK" : "FAIL");
     return ok ? 0 : 1;
 }

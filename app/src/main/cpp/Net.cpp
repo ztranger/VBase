@@ -2,6 +2,7 @@
 
 #include <enet/enet.h>
 
+#include <cmath>
 #include <cstring>
 #include <memory>
 
@@ -26,14 +27,43 @@ struct InputMsg {
     float moveX, moveZ, magnitude;
     uint8_t faceMove;
     uint8_t jump;
+    uint32_t ackTick;  // последний применённый клиентом снапшот (база для дельты)
 };
+// Дельта-снапшот: изменения относительно снапшота baseTick, который клиент подтвердил.
+// baseTick=0 — полный снапшот (база пуста). Далее: changedCount×EntityState (новые/
+// изменившиеся), затем removedCount×uint32_t (id исчезнувших сущностей).
 struct SnapshotHeader {
     uint8_t type;
-    uint32_t serverTick;
-    uint32_t ackSeq;
-    uint16_t count;
+    uint32_t serverTick;    // тик этого снапшота
+    uint32_t baseTick;      // тик базы (0 = полный)
+    uint32_t ackSeq;        // последний обработанный ввод (для реконсиляции)
+    uint16_t changedCount;
+    uint16_t removedCount;
 };
 #pragma pack(pop)
+
+// Снимок состояния мира на конкретном тике (кольцо истории на обеих сторонах).
+constexpr uint32_t kSnapHistory = 64;  // ~2 c при 30 Гц
+struct SnapshotRecord {
+    uint32_t tick = 0;
+    std::vector<EntityState> states;
+};
+
+// Сущность «изменилась», если любое поле отличается заметно (эпсилон гасит
+// асимптотический дозвон speed01/animParam — иначе дельта не схлопывалась бы).
+bool stateChanged(const EntityState& a, const EntityState& b) {
+    const float e = 1e-3f;
+    return a.type != b.type || a.team != b.team ||
+           std::fabs(a.x - b.x) > e || std::fabs(a.y - b.y) > e ||
+           std::fabs(a.z - b.z) > e || std::fabs(a.yaw - b.yaw) > e ||
+           std::fabs(a.animParam - b.animParam) > e || std::fabs(a.speed01 - b.speed01) > e ||
+           std::fabs(a.hp - b.hp) > e || std::fabs(a.aux - b.aux) > e;
+}
+
+const EntityState* findState(const std::vector<EntityState>& v, uint32_t id) {
+    for (const EntityState& s : v) if (s.id == id) return &s;
+    return nullptr;
+}
 
 // Единичная инициализация ENet на процесс.
 bool ensureEnet() {
@@ -58,7 +88,9 @@ struct NetClient::Impl {
     bool connected = false;
     bool newSnapshot = false;
     uint32_t ackSeq = 0;
-    std::vector<EntityState> states;
+    std::vector<EntityState> states;   // текущее полное состояние (реконструированное)
+    uint32_t stateTick = 0;            // тик текущего состояния (его подтверждаем серверу)
+    SnapshotRecord recvHistory[kSnapHistory];  // кольцо принятых снапшотов (базы для дельт)
 };
 
 NetClient::NetClient() : impl_(new Impl()) {}
@@ -99,6 +131,8 @@ void NetClient::disconnect() {
     impl_->connected = false;
     impl_->myId = 0;
     impl_->states.clear();
+    impl_->stateTick = 0;
+    for (SnapshotRecord& r : impl_->recvHistory) { r.tick = 0; r.states.clear(); }
 }
 
 bool NetClient::connected() const { return impl_->connected; }
@@ -122,6 +156,7 @@ void NetClient::sendInput(const InputCommand& cmd) {
     msg.magnitude = cmd.magnitude;
     msg.faceMove = cmd.faceMove ? 1 : 0;
     msg.jump = cmd.jump ? 1 : 0;
+    msg.ackTick = impl_->stateTick;  // подтверждаем последний применённый снапшот
     // Обычный ввод — ненадёжно (realtime). Прыжок — надёжно, чтобы не потерять
     // одноразовое событие (иначе клиент подпрыгнет в предсказании, а сервер — нет).
     uint32_t flags = cmd.jump ? ENET_PACKET_FLAG_RELIABLE : 0;
@@ -148,13 +183,55 @@ void NetClient::poll() {
                 } else if (len >= sizeof(SnapshotHeader) && data[0] == MSG_SNAPSHOT) {
                     SnapshotHeader h;
                     std::memcpy(&h, data, sizeof(h));
-                    size_t need = sizeof(SnapshotHeader) + (size_t)h.count * sizeof(EntityState);
+                    size_t need = sizeof(SnapshotHeader) +
+                                  (size_t)h.changedCount * sizeof(EntityState) +
+                                  (size_t)h.removedCount * sizeof(uint32_t);
                     if (len >= need) {
-                        impl_->ackSeq = h.ackSeq;
-                        impl_->states.resize(h.count);
-                        std::memcpy(impl_->states.data(), data + sizeof(SnapshotHeader),
-                                    (size_t)h.count * sizeof(EntityState));
-                        impl_->newSnapshot = true;
+                        // Читаем тело через memcpy (за packed-заголовком выравнивания нет).
+                        std::vector<EntityState> changed(h.changedCount);
+                        if (h.changedCount)
+                            std::memcpy(changed.data(), data + sizeof(SnapshotHeader),
+                                        (size_t)h.changedCount * sizeof(EntityState));
+                        std::vector<uint32_t> removed(h.removedCount);
+                        if (h.removedCount)
+                            std::memcpy(removed.data(),
+                                        data + sizeof(SnapshotHeader) +
+                                            (size_t)h.changedCount * sizeof(EntityState),
+                                        (size_t)h.removedCount * sizeof(uint32_t));
+
+                        // Реконструируем полное состояние на serverTick из базы + дельты.
+                        std::vector<EntityState> ns;
+                        bool applied = false;
+                        if (h.baseTick == 0) {
+                            ns = std::move(changed);  // полный снапшот
+                            applied = true;
+                        } else {
+                            SnapshotRecord& base = impl_->recvHistory[h.baseTick % kSnapHistory];
+                            if (base.tick == h.baseTick) {
+                                ns = base.states;
+                                for (uint32_t rid : removed)
+                                    for (size_t j = 0; j < ns.size(); ++j)
+                                        if (ns[j].id == rid) { ns.erase(ns.begin() + (long)j); break; }
+                                for (const EntityState& cs : changed) {
+                                    bool found = false;
+                                    for (EntityState& s : ns)
+                                        if (s.id == cs.id) { s = cs; found = true; break; }
+                                    if (!found) ns.push_back(cs);
+                                }
+                                applied = true;
+                            }
+                            // базы нет (потеряли цепочку) — ждём полный от сервера
+                        }
+
+                        if (applied && h.serverTick > impl_->stateTick) {
+                            SnapshotRecord& rec = impl_->recvHistory[h.serverTick % kSnapHistory];
+                            rec.tick = h.serverTick;
+                            rec.states = std::move(ns);
+                            impl_->states = rec.states;  // копия для чтения Scene
+                            impl_->stateTick = h.serverTick;
+                            impl_->ackSeq = h.ackSeq;
+                            impl_->newSnapshot = true;
+                        }
                     }
                 }
                 enet_packet_destroy(ev.packet);
@@ -173,20 +250,35 @@ void NetClient::poll() {
 // ============================ NetServer ============================
 
 namespace {
-struct ServerClient {
-    ENetPeer* peer = nullptr;
+// Игровая сущность на сервере (авторитетная). Движение/трансформ — в `move`
+// (Character): для героя это тот же код, что предсказывает клиент; для будущих типов
+// (здания/враги) — своя логика систем, а `move.position/facingYaw` служат трансформом.
+struct Entity {
     uint32_t id = 0;
-    Character ch;       // серверная (авторитетная) симуляция
-    InputCommand input; // последний полученный ввод
+    EntityType type = EntityType::Hero;
+    uint8_t team = 0;
+    Character move;       // трансформ + (для подвижных) физика/анимация
+    InputCommand input;   // герой: последний ввод (иначе не используется)
+    float hp = 0.0f, maxHp = 0.0f;
+    float aux = 0.0f;
+};
+// Подключение клиента: peer, id управляемого им героя, подтверждённый снапшот (база дельт).
+struct Conn {
+    ENetPeer* peer = nullptr;
+    uint32_t heroId = 0;
+    uint32_t ackTick = 0;
 };
 }  // namespace
 
 struct NetServer::Impl {
     ENetHost* host = nullptr;
-    uint32_t nextId = 1;
+    uint32_t nextEntityId = 1;
     uint32_t tickCount = 0;
-    std::vector<ServerClient> clients;
+    std::vector<Entity> entities;  // ВСЕ сущности мира (герои + позже здания/враги)
+    std::vector<Conn> conns;       // подключённые клиенты
     std::vector<uint8_t> scratch;  // буфер снапшота
+    SnapshotRecord history[kSnapHistory];  // кольцо разосланных состояний (базы для дельт)
+    int lastChanged = 0;                   // changedCount последнего снапшота (для самотеста)
 
     // Мир коллизий (та же геометрия, что у клиента). Может быть пуст — тогда fallback.
     std::unique_ptr<CollisionWorld> world;
@@ -194,8 +286,12 @@ struct NetServer::Impl {
     float capsuleRadius = 0.3f;
     float capsuleCylHalf = 0.3f;
 
-    ServerClient* byPeer(ENetPeer* p) {
-        for (auto& c : clients) if (c.peer == p) return &c;
+    Conn* connByPeer(ENetPeer* p) {
+        for (auto& c : conns) if (c.peer == p) return &c;
+        return nullptr;
+    }
+    Entity* entityById(uint32_t id) {
+        for (auto& e : entities) if (e.id == id) return &e;
         return nullptr;
     }
 };
@@ -226,9 +322,11 @@ void NetServer::stop() {
         enet_host_destroy(impl_->host);
         impl_->host = nullptr;
     }
-    impl_->clients.clear();
+    impl_->entities.clear();
+    impl_->conns.clear();
     impl_->world.reset();  // сносим мир (контроллеры клиентов уйдут вместе с ним)
-    impl_->nextId = 1;
+    impl_->nextEntityId = 1;
+    for (SnapshotRecord& r : impl_->history) { r.tick = 0; r.states.clear(); }
 }
 
 void NetServer::configureWorld(const SceneDesc& desc) {
@@ -244,7 +342,7 @@ void NetServer::configureWorld(const SceneDesc& desc) {
 }
 
 bool NetServer::running() const { return impl_->host != nullptr; }
-int NetServer::clientCount() const { return (int)impl_->clients.size(); }
+int NetServer::clientCount() const { return (int)impl_->conns.size(); }
 
 void NetServer::poll() {
     if (impl_->host == nullptr) return;
@@ -252,22 +350,23 @@ void NetServer::poll() {
     while (enet_host_service(impl_->host, &ev, 0) > 0) {
         switch (ev.type) {
             case ENET_EVENT_TYPE_CONNECT: {
-                ServerClient c;
-                c.peer = ev.peer;
-                c.id = impl_->nextId++;
-                // Спавн: авторитетная позиция + кинематический контроллер в мире.
-                c.ch.position = impl_->spawnPos;
-                c.ch.snapshot();
+                // Создаём сущность-героя для клиента (авторитетная позиция + контроллер).
+                Entity hero;
+                hero.id = impl_->nextEntityId++;
+                hero.type = EntityType::Hero;
+                hero.move.position = impl_->spawnPos;
+                hero.move.snapshot();
                 if (impl_->world) {
-                    c.ch.collider = impl_->world->addCharacter(
+                    hero.move.collider = impl_->world->addCharacter(
                         impl_->spawnPos, impl_->capsuleRadius, impl_->capsuleCylHalf);
                 }
-                impl_->clients.push_back(c);
-                WelcomeMsg w{MSG_WELCOME, c.id};
+                impl_->entities.push_back(hero);
+                impl_->conns.push_back(Conn{ev.peer, hero.id, 0});
+                WelcomeMsg w{MSG_WELCOME, hero.id};
                 ENetPacket* pkt = enet_packet_create(&w, sizeof(w), ENET_PACKET_FLAG_RELIABLE);
                 enet_peer_send(ev.peer, 0, pkt);
-                LOGI("NetServer: клиент подключён (id=%u), всего %d", c.id,
-                     (int)impl_->clients.size());
+                LOGI("NetServer: клиент подключён (hero id=%u), всего %d", hero.id,
+                     (int)impl_->conns.size());
                 break;
             }
             case ENET_EVENT_TYPE_RECEIVE: {
@@ -275,29 +374,42 @@ void NetServer::poll() {
                     ev.packet->data[0] == MSG_INPUT) {
                     InputMsg m;
                     std::memcpy(&m, ev.packet->data, sizeof(m));
-                    ServerClient* c = impl_->byPeer(ev.peer);
-                    if (c != nullptr) {
-                        c->input.seq = m.seq;
-                        c->input.moveX = m.moveX;
-                        c->input.moveZ = m.moveZ;
-                        c->input.magnitude = m.magnitude;
-                        c->input.faceMove = (m.faceMove != 0);
-                        c->input.jump = (m.jump != 0);
+                    Conn* conn = impl_->connByPeer(ev.peer);
+                    if (conn != nullptr) {
+                        conn->ackTick = m.ackTick;  // база для дельты этому клиенту
+                        Entity* hero = impl_->entityById(conn->heroId);
+                        if (hero != nullptr) {
+                            hero->input.seq = m.seq;
+                            hero->input.moveX = m.moveX;
+                            hero->input.moveZ = m.moveZ;
+                            hero->input.magnitude = m.magnitude;
+                            hero->input.faceMove = (m.faceMove != 0);
+                            hero->input.jump = (m.jump != 0);
+                        }
                     }
                 }
                 enet_packet_destroy(ev.packet);
                 break;
             }
             case ENET_EVENT_TYPE_DISCONNECT: {
-                for (size_t i = 0; i < impl_->clients.size(); ++i) {
-                    if (impl_->clients[i].peer == ev.peer) {
-                        LOGI("NetServer: клиент id=%u отключён", impl_->clients[i].id);
-                        if (impl_->world && impl_->clients[i].ch.collider != 0) {
-                            impl_->world->removeCharacter(impl_->clients[i].ch.collider);
-                        }
-                        impl_->clients.erase(impl_->clients.begin() + i);
-                        break;
+                Conn* conn = impl_->connByPeer(ev.peer);
+                if (conn != nullptr) {
+                    uint32_t heroId = conn->heroId;
+                    LOGI("NetServer: клиент (hero id=%u) отключён", heroId);
+                    Entity* hero = impl_->entityById(heroId);
+                    if (hero != nullptr && impl_->world && hero->move.collider != 0) {
+                        impl_->world->removeCharacter(hero->move.collider);
                     }
+                    for (size_t i = 0; i < impl_->entities.size(); ++i)
+                        if (impl_->entities[i].id == heroId) {
+                            impl_->entities.erase(impl_->entities.begin() + (long)i);
+                            break;
+                        }
+                    for (size_t i = 0; i < impl_->conns.size(); ++i)
+                        if (impl_->conns[i].peer == ev.peer) {
+                            impl_->conns.erase(impl_->conns.begin() + (long)i);
+                            break;
+                        }
                 }
                 break;
             }
@@ -311,36 +423,90 @@ void NetServer::tick(float dt) {
     if (impl_->host == nullptr) return;
     impl_->tickCount++;
 
-    // Авторитетная симуляция: каждый клиент — свой Character по его вводу,
-    // через общий мир коллизий (тот же код, что предсказывает клиент).
-    for (auto& c : impl_->clients) {
-        c.ch.snapshot();
-        c.ch.simulate(dt, c.input, impl_->world.get());
-        c.input.jump = false;  // прыжок одноразовый: гасим после применения (не залипал между пакетами)
+    // Системы сущностей. Пока только герои: движение по вводу через общий мир коллизий
+    // (тот же код, что предсказывает клиент). Дальше здесь появятся генераторы (ресурс),
+    // спавнеры, движение врагов, бой.
+    for (Entity& e : impl_->entities) {
+        if (e.type == EntityType::Hero) {
+            e.move.snapshot();
+            e.move.simulate(dt, e.input, impl_->world.get());
+            e.input.jump = false;  // прыжок одноразовый
+        }
     }
 
-    // Снапшот со всеми сущностями (states одинаковы для всех, ackSeq — свой).
-    uint16_t count = (uint16_t)impl_->clients.size();
-    size_t size = sizeof(SnapshotHeader) + (size_t)count * sizeof(EntityState);
-    impl_->scratch.resize(size);
-    auto* head = reinterpret_cast<SnapshotHeader*>(impl_->scratch.data());
-    head->type = MSG_SNAPSHOT;
-    head->serverTick = impl_->tickCount;
-    head->count = count;
-    auto* states = reinterpret_cast<EntityState*>(impl_->scratch.data() + sizeof(SnapshotHeader));
-    for (uint16_t i = 0; i < count; ++i) {
-        const Character& ch = impl_->clients[i].ch;
-        states[i].id = impl_->clients[i].id;
-        states[i].x = ch.position.x;
-        states[i].y = ch.position.y;
-        states[i].z = ch.position.z;
-        states[i].yaw = ch.facingYaw;
-        states[i].animParam = ch.animParam;
-        states[i].speed01 = ch.speed01;
+    // Полное текущее состояние мира — из ВСЕХ сущностей.
+    std::vector<EntityState> current(impl_->entities.size());
+    for (size_t i = 0; i < impl_->entities.size(); ++i) {
+        const Entity& e = impl_->entities[i];
+        EntityState& s = current[i];
+        s.id = e.id;
+        s.type = (uint8_t)e.type;
+        s.team = e.team;
+        s.x = e.move.position.x;
+        s.y = e.move.position.y;
+        s.z = e.move.position.z;
+        s.yaw = e.move.facingYaw;
+        s.animParam = e.move.animParam;
+        s.speed01 = e.move.speed01;
+        s.hp = e.hp;
+        s.aux = e.aux;
     }
-    for (auto& c : impl_->clients) {
-        head->ackSeq = c.input.seq;  // персонально для этого клиента
+    // В кольцо истории — база для будущих дельт (когда клиент подтвердит этот тик).
+    SnapshotRecord& rec = impl_->history[impl_->tickCount % kSnapHistory];
+    rec.tick = impl_->tickCount;
+    rec.states = current;
+
+    // Каждому клиенту — дельта относительно ПОДТВЕРЖДЁННОГО им снапшота (устойчиво к
+    // потерям: база = его ackTick, а не последний посланный). Нет базы -> полный.
+    for (Conn& conn : impl_->conns) {
+        const SnapshotRecord* base = nullptr;
+        if (conn.ackTick != 0) {
+            SnapshotRecord& h = impl_->history[conn.ackTick % kSnapHistory];
+            if (h.tick == conn.ackTick) base = &h;  // база ещё в истории
+        }
+
+        std::vector<EntityState> changed;
+        std::vector<uint32_t> removed;
+        uint32_t baseTick;
+        if (base == nullptr) {
+            changed = current;  // полный снапшот
+            baseTick = 0;
+        } else {
+            baseTick = conn.ackTick;
+            for (const EntityState& cur : current) {
+                const EntityState* prev = findState(base->states, cur.id);
+                if (prev == nullptr || stateChanged(cur, *prev)) changed.push_back(cur);
+            }
+            for (const EntityState& prev : base->states)
+                if (findState(current, prev.id) == nullptr) removed.push_back(prev.id);
+        }
+        impl_->lastChanged = (int)changed.size();
+
+        // ackSeq — последний обработанный ввод героя этого клиента (для реконсиляции).
+        Entity* hero = impl_->entityById(conn.heroId);
+        uint32_t ackSeq = hero ? hero->input.seq : 0;
+
+        // Сериализация: заголовок + changed[] + removed[] (через memcpy — packed).
+        size_t size = sizeof(SnapshotHeader) + changed.size() * sizeof(EntityState) +
+                      removed.size() * sizeof(uint32_t);
+        impl_->scratch.resize(size);
+        SnapshotHeader head;
+        head.type = MSG_SNAPSHOT;
+        head.serverTick = impl_->tickCount;
+        head.baseTick = baseTick;
+        head.ackSeq = ackSeq;
+        head.changedCount = (uint16_t)changed.size();
+        head.removedCount = (uint16_t)removed.size();
+        std::memcpy(impl_->scratch.data(), &head, sizeof(head));
+        if (!changed.empty())
+            std::memcpy(impl_->scratch.data() + sizeof(head), changed.data(),
+                        changed.size() * sizeof(EntityState));
+        if (!removed.empty())
+            std::memcpy(impl_->scratch.data() + sizeof(head) + changed.size() * sizeof(EntityState),
+                        removed.data(), removed.size() * sizeof(uint32_t));
         ENetPacket* pkt = enet_packet_create(impl_->scratch.data(), size, 0);
-        enet_peer_send(c.peer, 0, pkt);
+        enet_peer_send(conn.peer, 0, pkt);
     }
 }
+
+int NetServer::debugLastChanged() const { return impl_->lastChanged; }
