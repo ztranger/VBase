@@ -97,6 +97,7 @@ int runClient(int backend, GameUiState& ui, const std::string& assetsDir,
     auto last = std::chrono::steady_clock::now();
     float accumulator = 0.0f;
     bool prevSpace = false;  // фронт нажатия пробела -> прыжок
+    bool prevMouse = false;  // фронт клика ЛКМ -> пикинг здания
     int next = -1;  // -1 = выход
 
     while (!glfwWindowShouldClose(window)) {
@@ -121,6 +122,17 @@ int runClient(int backend, GameUiState& ui, const std::string& assetsDir,
                      glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
         if (space && !prevSpace) scene.requestJump();
         prevSpace = space;
+
+        // ЛКМ (по фронту, если ImGui не забрал мышь) -> пикинг здания под курсором.
+        bool mouse = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+        if (mouse && !prevMouse && !ImGui::GetIO().WantCaptureMouse) {
+            double cx = 0.0, cy = 0.0;
+            glfwGetCursorPos(window, &cx, &cy);
+            int ww = 0, wh = 0;
+            glfwGetWindowSize(window, &ww, &wh);
+            scene.onClick((float)cx, (float)cy, (float)ww, (float)wh);
+        }
+        prevMouse = mouse;
 
         accumulator += dt;
         while (accumulator >= kTick) {

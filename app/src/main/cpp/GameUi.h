@@ -6,6 +6,7 @@
 // ImGui NewFrame и Render.
 
 class Scene;
+struct AssetSource;
 
 // Небольшое состояние панели, которым владеет приложение, а не игровой слой.
 // И Android, и десктоп держат экземпляр у себя и передают его в build().
@@ -20,6 +21,11 @@ struct GameUiState {
 };
 
 namespace GameUi {
+
+// Загрузить UI-шрифт с кириллицей (assets/fonts/ui.ttf) в текущий контекст ImGui.
+// Вызывать после ImGui::CreateContext и ДО инициализации бэкенда (сборки атласа).
+// Байты шрифта держатся живыми весь процесс (нужны атласу).
+void loadFont(AssetSource& assets);
 
 // Собрать виджеты кадра. Тянет только imgui + Scene, ничего платформенного.
 void build(GameUiState& state, Scene& scene);

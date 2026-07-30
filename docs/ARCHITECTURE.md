@@ -118,7 +118,8 @@ NB: не путать с `app/src/main/cpp/shaders/` — там GLSL-исход�
 - Платформонезависимое (игра/данные/сеть): `Character.*`, `Scene.*`, `FollowCamera.h`,
   `Input.h`, `MathUtil.h`, `Mesh.*`, `Model.*`, `Texture.h`, `RenderFrame.h`,
   `Renderer.h`, `Net.*`, `Assets.*`, `AssetSource.h`, `FileAssetSource.h`,
-  `SceneDesc.h`/`SceneLoader.*` (описание+парсер сцены), `Log.h` (переносимый).
+  `SceneDesc.h`/`SceneLoader.*` (описание+парсер сцены), `BuildingConfig.h` (типы зданий:
+  параметры+тексты, парсер в `SceneLoader`), `Log.h` (переносимый).
 - Физика (платформонезависима, за интерфейсом): `CollisionWorld.*` — обёртка Jolt
   (pimpl, Jolt не течёт в заголовок), статика арены + кинематические капсулы
   (`CharacterVirtual`). `Character::simulate` двигает через неё; см. NEXT_STEPS §2.5.
@@ -161,8 +162,17 @@ OBJ-загрузчика). Директивы:
 - `ring <mesh> mat <mat> count <n> radius <r> [y <y>] [scale s] [spin s]` — инстансинг по кольцу
 - `collider box center <x y z> half <hx hy hz>` — статичный коллайдер физики (Jolt);
   независим от визуальных мешей (коллизия ≠ отрисовка).
+- `generator|storage|spawner|core pos <x y z>` — сущность базы (сервер спавнит из неё).
+  Только РАЗМЕЩЕНИЕ; параметры (rate/cap/interval/max) и тексты — в `config/buildings.cfg`.
 - `player model <path> [pos x y z] [scale s] [yaw o] [capsule <radius> <cylHalf>]` —
   glTF-персонаж (скиннинг) + капсула кинематического контроллера (по умолчанию 0.3 0.3)
+
+**Конфиг типов зданий** — `assets/config/buildings.cfg` (`BuildingConfig`, парсер
+`loadBuildingConfig`): блок `building <тип>` + `name`/`desc` (весь остаток строки) и
+`rate`/`cap`/`interval`/`max`. Единый источник параметров И текстов: и сервер (для
+симуляции), и клиент (для инфо-панели по клику) читают его; `applyBuildingConfig`
+переносит параметры в здания сцены. Клик/тап по зданию (`Scene::onClick`, raycast) →
+панель в `GameUi` с содержимым по типу.
 - `light dir <x> <y> <z>` — направление на свет (правится слайдером в `GameUi`)
 - `camera [distance d] [height h] [lookHeight l] [fov f] [near n] [far f]`
 
@@ -181,12 +191,32 @@ OBJ-загрузчика). Директивы:
   из-за этого когда-то бампнули `minSdk` до 30 (для `AImageDecoder`). Сейчас
   декодирование на stb_image, так что `minSdk` можно вернуть на 26 при желании.
 - **Кириллица в консоли Windows** → `SetConsoleOutputCP(CP_UTF8)` + `/utf-8` (MSVC).
+- **Кириллица в ImGui** → встроенный шрифт (ProggyClean) содержит только латиницу,
+  русский текст рисуется как `????`. Решение: `assets/fonts/ui.ttf` (DejaVuSans, полная
+  кириллица), грузится `GameUi::loadFont` ПОСЛЕ `CreateContext` и ДО инициализации
+  бэкенда (сборки атласа), с диапазоном `GetGlyphRangesCyrillic` (латиница+кириллица).
+  Байты TTF держатся в `static` (`FontDataOwnedByAtlas=false`) — переживают пересоздание
+  контекста при переключении бэкенда. В GlRenderer шрифт грузится в `initGlResources`
+  (через член `assets_`), в VulkanRenderer — в `init` (параметр `assets`).
 - **Скачивание с GitHub release assets** (GLEW zip, Fox.glb с raw) стабильно
   таймаутит; помогает **jsDelivr** для файлов репозиториев или git clone. GLEW
   не используется — GL-функции на десктопе грузит свой мини-загрузчик `GlApi.h`.
+- **ImGui `WantCaptureMouse` на тач-вводе отстаёт на кадр.** ImGui пересчитывает
+  `WantCaptureMouse` в `NewFrame` (внутри `renderFrame`), а ввод обычно читается ДО
+  рендера — значит флаг из прошлого кадра. У мыши это скрыто ховером (позиция известна
+  заранее), а у тача ховера нет: первый тап-даун по панели проскакивал проверку и включал
+  джойстик лисы. Решение (Android `main.cpp`): `pumpInput` кормит касание в ImGui и
+  ЗАПОМИНАЕТ его в `Engine`, а диспатч в геймплей (`onPointer`/`onClick`) — ПОСЛЕ
+  `renderFrame`, когда `WantCaptureMouse` уже посчитан по этому касанию. Релиз отдаём
+  всегда (чтобы джойстик не залипал). Десктоп не затронут — там мышь наводится до клика.
 - **INTERNET permission** в манифесте нужен для сокетов.
 - Сборка Android из консоли конфликтует с блокировкой `~/.gradle` (Unity/AS-демоны)
   — собирать в Android Studio.
+- **Реплей реконсиляции зовёт `Character::simulate` многократно за тик** → всё, что
+  накапливается там (`+= dt`), ускоряется при подключении/хосте (симптом был: анимация
+  лисы 2× быстрее онлайн). Поэтому фаза анимации `animTime` крутится НЕ в `simulate`, а
+  1 раз/тик в `Scene::fixedUpdate`. Правило: в `simulate` только реконсилируемое состояние
+  (сбрасывается снапшотом перед реплеем); чисто косметические/свободные величины — вне его.
 
 ## 7. Роадмап / что дальше
 

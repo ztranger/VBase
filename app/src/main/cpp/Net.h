@@ -83,7 +83,9 @@ public:
     void poll();          // принять подключения и входящий ввод
     void tick(float dt);  // симулировать всех + разослать дельта-снапшот
     int clientCount() const;
-    int debugLastChanged() const;  // changedCount последнего снапшота (для самотеста дельты)
+    int debugLastChanged() const;   // changedCount последнего снапшота (для самотеста дельты)
+    float debugResource() const;    // общий пул ресурса базы (для самотеста экономики)
+    int debugEnemyCount() const;    // число живых врагов (для самотеста спавна)
 
 private:
     struct Impl;

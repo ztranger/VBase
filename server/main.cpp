@@ -3,6 +3,7 @@
 // приложении больше не обязателен — можно поднять сервер отдельно.
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -141,6 +142,117 @@ int runServerPathTest() {
     return ok ? 0 : 1;
 }
 
+// Тест экономики: генератор капает ресурс, хранилище ограничивает потолок.
+int runEconomyTest() {
+    SceneDesc desc;
+    BuildingSpec gen;
+    gen.kind = BuildingSpec::Generator;
+    gen.pos = Vec3{0.0f, 0.0f, 0.0f};
+    gen.rate = 10.0f;  // 10 ресурса/сек
+    BuildingSpec sto;
+    sto.kind = BuildingSpec::Storage;
+    sto.pos = Vec3{2.0f, 0.0f, 0.0f};
+    sto.cap = 25.0f;   // потолок 25
+    desc.buildings.push_back(gen);
+    desc.buildings.push_back(sto);
+
+    NetServer server;
+    if (!server.start(kNetPort)) { std::printf("[EconTest] FAIL: сервер не стартовал\n"); return 1; }
+    server.configureWorld(desc);
+
+    // Подключаем клиента — заодно проверим, что здание-хранилище со своим ресурсом
+    // доезжает по сети и реконструируется (сервер -> снапшот -> клиент).
+    NetClient client;
+    client.connect("127.0.0.1", kNetPort);
+
+    const float dt = 1.0f / 30.0f;
+    InputCommand idle;  // герой стоит; экономика идёт независимо
+    uint32_t seq = 0;
+    int storageCount = 0;
+    float clientAux = -1.0f;
+    for (int i = 0; i < 150; ++i) {  // ~5 c
+        server.poll();
+        if (client.connected() && client.myId() != 0) { idle.seq = ++seq; client.sendInput(idle); }
+        server.tick(dt);
+        client.poll();
+        if (client.consumeSnapshot()) {
+            storageCount = 0;
+            for (const EntityState& s : client.states())
+                if ((EntityType)s.type == EntityType::Storage) { storageCount++; clientAux = s.aux; }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    float serverRes = server.debugResource();
+
+    std::printf("[EconTest] сервер: пул=%.1f (ждём cap=25); клиент видит хранилищ=%d, ресурс=%.1f\n",
+                (double)serverRes, storageCount, (double)clientAux);
+    bool serverOk = serverRes > 24.0f && serverRes < 25.5f;               // упор в потолок
+    bool clientOk = storageCount == 1 && clientAux > 24.0f && clientAux < 25.5f;  // доехало по сети
+    bool ok = serverOk && clientOk;
+    std::printf("[EconTest] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
+// Тест спавнеров и врагов: спавнер по таймеру плодит врагов (до потолка), те бегут
+// к ядру. Проверяем и число (потолок), и что добежали (по сети через клиента).
+int runSpawnerTest() {
+    SceneDesc desc;
+    ColliderSpec floor;
+    floor.center = Vec3{0.0f, -0.5f, 0.0f};
+    floor.half = Vec3{50.0f, 0.5f, 50.0f};
+    desc.colliders.push_back(floor);
+    BuildingSpec core;
+    core.kind = BuildingSpec::Core;
+    core.pos = Vec3{0.0f, 0.0f, 0.0f};
+    desc.buildings.push_back(core);
+    BuildingSpec sp;
+    sp.kind = BuildingSpec::Spawner;
+    sp.pos = Vec3{8.0f, 0.0f, 0.0f};
+    sp.rate = 0.5f;  // интервал 0.5 c
+    sp.cap = 3.0f;   // максимум 3 врага
+    desc.buildings.push_back(sp);
+
+    NetServer server;
+    if (!server.start(kNetPort)) { std::printf("[SpawnTest] FAIL: сервер не стартовал\n"); return 1; }
+    server.configureWorld(desc);
+
+    NetClient client;
+    client.connect("127.0.0.1", kNetPort);
+
+    const float dt = 1.0f / 30.0f;
+    InputCommand idle;
+    uint32_t seq = 0;
+    int clientEnemies = 0;
+    float nearest = 999.0f;
+    for (int i = 0; i < 150; ++i) {  // ~5 c
+        server.poll();
+        if (client.connected() && client.myId() != 0) { idle.seq = ++seq; client.sendInput(idle); }
+        server.tick(dt);
+        client.poll();
+        if (client.consumeSnapshot()) {
+            clientEnemies = 0;
+            nearest = 999.0f;
+            for (const EntityState& s : client.states())
+                if ((EntityType)s.type == EntityType::Enemy) {
+                    clientEnemies++;
+                    float d = std::sqrt(s.x * s.x + s.z * s.z);  // расстояние до ядра (0,0,0)
+                    if (d < nearest) nearest = d;
+                }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    int serverEnemies = server.debugEnemyCount();
+
+    std::printf("[SpawnTest] сервер врагов=%d (ждём 3); клиент видит=%d, ближайший до ядра=%.1f "
+                "(ждём ~1, добежал от 8)\n",
+                serverEnemies, clientEnemies, (double)nearest);
+    bool spawnOk = serverEnemies == 3 && clientEnemies == 3;  // потолок + стриминг
+    bool moveOk = nearest < 2.5f;                             // добежали к ядру
+    bool ok = spawnOk && moveOk;
+    std::printf("[SpawnTest] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
 // Печатает локальные IPv4-адреса машины — чтобы не искать их вручную.
 // Winsock уже инициализирован (enet_initialize в NetServer::start).
 void printLocalAddresses(uint16_t port) {
@@ -177,7 +289,9 @@ int main(int argc, char** argv) {
     if (argc > 1 && std::strcmp(argv[1], "--selftest") == 0) {
         int a = runPhysicsSelfTest();   // примитив: collide-and-slide
         int b = runServerPathTest();    // серверный путь: сеть -> авторитет с коллизиями
-        return (a == 0 && b == 0) ? 0 : 1;
+        int c = runEconomyTest();       // экономика: генератор -> ресурс с потолком
+        int d = runSpawnerTest();       // спавнеры -> враги бегут к ядру
+        return (a == 0 && b == 0 && c == 0 && d == 0) ? 0 : 1;
     }
 
     uint16_t port = kNetPort;
@@ -201,6 +315,9 @@ int main(int argc, char** argv) {
     FileAssetSource assets(assetsDir);
     SceneDesc desc;
     if (loadSceneDesc(assets, scenePath, desc)) {
+        BuildingConfig cfg;  // параметры зданий (rate/cap/…) — из конфига
+        loadBuildingConfig(assets, "config/buildings.cfg", cfg);
+        applyBuildingConfig(desc, cfg);
         server.configureWorld(desc);
     } else {
         std::fprintf(stderr, "Сцена не загружена (%s, assets=%s) — сервер без коллизий\n",

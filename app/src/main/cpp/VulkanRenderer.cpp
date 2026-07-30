@@ -17,6 +17,7 @@
 #include "backends/imgui_impl_vulkan.h"
 
 #include "AssetSource.h"
+#include "GameUi.h"
 #include "Font.h"
 #include "Log.h"
 #include "RenderFrame.h"
@@ -160,6 +161,7 @@ bool VulkanRenderer::init(ANativeWindow* window, void* (*glGetProc)(const char*)
     ImGui::CreateContext();
     ImGui::StyleColorsDark();
     ImGui::GetIO().IniFilename = nullptr;
+    GameUi::loadFont(assets);  // кириллический шрифт ДО сборки атласа бэкендом
     ImGui_ImplVulkan_LoadFunctions(VK_API_VERSION_1_0, imguiVkLoader, instance_);
     ImGui_ImplVulkan_InitInfo ii{};
     ii.ApiVersion = VK_API_VERSION_1_0;

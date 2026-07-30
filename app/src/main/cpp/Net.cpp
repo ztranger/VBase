@@ -42,6 +42,12 @@ struct SnapshotHeader {
 };
 #pragma pack(pop)
 
+// Параметры врагов (G2): скорость бега, капсула, дистанция «дошёл до ядра».
+constexpr float kEnemySpeed = 3.0f;
+constexpr float kEnemyRadius = 0.3f;
+constexpr float kEnemyCylHalf = 0.3f;
+constexpr float kCoreStopDist = 1.0f;
+
 // Снимок состояния мира на конкретном тике (кольцо истории на обеих сторонах).
 constexpr uint32_t kSnapHistory = 64;  // ~2 c при 30 Гц
 struct SnapshotRecord {
@@ -260,7 +266,12 @@ struct Entity {
     Character move;       // трансформ + (для подвижных) физика/анимация
     InputCommand input;   // герой: последний ввод (иначе не используется)
     float hp = 0.0f, maxHp = 0.0f;
-    float aux = 0.0f;
+    float aux = 0.0f;     // сеть: ресурс в хранилище / прогресс / …
+    // Серверные параметры/рантайм (не в сети — фиксированы сценой или считаются здесь).
+    float rate = 0.0f;    // generator: ресурс/сек; spawner: интервал спавна, сек
+    float cap = 0.0f;     // storage: ёмкость; spawner: макс. врагов
+    float timer = 0.0f;   // spawner: накопитель времени до следующего спавна
+    int spawnedCount = 0; // spawner: сколько врагов уже породил (потолок = cap)
 };
 // Подключение клиента: peer, id управляемого им героя, подтверждённый снапшот (база дельт).
 struct Conn {
@@ -285,6 +296,8 @@ struct NetServer::Impl {
     Vec3 spawnPos{0.0f, 0.0f, 0.0f};
     float capsuleRadius = 0.3f;
     float capsuleCylHalf = 0.3f;
+
+    float resource = 0.0f;  // общий пул ресурса базы (team 0; per-team — в кооп/PvP)
 
     Conn* connByPeer(ENetPeer* p) {
         for (auto& c : conns) if (c.peer == p) return &c;
@@ -338,7 +351,26 @@ void NetServer::configureWorld(const SceneDesc& desc) {
     impl_->spawnPos = desc.player.pos;
     impl_->capsuleRadius = desc.player.colliderRadius;
     impl_->capsuleCylHalf = desc.player.colliderCylHalf;
-    LOGI("NetServer: мир коллизий — %d статичных коллайдеров", (int)desc.colliders.size());
+
+    // Спавним статичные сущности базы из описания сцены (генератор/хранилище/спавнер/ядро).
+    impl_->resource = 0.0f;
+    for (const BuildingSpec& b : desc.buildings) {
+        Entity e;
+        e.id = impl_->nextEntityId++;
+        switch (b.kind) {
+            case BuildingSpec::Generator: e.type = EntityType::Generator; break;
+            case BuildingSpec::Storage:   e.type = EntityType::Storage;   break;
+            case BuildingSpec::Spawner:   e.type = EntityType::Spawner;   break;
+            case BuildingSpec::Core:      e.type = EntityType::Core;      break;
+        }
+        e.move.position = b.pos;
+        e.move.snapshot();
+        e.rate = b.rate;
+        e.cap = b.cap;
+        impl_->entities.push_back(e);
+    }
+    LOGI("NetServer: мир — %d коллайдеров, %d сущностей базы", (int)desc.colliders.size(),
+         (int)desc.buildings.size());
 }
 
 bool NetServer::running() const { return impl_->host != nullptr; }
@@ -434,6 +466,80 @@ void NetServer::tick(float dt) {
         }
     }
 
+    // Экономика: генераторы капают в общий пул, ограниченный суммой ёмкостей хранилищ
+    // (лишнее теряется — это и есть потолок накоплений). Пул раскладываем по хранилищам
+    // в поле aux (заполнение конкретного хранилища) — так он попадает в сеть.
+    {
+        float prod = 0.0f, cap = 0.0f;
+        for (const Entity& e : impl_->entities) {
+            if (e.type == EntityType::Generator) prod += e.rate;
+            else if (e.type == EntityType::Storage) cap += e.cap;
+        }
+        impl_->resource += prod * dt;
+        if (impl_->resource > cap) impl_->resource = cap;
+        if (impl_->resource < 0.0f) impl_->resource = 0.0f;
+        float rem = impl_->resource;
+        for (Entity& e : impl_->entities) {
+            if (e.type != EntityType::Storage) continue;
+            float amt = rem < e.cap ? rem : e.cap;
+            e.aux = amt;
+            rem -= amt;
+        }
+    }
+
+    // Спавнеры: по таймеру плодят врагов (до потолка cap). Новые сущности КОПИМ и
+    // добавляем ПОСЛЕ цикла — push_back в impl_->entities инвалидировал бы итерацию.
+    {
+        std::vector<Entity> spawned;
+        for (Entity& e : impl_->entities) {
+            if (e.type != EntityType::Spawner) continue;
+            if (e.rate <= 0.0f || e.spawnedCount >= (int)e.cap) continue;
+            e.timer += dt;
+            if (e.timer >= e.rate) {
+                e.timer -= e.rate;
+                Entity enemy;
+                enemy.id = impl_->nextEntityId++;
+                enemy.type = EntityType::Enemy;
+                enemy.team = e.team;
+                enemy.move.position = e.move.position;
+                enemy.move.snapshot();
+                if (impl_->world)
+                    enemy.move.collider = impl_->world->addCharacter(
+                        e.move.position, kEnemyRadius, kEnemyCylHalf);
+                spawned.push_back(enemy);
+                e.spawnedCount++;
+            }
+        }
+        for (Entity& n : spawned) impl_->entities.push_back(std::move(n));
+    }
+
+    // Враги бегут к ядру базы (первый Core) тем же кинематическим контроллером
+    // (гравитация + скольжение по стенам), что и герои.
+    {
+        Vec3 corePos{0.0f, 0.0f, 0.0f};
+        bool haveCore = false;
+        for (const Entity& e : impl_->entities)
+            if (e.type == EntityType::Core) { corePos = e.move.position; haveCore = true; break; }
+        if (haveCore) {
+            for (Entity& e : impl_->entities) {
+                if (e.type != EntityType::Enemy) continue;
+                Vec3 to = corePos - e.move.position;
+                to.y = 0.0f;
+                float dist = std::sqrt(to.x * to.x + to.z * to.z);
+                Vec3 vel{0.0f, 0.0f, 0.0f};
+                if (dist > kCoreStopDist) {
+                    Vec3 dir = to * (1.0f / dist);
+                    vel = dir * kEnemySpeed;
+                    e.move.facingYaw = std::atan2(dir.x, dir.z);
+                }
+                if (impl_->world && e.move.collider != 0)
+                    e.move.position = impl_->world->moveCharacter(e.move.collider, vel, false, dt);
+                else
+                    e.move.position = e.move.position + vel * dt;
+            }
+        }
+    }
+
     // Полное текущее состояние мира — из ВСЕХ сущностей.
     std::vector<EntityState> current(impl_->entities.size());
     for (size_t i = 0; i < impl_->entities.size(); ++i) {
@@ -510,3 +616,9 @@ void NetServer::tick(float dt) {
 }
 
 int NetServer::debugLastChanged() const { return impl_->lastChanged; }
+float NetServer::debugResource() const { return impl_->resource; }
+int NetServer::debugEnemyCount() const {
+    int n = 0;
+    for (const Entity& e : impl_->entities) if (e.type == EntityType::Enemy) ++n;
+    return n;
+}

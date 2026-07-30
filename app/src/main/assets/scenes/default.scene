@@ -48,6 +48,13 @@ collider box center -4 0.5 -4 half 0.5 0.5 0.5       # куб-препятств
 collider box center 0 0.5 -4  half 0.5 0.5 0.5
 collider box center 4 0.5 -4  half 0.5 0.5 0.5
 
+# --- Здания базы: только РАЗМЕЩЕНИЕ; параметры (rate/cap/interval/max) и тексты —
+# из config/buildings.cfg. Директивы: generator/storage/spawner/core pos <x y z>.
+generator pos -2 0 -6
+storage   pos  2 0 -6
+core      pos  0 0 -8              # ядро базы — цель врагов
+spawner   pos  9 0 -8             # плодит врагов, бегут к ядру (путь по z=-8 чист)
+
 # --- Управляемый персонаж (glTF + скиннинг) ---
 # capsule <radius> <cylHalf> — кинематический контроллер (по умолчанию 0.3 0.3)
 player model models/Fox.glb pos 0 0 0 scale 0.03

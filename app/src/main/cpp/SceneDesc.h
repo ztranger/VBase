@@ -58,6 +58,17 @@ struct ColliderSpec {
     Vec3 half{0.5f, 0.5f, 0.5f};  // полуразмеры бокса
 };
 
+// Статичная сущность базы, заданная в сцене (сервер спавнит из неё сущность).
+// Generator капает ресурс (rate/сек) в пул с потолком (сумма cap хранилищ);
+// Spawner по таймеру (rate = интервал, сек) плодит врагов (cap = максимум);
+// Core — ядро базы, цель для врагов.
+struct BuildingSpec {
+    enum Kind { Generator, Storage, Spawner, Core } kind = Generator;
+    Vec3 pos{0.0f, 0.0f, 0.0f};
+    float rate = 0.0f;  // generator: ресурс/сек; spawner: интервал спавна, сек
+    float cap = 0.0f;   // storage: ёмкость; spawner: макс. врагов
+};
+
 struct PlayerSpec {
     bool present = false;
     std::string model;   // путь к glTF (скиннинг)
@@ -84,6 +95,7 @@ struct SceneDesc {
     std::vector<MeshSpec> meshes;
     std::vector<ObjectSpec> objects;  // включая кольцевые (ring=true)
     std::vector<ColliderSpec> colliders;  // статичная геометрия для физики
+    std::vector<BuildingSpec> buildings;  // здания базы (генераторы/хранилища)
     PlayerSpec player;
     CameraSpec camera;
     Vec3 lightDir{0.4f, 1.0f, 0.6f};  // направление НА источник света

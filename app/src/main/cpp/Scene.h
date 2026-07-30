@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "AssetSource.h"
+#include "BuildingConfig.h"
 #include "Character.h"
 #include "FollowCamera.h"
 #include "Input.h"
@@ -26,11 +27,15 @@ struct TimedState {
     float anim = 0.0f;
 };
 
-// Другой игрок: сущность + буфер снапшотов (рендерим с задержкой, интерполируя).
-struct RemotePlayer {
+// Чужая сущность (не свой герой): любой тип из снапшота — герой, генератор,
+// хранилище, враг, … Рендерим по типу; подвижные интерполируем через буфер.
+struct RemoteEntity {
     uint32_t id = 0;
-    Character ch;
+    uint8_t type = 0;   // EntityType
+    uint8_t team = 0;
+    Character ch;       // трансформ для рендера/интерполяции
     std::vector<TimedState> buffer;
+    float aux = 0.0f;   // ресурс в хранилище и т.п. (последнее значение, без интерполяции)
 };
 
 // Отправленная, но ещё не подтверждённая сервером команда (для реплея).
@@ -87,6 +92,14 @@ public:
     void setMoveInput(float x, float y) { extX_ = x; extY_ = y; }  // внешняя ось (клавиатура)
     void requestJump() { jumpQueued_ = true; }  // прыжок на следующем тике (клавиша/кнопка)
 
+    // Клик/тап (пиксели x,y в вьюпорте vw×vh) -> raycast по зданиям, выделение для панели.
+    void onClick(float x, float y, float vw, float vh);
+    void clearSelection() { selectedId_ = 0; }
+    // Для панели информации о выделенном здании (GameUi).
+    int selectedEntityType() const;         // EntityType или -1 (нет выделения)
+    const BuildingInfo* selectedInfo() const;  // тексты/параметры из конфига (или nullptr)
+    float selectedAux() const;              // динамика (ресурс в хранилище и т.п.)
+
     void setUiScale(float s);  // масштаб джойстика под DPI
 
     // Сеть.
@@ -95,11 +108,13 @@ public:
     void leaveGame();
     bool netConnected() const { return client_.connected(); }
     bool netHost() const { return host_; }
-    int remoteCount() const { return (int)remotes_.size(); }
+    int remoteCount() const;  // число ДРУГИХ героев (без зданий/врагов)
 
     // Для ImGui/HUD.
     const VirtualJoystick& joystick() const { return joystick_; }
     float characterSpeed() const { return player_.speed01; }
+    float resourceCurrent() const;  // сумма ресурса во всех хранилищах (из снапшотов)
+    float resourceCap() const;      // суммарная ёмкость хранилищ (из описания сцены)
 
     float modelScale() const { return foxScale_; }
     void setModelScale(float s) { foxScale_ = s; }
@@ -122,6 +137,10 @@ private:
     TextureHandle foxTex_ = 0;
     float foxScale_ = 0.03f;
     float foxYawOffset_ = 0.0f;
+
+    // Визуалы сущностей базы/врагов (клиентский рендер по типу; создаются в build).
+    MeshHandle genMesh_ = 0, storMesh_ = 0, spawnMesh_ = 0, coreMesh_ = 0, enemyMesh_ = 0;
+    MaterialHandle genMat_ = 0, storMat_ = 0, spawnMat_ = 0, coreMat_ = 0, enemyMat_ = 0;
     Character player_;        // управляемый актор (симуляция)
     std::unique_ptr<CollisionWorld> collision_;  // кинематическая физика (Jolt)
     VirtualJoystick joystick_;
@@ -136,10 +155,12 @@ private:
     // Сеть.
     NetClient client_;
     NetServer server_;
-    SceneDesc sceneDesc_;  // сохранённое описание (host-режим отдаёт его серверу)
+    SceneDesc sceneDesc_;      // сохранённое описание (host-режим отдаёт его серверу)
+    BuildingConfig config_;    // параметры/тексты типов зданий (из конфига)
+    uint32_t selectedId_ = 0;  // id выделенной кликом сущности (0 = нет)
     bool host_ = false;
     uint32_t inputSeq_ = 0;
-    std::vector<RemotePlayer> remotes_;
+    std::vector<RemoteEntity> remoteEntities_;  // все чужие сущности (герои/здания/…)
     std::vector<PendingInput> pending_;  // неподтверждённые вводы (для реплея)
     double simClock_ = 0.0;              // часы симуляции (сек)
     float tickDt_ = 1.0f / 30.0f;        // длительность тика (для расчёта времени рендера)

@@ -1,13 +1,37 @@
 #include "GameUi.h"
 
 #include <cstring>
+#include <string>
+#include <vector>
 
 #include "imgui.h"
 
+#include "AssetSource.h"
 #include "Input.h"  // VirtualJoystick (для оверлея джойстика)
+#include "Log.h"
 #include "Scene.h"
 
 namespace GameUi {
+
+void loadFont(AssetSource& assets) {
+    ImGuiIO& io = ImGui::GetIO();
+    // Байты TTF должны жить, пока жив атлас (FontDataOwnedByAtlas=false). Держим их
+    // в static — переживают пересоздание контекста при переключении бэкенда.
+    static std::vector<uint8_t> data;
+    if (data.empty()) assets.read("fonts/ui.ttf", data);
+    if (data.empty()) {
+        LOGW("UI-шрифт fonts/ui.ttf не найден — кириллица не отрисуется");
+        return;  // нет файла -> останется дефолтный шрифт (латиница)
+    }
+    LOGI("UI-шрифт загружен (%d байт, кириллица)", (int)data.size());
+
+    ImFontConfig cfg;
+    cfg.FontDataOwnedByAtlas = false;
+    io.Fonts->Clear();
+    // GetGlyphRangesCyrillic = базовая латиница + кириллица (английский тоже рисуется).
+    io.Fonts->AddFontFromMemoryTTF(data.data(), (int)data.size(), 18.0f, &cfg,
+                                   io.Fonts->GetGlyphRangesCyrillic());
+}
 
 void build(GameUiState& state, Scene& scene) {
     ImGui::SetNextWindowPos(ImVec2(20, 90), ImGuiCond_FirstUseEver);
@@ -36,6 +60,10 @@ void build(GameUiState& state, Scene& scene) {
         ImGui::SameLine();
         ImGui::TextDisabled("(недоступен)");
     }
+
+    ImGui::SeparatorText("Base");
+    ImGui::Text("Resource: %.0f / %.0f", (double)scene.resourceCurrent(),
+                (double)scene.resourceCap());
 
     ImGui::SeparatorText("Character");
     ImGui::Text("Speed: %.2f", (double)scene.characterSpeed());
@@ -100,6 +128,39 @@ void build(GameUiState& state, Scene& scene) {
         if (ImGui::Button("Join")) scene.joinGame(state.joinIp);
     }
     ImGui::End();
+
+    // Панель информации о выделенном кликом/тапом здании. Содержимое — из конфига,
+    // и разное по типу сущности. Стабильный ID окна (###) — позиция не скачет при
+    // смене выделенного типа; видимая подпись — имя из конфига.
+    int selType = scene.selectedEntityType();
+    const BuildingInfo* info = scene.selectedInfo();
+    if (selType >= 0 && info != nullptr) {
+        ImGui::SetNextWindowPos(ImVec2(400, 90), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(320, 0), ImGuiCond_FirstUseEver);
+        std::string title = (info->name.empty() ? "Здание" : info->name) + "###buildInfoPanel";
+        bool open = true;
+        ImGui::Begin(title.c_str(), &open);
+        if (!info->desc.empty()) ImGui::TextWrapped("%s", info->desc.c_str());
+        ImGui::Separator();
+        switch ((EntityType)selType) {
+            case EntityType::Generator:
+                ImGui::Text("Генерация: %.0f / сек", (double)info->rate);
+                break;
+            case EntityType::Storage:
+                ImGui::Text("Ёмкость: %.0f", (double)info->cap);
+                ImGui::Text("Сейчас: %.0f", (double)scene.selectedAux());
+                break;
+            case EntityType::Spawner:
+                ImGui::Text("Интервал: %.1f с", (double)info->rate);
+                ImGui::Text("Максимум врагов: %.0f", (double)info->cap);
+                break;
+            default:
+                break;
+        }
+        if (ImGui::Button("Закрыть")) scene.clearSelection();
+        ImGui::End();
+        if (!open) scene.clearSelection();
+    }
 
     // Виртуальный джойстик поверх всего (появляется под пальцем на тач-экране;
     // на десктопе неактивен, поэтому ничего не рисуется).

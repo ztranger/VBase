@@ -23,6 +23,10 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
         return;  // пустая сцена — ошибки уже в логе
     }
     sceneDesc_ = desc;  // сохраняем: host-режим отдаст ту же геометрию своему серверу
+    // Конфиг зданий (параметры + тексты панели). Параметры применяем к зданиям сцены —
+    // единый источник настроек: сцена размещает, конфиг задаёт rate/cap/…
+    loadBuildingConfig(assets, "config/buildings.cfg", config_);
+    applyBuildingConfig(sceneDesc_, config_);
 
     // Свет и камера — прямо из описания.
     lightDir_ = desc.lightDir;
@@ -119,6 +123,44 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
             o.prevRotY = os.rot.y;
             objects_.push_back(o);
         }
+    }
+
+    // --- Визуалы зданий базы (клиентский рендер по типу сущности) ---
+    // Здания приходят с сервера в снапшотах; клиент рисует их этими мешами по EntityType.
+    genMesh_ = renderer.createMesh(makeCube(1.0f));
+    storMesh_ = renderer.createMesh(makeCube(1.4f));
+    {
+        MaterialDesc md;
+        md.shader = ShaderType::Lit;
+        md.baseColor = {0.35f, 0.80f, 0.40f};  // генератор — зелёный
+        genMat_ = renderer.createMaterial(md);
+    }
+    {
+        MaterialDesc md;
+        md.shader = ShaderType::Lit;
+        md.baseColor = {0.35f, 0.55f, 0.95f};  // хранилище — синее
+        storMat_ = renderer.createMaterial(md);
+    }
+    spawnMesh_ = renderer.createMesh(makeCube(1.2f));
+    coreMesh_ = renderer.createMesh(makeSphere(1.0f, 16, 24));
+    enemyMesh_ = renderer.createMesh(makeSphere(0.35f, 12, 16));
+    {
+        MaterialDesc md;
+        md.shader = ShaderType::Lit;
+        md.baseColor = {0.55f, 0.35f, 0.75f};  // спавнер — фиолетовый
+        spawnMat_ = renderer.createMaterial(md);
+    }
+    {
+        MaterialDesc md;
+        md.shader = ShaderType::Phong;
+        md.baseColor = {0.95f, 0.85f, 0.35f};  // ядро — золотое (с бликом)
+        coreMat_ = renderer.createMaterial(md);
+    }
+    {
+        MaterialDesc md;
+        md.shader = ShaderType::Lit;
+        md.baseColor = {0.85f, 0.25f, 0.25f};  // враг — красный
+        enemyMat_ = renderer.createMaterial(md);
     }
 
     // --- Статичные коллайдеры физики (из описания сцены) ---
@@ -224,6 +266,8 @@ void Scene::fixedUpdate(float dt) {
 
     player_.snapshot();                        // зафиксировать прошлое для интерполяции
     player_.simulate(dt, cmd, collision_.get());  // локальное предсказание (с коллизиями)
+    player_.animTime += dt;  // фаза анимации — ровно 1 раз за тик (не в simulate: реплей
+                             // реконсиляции зовёт simulate многократно и ускорял бы её)
 
     // Сервер (если хостим) — тем же кодом симуляции, затем рассылка снапшотов.
     if (host_) {
@@ -271,19 +315,22 @@ void Scene::applySnapshot() {
             continue;
         }
 
-        // Чужой игрок: кладём снапшот в буфер интерполяции.
-        RemotePlayer* r = nullptr;
-        for (auto& rp : remotes_) {
-            if (rp.id == s.id) { r = &rp; break; }
+        // Чужая сущность (герой/генератор/хранилище/…): в буфер интерполяции + тип.
+        RemoteEntity* r = nullptr;
+        for (auto& re : remoteEntities_) {
+            if (re.id == s.id) { r = &re; break; }
         }
         if (r == nullptr) {
-            RemotePlayer rp;
-            rp.id = s.id;
-            rp.ch.position = {s.x, s.y, s.z};
-            rp.ch.facingYaw = s.yaw;
-            remotes_.push_back(rp);
-            r = &remotes_.back();
+            RemoteEntity re;
+            re.id = s.id;
+            re.ch.position = {s.x, s.y, s.z};
+            re.ch.facingYaw = s.yaw;
+            remoteEntities_.push_back(re);
+            r = &remoteEntities_.back();
         }
+        r->type = s.type;
+        r->team = s.team;
+        r->aux = s.aux;  // ресурс в хранилище и т.п. (последнее значение)
         r->buffer.push_back({simClock_, {s.x, s.y, s.z}, s.yaw, s.animParam});
         // Ограничиваем историю (~1 сек), чтобы буфер не рос.
         while (r->buffer.size() > 2 && r->buffer[1].t < simClock_ - 1.0) {
@@ -291,14 +338,14 @@ void Scene::applySnapshot() {
         }
     }
 
-    // Убрать отключившихся.
-    for (size_t i = 0; i < remotes_.size();) {
+    // Убрать исчезнувшие сущности (нет в текущем снапшоте).
+    for (size_t i = 0; i < remoteEntities_.size();) {
         bool found = false;
         for (const EntityState& s : states) {
-            if (s.id == remotes_[i].id) { found = true; break; }
+            if (s.id == remoteEntities_[i].id) { found = true; break; }
         }
         if (!found) {
-            remotes_.erase(remotes_.begin() + (long)i);
+            remoteEntities_.erase(remoteEntities_.begin() + (long)i);
         } else {
             ++i;
         }
@@ -326,7 +373,7 @@ void Scene::leaveGame() {
     client_.disconnect();
     server_.stop();
     host_ = false;
-    remotes_.clear();
+    remoteEntities_.clear();
     pending_.clear();
 }
 
@@ -364,7 +411,7 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
     // между двумя снапшотами из буфера. Это и есть snapshot interpolation.
     const double kInterpDelay = 0.1;  // сек буфера — гасит джиттер/потери
     double renderTime = simClock_ + (double)(alpha * tickDt_) - kInterpDelay;
-    for (RemotePlayer& r : remotes_) {
+    for (RemoteEntity& r : remoteEntities_) {
         const std::vector<TimedState>& buf = r.buffer;
         if (!buf.empty()) {
             TimedState st = buf.back();  // по умолчанию — свежайший
@@ -388,8 +435,132 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
             r.ch.animParam = st.anim;
         }
         r.ch.animTime += renderDt;  // фаза анимации крутится локально
-        frame.skinned.push_back(
-            makeFoxItem(r.ch.position, r.ch.facingYaw, r.ch.animParam, r.ch.animTime));
+
+        // Рендер по типу сущности (задел под остальные типы — враги/башни/ядро).
+        switch ((EntityType)r.type) {
+            case EntityType::Hero:
+                frame.skinned.push_back(
+                    makeFoxItem(r.ch.position, r.ch.facingYaw, r.ch.animParam, r.ch.animTime));
+                break;
+            case EntityType::Generator:
+                frame.items.push_back(
+                    {genMesh_, genMat_, Mat4::translation(r.ch.position + Vec3{0.0f, 0.5f, 0.0f})});
+                break;
+            case EntityType::Storage:
+                frame.items.push_back(
+                    {storMesh_, storMat_, Mat4::translation(r.ch.position + Vec3{0.0f, 0.7f, 0.0f})});
+                break;
+            case EntityType::Spawner:
+                frame.items.push_back(
+                    {spawnMesh_, spawnMat_, Mat4::translation(r.ch.position + Vec3{0.0f, 0.6f, 0.0f})});
+                break;
+            case EntityType::Core:
+                frame.items.push_back(
+                    {coreMesh_, coreMat_, Mat4::translation(r.ch.position + Vec3{0.0f, 1.0f, 0.0f})});
+                break;
+            case EntityType::Enemy:
+                frame.items.push_back(
+                    {enemyMesh_, enemyMat_, Mat4::translation(r.ch.position + Vec3{0.0f, 0.35f, 0.0f})});
+                break;
+            default:
+                break;
+        }
     }
     return frame;
+}
+
+int Scene::remoteCount() const {
+    int n = 0;
+    for (const RemoteEntity& r : remoteEntities_)
+        if ((EntityType)r.type == EntityType::Hero) ++n;  // только другие герои
+    return n;
+}
+
+float Scene::resourceCurrent() const {
+    float sum = 0.0f;
+    for (const RemoteEntity& r : remoteEntities_)
+        if ((EntityType)r.type == EntityType::Storage) sum += r.aux;
+    return sum;
+}
+
+float Scene::resourceCap() const {
+    float sum = 0.0f;
+    for (const BuildingSpec& b : sceneDesc_.buildings)
+        if (b.kind == BuildingSpec::Storage) sum += b.cap;
+    return sum;
+}
+
+namespace {
+// Сфера для пикинга по типу: смещение центра вверх (как в рендере) + радиус.
+// Возвращает false для не выбираемых типов (герой и пр.).
+bool pickBounds(EntityType t, float& yoff, float& rad) {
+    switch (t) {
+        case EntityType::Generator: yoff = 0.5f;  rad = 1.0f; return true;
+        case EntityType::Storage:   yoff = 0.7f;  rad = 1.2f; return true;
+        case EntityType::Spawner:   yoff = 0.6f;  rad = 1.1f; return true;
+        case EntityType::Core:      yoff = 1.0f;  rad = 1.3f; return true;
+        case EntityType::Enemy:     yoff = 0.35f; rad = 0.6f; return true;
+        default: return false;
+    }
+}
+}  // namespace
+
+void Scene::onClick(float x, float y, float vw, float vh) {
+    if (vw <= 0.0f || vh <= 0.0f) return;
+    // Экран -> NDC -> мировой луч (unproject через inverse(proj*view)).
+    float ndcX = 2.0f * x / vw - 1.0f;
+    float ndcY = 1.0f - 2.0f * y / vh;  // экран вниз -> NDC вверх
+    Mat4 invVP = inverse(camera_.proj(vw / vh) * camera_.view());
+    auto unproj = [&](float nz) -> Vec3 {
+        const float* m = invVP.m;  // column-major: out[row] = sum_col m[col*4+row]*v[col]
+        float ox = m[0] * ndcX + m[4] * ndcY + m[8] * nz + m[12];
+        float oy = m[1] * ndcX + m[5] * ndcY + m[9] * nz + m[13];
+        float oz = m[2] * ndcX + m[6] * ndcY + m[10] * nz + m[14];
+        float ow = m[3] * ndcX + m[7] * ndcY + m[11] * nz + m[15];
+        if (ow != 0.0f) { ox /= ow; oy /= ow; oz /= ow; }
+        return Vec3{ox, oy, oz};
+    };
+    Vec3 nearP = unproj(-1.0f);  // GL clip near (z=-1)
+    Vec3 farP = unproj(1.0f);
+    Vec3 origin = nearP;
+    Vec3 dir = normalize(farP - nearP);
+
+    // Луч vs сфера каждого выбираемого здания; берём ближайшее попадание.
+    uint32_t best = 0;
+    float bestT = 1e30f;
+    for (const RemoteEntity& r : remoteEntities_) {
+        float yoff, rad;
+        if (!pickBounds((EntityType)r.type, yoff, rad)) continue;
+        Vec3 c = r.ch.position + Vec3{0.0f, yoff, 0.0f};
+        Vec3 oc = origin - c;
+        float b = dot(oc, dir);
+        float cc = dot(oc, oc) - rad * rad;
+        float disc = b * b - cc;
+        if (disc < 0.0f) continue;
+        float sq = std::sqrt(disc);
+        float tt = -b - sq;
+        if (tt < 0.0f) tt = -b + sq;  // луч стартует внутри сферы
+        if (tt < 0.0f) continue;
+        if (tt < bestT) { bestT = tt; best = r.id; }
+    }
+    selectedId_ = best;  // 0 = мимо -> снять выделение
+}
+
+int Scene::selectedEntityType() const {
+    for (const RemoteEntity& r : remoteEntities_)
+        if (r.id == selectedId_) return (int)r.type;
+    return -1;  // нет выделения или сущность исчезла
+}
+
+const BuildingInfo* Scene::selectedInfo() const {
+    int t = selectedEntityType();
+    if (t < 0) return nullptr;
+    const BuildingInfo& bi = config_.get((EntityType)t);
+    return bi.defined ? &bi : nullptr;
+}
+
+float Scene::selectedAux() const {
+    for (const RemoteEntity& r : remoteEntities_)
+        if (r.id == selectedId_) return r.aux;
+    return 0.0f;
 }

@@ -2,6 +2,7 @@
 #include <android/asset_manager.h>
 #include <android/configuration.h>
 #include <android/input.h>
+#include <android/native_window.h>
 
 #include <chrono>
 #include <cmath>
@@ -52,6 +53,14 @@ struct Engine {
     float accumulator = 0.0f; // накопитель времени для фиксированного тика
     float uiScale = 1.0f;    // масштаб UI по плотности экрана
     GameUiState ui;          // состояние панели — общее с десктопом
+
+    // Касание кадра: pumpInput кормит им ImGui и ЗАПОМИНАЕТ, а в геймплей (джойстик/
+    // пикинг) диспатчим ПОСЛЕ renderFrame — тогда WantCaptureMouse уже посчитан ImGui
+    // по этому касанию (иначе тап по GUI проскакивает и включает джойстик лисы).
+    bool touchHad = false;      // было ли касание-событие в кадре
+    float touchX = 0.0f, touchY = 0.0f;
+    bool touchPressed = false;  // палец на экране (по последнему событию кадра)
+    bool touchDownEdge = false; // был DOWN/POINTER_DOWN (для пикинга)
 };
 
 // Частота симуляции. Рендер идёт быстрее и интерполирует между тиками.
@@ -115,8 +124,9 @@ void handleCmd(android_app* app, int32_t cmd) {
     }
 }
 
-// Ввод касаний -> в игровой слой (сцена вращает камеру). Рендер к вводу не причастен.
-void pumpInput(android_app* app, Scene* scene) {
+// Касания -> ImGui (сразу) + ЗАПОМИНАЕМ в engine. Диспатч в геймплей — после рендера
+// (см. цикл), когда WantCaptureMouse свеж. Рендер к вводу не причастен.
+void pumpInput(android_app* app, Engine* engine) {
     android_input_buffer* input = android_app_swap_input_buffers(app);
     if (input == nullptr) {
         return;
@@ -142,19 +152,22 @@ void pumpInput(android_app* app, Scene* scene) {
                 continue;
         }
 
+        ImGuiIO& io = ImGui::GetIO();
         if (event.pointerCount > 0) {
             const float x = GameActivityPointerAxes_getX(&event.pointers[0]);
             const float y = GameActivityPointerAxes_getY(&event.pointers[0]);
-
-            // Касание -> ImGui как мышь.
-            ImGuiIO& io = ImGui::GetIO();
             io.AddMousePosEvent(x, y);
-            io.AddMouseButtonEvent(0, pressed);
+            engine->touchX = x;
+            engine->touchY = y;
+        }
+        io.AddMouseButtonEvent(0, pressed);
 
-            // Если ImGui «съел» касание (палец на виджете) — не крутим камеру.
-            if (scene != nullptr && !io.WantCaptureMouse) {
-                scene->onPointer(x, y, pressed);
-            }
+        // Запоминаем — в геймплей отдадим после рендера (WantCaptureMouse будет свеж).
+        engine->touchHad = true;
+        engine->touchPressed = pressed;
+        if (actionMasked == AMOTION_EVENT_ACTION_DOWN ||
+            actionMasked == AMOTION_EVENT_ACTION_POINTER_DOWN) {
+            engine->touchDownEdge = true;
         }
     }
     android_app_clear_motion_events(input);
@@ -191,7 +204,7 @@ extern "C" void android_main(android_app* app) {
         }
 
         if (engine.renderer && engine.scene) {
-            pumpInput(app, engine.scene.get());
+            pumpInput(app, &engine);
 
             // Реальная дельта времени кадра.
             auto now = std::chrono::steady_clock::now();
@@ -232,6 +245,25 @@ extern "C" void android_main(android_app* app) {
             frame.ui = [e]() { GameUi::build(e->ui, *e->scene); };
 
             engine.renderer->renderFrame(frame);
+
+            // Диспатч касания в геймплей ПОСЛЕ рендера: NewFrame внутри renderFrame уже
+            // пересчитал WantCaptureMouse по этому касанию. Тап по GUI (WantCaptureMouse)
+            // -> джойстик/пикинг не активируем. Релиз отдаём всегда (чтобы не залипал).
+            if (engine.touchHad && engine.scene) {
+                bool guiOwns = ImGui::GetIO().WantCaptureMouse;
+                if (engine.touchPressed) {
+                    if (!guiOwns) engine.scene->onPointer(engine.touchX, engine.touchY, true);
+                } else {
+                    engine.scene->onPointer(engine.touchX, engine.touchY, false);
+                }
+                if (engine.touchDownEdge && !guiOwns && app->window != nullptr) {
+                    float w = (float)ANativeWindow_getWidth(app->window);
+                    float h = (float)ANativeWindow_getHeight(app->window);
+                    engine.scene->onClick(engine.touchX, engine.touchY, w, h);
+                }
+                engine.touchHad = false;
+                engine.touchDownEdge = false;
+            }
 
             // Переключение бэкенда по кнопке в GameUi: сносим рендер+мир и
             // пересоздаём из того же окна (surface поддерживают оба бэкенда).

@@ -11,6 +11,7 @@
 
 #include "AssetSource.h"
 #include "Font.h"
+#include "GameUi.h"
 #include "Log.h"
 
 // Версия GLSL зависит от платформы: GLES 3.0 на Android, GL 3.3 core на десктопе.
@@ -131,6 +132,7 @@ bool GlRenderer::initGlResources() {
     ImGui::CreateContext();
     ImGui::StyleColorsDark();
     ImGui::GetIO().IniFilename = nullptr;
+    if (assets_ != nullptr) GameUi::loadFont(*assets_);  // кириллический шрифт ДО сборки атласа
     if (!ImGui_ImplOpenGL3_Init(IMGUI_GLSL_VERSION)) {
         LOGE("ImGui_ImplOpenGL3_Init failed");
         return false;

@@ -174,6 +174,26 @@ bool loadSceneDesc(AssetSource& assets, const char* path, SceneDesc& out) {
             }
             out.colliders.push_back(c);
 
+        } else if (cmd == "generator" || cmd == "storage" || cmd == "spawner" || cmd == "core") {
+            // generator pos <x y z> rate <r>  |  storage pos <x y z> cap <c>
+            // spawner   pos <x y z> interval <s> max <n>  |  core pos <x y z>
+            BuildingSpec b;
+            if (cmd == "generator") b.kind = BuildingSpec::Generator;
+            else if (cmd == "storage") b.kind = BuildingSpec::Storage;
+            else if (cmd == "spawner") b.kind = BuildingSpec::Spawner;
+            else b.kind = BuildingSpec::Core;
+            size_t i = 1;
+            while (i < t.size()) {
+                std::string k = t[i++];
+                if (k == "pos") { if (!readVec3(t, i, line, b.pos)) return false; }
+                else if (k == "rate") { if (!readF(t, i, line, b.rate)) return false; }
+                else if (k == "cap") { if (!readF(t, i, line, b.cap)) return false; }
+                else if (k == "interval") { if (!readF(t, i, line, b.rate)) return false; }  // spawner: интервал -> rate
+                else if (k == "max") { if (!readF(t, i, line, b.cap)) return false; }        // spawner: максимум -> cap
+                else { LOGE("scene: строка %d: неизвестный ключ %s '%s'", line, cmd.c_str(), k.c_str()); return false; }
+            }
+            out.buildings.push_back(b);
+
         } else if (cmd == "player") {
             // player model <path> [pos x y z] [scale s] [yaw o] [capsule <radius> <cylHalf>]
             out.player.present = true;
@@ -217,4 +237,85 @@ bool loadSceneDesc(AssetSource& assets, const char* path, SceneDesc& out) {
         }
     }
     return true;
+}
+
+namespace {
+std::string trimSpaces(const std::string& s) {
+    size_t a = s.find_first_not_of(" \t");
+    if (a == std::string::npos) return "";
+    size_t b = s.find_last_not_of(" \t");
+    return s.substr(a, b - a + 1);
+}
+bool typeFromName(const std::string& s, EntityType& out) {
+    if (s == "generator") out = EntityType::Generator;
+    else if (s == "storage") out = EntityType::Storage;
+    else if (s == "spawner") out = EntityType::Spawner;
+    else if (s == "enemy") out = EntityType::Enemy;
+    else if (s == "tower") out = EntityType::Tower;
+    else if (s == "core") out = EntityType::Core;
+    else if (s == "hero") out = EntityType::Hero;
+    else return false;
+    return true;
+}
+}  // namespace
+
+bool loadBuildingConfig(AssetSource& assets, const char* path, BuildingConfig& out) {
+    std::vector<uint8_t> bytes;
+    if (!assets.read(path, bytes)) {
+        LOGW("config: файл не найден: %s (здания на дефолтах)", path);
+        return false;
+    }
+    out = BuildingConfig{};
+
+    std::string text(bytes.begin(), bytes.end());
+    std::istringstream in(text);
+    std::string raw;
+    int line = 0;
+    EntityType cur = EntityType::Hero;
+    bool haveCur = false;
+    // Формат: блок `building <тип>`, затем ключи `name`/`desc` (весь остаток строки —
+    // значение) и `rate`/`cap`/`interval`/`max` (число).
+    while (std::getline(in, raw)) {
+        ++line;
+        if (!raw.empty() && raw.back() == '\r') raw.pop_back();
+        size_t hash = raw.find('#');
+        if (hash != std::string::npos) raw.erase(hash);
+        std::string lt = trimSpaces(raw);
+        if (lt.empty()) continue;
+        size_t sp = lt.find_first_of(" \t");
+        std::string key = (sp == std::string::npos) ? lt : lt.substr(0, sp);
+        std::string val = (sp == std::string::npos) ? "" : trimSpaces(lt.substr(sp + 1));
+
+        if (key == "building") {
+            if (!typeFromName(val, cur)) { LOGE("config: строка %d: неизвестный тип '%s'", line, val.c_str()); return false; }
+            haveCur = true;
+            out.byType[(int)cur].defined = true;
+        } else if (!haveCur) {
+            LOGE("config: строка %d: ключ '%s' вне блока building", line, key.c_str());
+            return false;
+        } else {
+            BuildingInfo& bi = out.byType[(int)cur];
+            if (key == "name") bi.name = val;
+            else if (key == "desc") bi.desc = val;
+            else if (key == "rate" || key == "interval") bi.rate = toF(val);
+            else if (key == "cap" || key == "max") bi.cap = toF(val);
+            else { LOGE("config: строка %d: неизвестный ключ '%s'", line, key.c_str()); return false; }
+        }
+    }
+    return true;
+}
+
+void applyBuildingConfig(SceneDesc& desc, const BuildingConfig& cfg) {
+    for (BuildingSpec& b : desc.buildings) {
+        EntityType t;
+        switch (b.kind) {
+            case BuildingSpec::Generator: t = EntityType::Generator; break;
+            case BuildingSpec::Storage:   t = EntityType::Storage;   break;
+            case BuildingSpec::Spawner:   t = EntityType::Spawner;   break;
+            case BuildingSpec::Core:      t = EntityType::Core;      break;
+            default: continue;
+        }
+        const BuildingInfo& bi = cfg.get(t);
+        if (bi.defined) { b.rate = bi.rate; b.cap = bi.cap; }
+    }
 }

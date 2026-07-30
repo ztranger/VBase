@@ -41,5 +41,6 @@ void Character::simulate(float dt, const InputCommand& in, CollisionWorld* world
     float targetL = (speed01 < 0.02f) ? 0.0f : (1.0f + clamp01((speed01 - 0.5f) / 0.5f));
     animParam += (targetL - animParam) * clamp01(dt * 6.0f);
 
-    animTime += dt;
+    // animTime (фаза проигрывания) НЕ трогаем здесь: simulate зовётся несколько раз за
+    // тик при реплее реконсиляции, и фаза ускорялась бы. Её крутит владелец 1 раз/тик.
 }
