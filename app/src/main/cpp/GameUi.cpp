@@ -1,5 +1,6 @@
 #include "GameUi.h"
 
+#include <cfloat>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -47,13 +48,22 @@ void loadSkin(Renderer& renderer, AssetSource& assets) {
     if (!UiSkin::load(renderer, assets, g_skin)) {
         LOGW("GameUi: skin не загружен — стандартный вид ImGui");
     }
+    // Ресайз окон: с краёв + крупнее hit-zone под палец (Android).
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigWindowsResizeFromEdges = true;
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.TouchExtraPadding = ImVec2(16.0f, 16.0f);
+    style.WindowMinSize = ImVec2(280.0f, 180.0f);
 }
 
 void unloadSkin(Renderer& renderer) { UiSkin::unload(renderer, g_skin); }
 
 void build(GameUiState& state, Scene& scene) {
+    // Шире по умолчанию — на телефоне иначе текст в узкой колонке; размер дальше
+    // меняется жестом/мышью (ресайз не отключаем).
     ImGui::SetNextWindowPos(ImVec2(20, 90), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(420, 680), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(520, 720), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(320, 240), ImVec2(FLT_MAX, FLT_MAX));
     if (g_skin.ready) {
         UiSkin::BeginPanel("VBase", g_skin);
     } else {
@@ -159,13 +169,12 @@ void build(GameUiState& state, Scene& scene) {
     const BuildingInfo* info = scene.selectedInfo();
     if (selType >= 0 && info != nullptr) {
         ImGui::SetNextWindowPos(ImVec2(400, 90), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(340, 0), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(440, 320), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSizeConstraints(ImVec2(280, 180), ImVec2(FLT_MAX, FLT_MAX));
         std::string title = (info->name.empty() ? "Здание" : info->name) + "###buildInfoPanel";
         bool open = true;
-        if (g_skin.ready)
-            UiSkin::BeginPanel(title.c_str(), g_skin, &open, ImGuiWindowFlags_AlwaysAutoResize);
-        else
-            ImGui::Begin(title.c_str(), &open, ImGuiWindowFlags_AlwaysAutoResize);
+        if (g_skin.ready) UiSkin::BeginPanel(title.c_str(), g_skin, &open);
+        else ImGui::Begin(title.c_str(), &open);
         if (!info->desc.empty()) ImGui::TextWrapped("%s", info->desc.c_str());
         ImGui::Separator();
         switch ((EntityType)selType) {

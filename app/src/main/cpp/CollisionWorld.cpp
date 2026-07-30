@@ -171,7 +171,14 @@ void CollisionWorld::removeCharacter(ColliderCharId id) {
 
 void CollisionWorld::setCharacterPosition(ColliderCharId id, Vec3 pos) {
     auto it = impl_->characters.find(id);
-    if (it != impl_->characters.end()) it->second->SetPosition(toJR(pos));
+    if (it == impl_->characters.end()) return;
+    J::CharacterVirtual* cv = it->second;
+    cv->SetPosition(toJR(pos));
+    // Пересчитываем контакты/ground-state на НОВОЙ позиции. Иначе после телепорта
+    // (реконсиляция) контроллер держит старое состояние от предсказанной позиции, и
+    // первый Update реплея считает движение иначе — прыжок/движение дрожат каждый снапшот.
+    cv->RefreshContacts(J::BroadPhaseLayerFilter{}, J::ObjectLayerFilter{},
+                        J::BodyFilter{}, J::ShapeFilter{}, impl_->tempAllocator);
 }
 
 Vec3 CollisionWorld::characterPosition(ColliderCharId id) const {
@@ -191,8 +198,8 @@ constexpr float kGravity = 18.0f;    // ускорение свободного 
 constexpr float kJumpSpeed = 6.0f;   // стартовая скорость прыжка (~1 world высоты)
 }  // namespace
 
-Vec3 CollisionWorld::moveCharacter(ColliderCharId id, Vec3 horizontalVelocity, bool jump,
-                                   float dt) {
+Vec3 CollisionWorld::moveCharacter(ColliderCharId id, Vec3 horizontalVelocity, float& velY,
+                                   bool jump, float dt) {
     auto it = impl_->characters.find(id);
     if (it == impl_->characters.end()) return Vec3{0.0f, 0.0f, 0.0f};
     J::CharacterVirtual* cv = it->second;
@@ -200,16 +207,18 @@ Vec3 CollisionWorld::moveCharacter(ColliderCharId id, Vec3 horizontalVelocity, b
     const J::Vec3 up(0.0f, 1.0f, 0.0f);
     bool onGround = cv->GetGroundState() == J::CharacterBase::EGroundState::OnGround;
 
-    // Вертикальная скорость: на земле обнуляем (не копим падение), в воздухе — держим.
-    float vy = cv->GetLinearVelocity().Dot(up);
-    if (onGround && vy <= 0.1f) vy = 0.0f;
-    vy -= kGravity * dt;                       // гравитация каждый тик
-    if (jump && onGround) vy = kJumpSpeed;     // прыжок только с земли
+    // Вертикальная скорость приходит от владельца (Character.velocityY) — не из
+    // контроллера. Так она реконсилируется: сервер шлёт её, клиент ставит перед реплеем,
+    // и реплей в точности воспроизводит предсказание (иначе прыжок дёргается онлайн).
+    if (onGround && velY <= 0.1f) velY = 0.0f;  // на земле не копим падение
+    velY -= kGravity * dt;                      // гравитация каждый тик
+    if (jump && onGround) velY = kJumpSpeed;    // прыжок только с земли
 
-    J::Vec3 velocity = toJ(horizontalVelocity) + up * vy;
+    J::Vec3 velocity = toJ(horizontalVelocity) + up * velY;
     cv->SetLinearVelocity(velocity);
     // Фильтры по умолчанию пропускают всё — сталкиваемся со всей статикой мира.
     cv->Update(dt, up * -kGravity, J::BroadPhaseLayerFilter{}, J::ObjectLayerFilter{},
                J::BodyFilter{}, J::ShapeFilter{}, impl_->tempAllocator);
+    velY = cv->GetLinearVelocity().Dot(up);  // пост-коллизия (обнулилось о землю/потолок)
     return fromJ(cv->GetPosition());
 }

@@ -298,6 +298,8 @@ void Scene::applySnapshot() {
             player_.facingYaw = s.yaw;
             player_.speed01 = s.speed01;
             player_.animParam = s.animParam;
+            player_.velocityY = s.velY;  // вертикаль тоже сбрасываем на серверную —
+            // иначе реплей считает прыжок от чужой скорости и он дёргается.
             // Синхронизируем контроллер с авторитетной позицией перед реплеем,
             // иначе collide-and-slide стартует от устаревшей внутренней позиции.
             if (collision_ && player_.collider != 0) {

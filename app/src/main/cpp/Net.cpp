@@ -63,6 +63,7 @@ bool stateChanged(const EntityState& a, const EntityState& b) {
            std::fabs(a.x - b.x) > e || std::fabs(a.y - b.y) > e ||
            std::fabs(a.z - b.z) > e || std::fabs(a.yaw - b.yaw) > e ||
            std::fabs(a.animParam - b.animParam) > e || std::fabs(a.speed01 - b.speed01) > e ||
+           std::fabs(a.velY - b.velY) > e ||
            std::fabs(a.hp - b.hp) > e || std::fabs(a.aux - b.aux) > e;
 }
 
@@ -533,7 +534,8 @@ void NetServer::tick(float dt) {
                     e.move.facingYaw = std::atan2(dir.x, dir.z);
                 }
                 if (impl_->world && e.move.collider != 0)
-                    e.move.position = impl_->world->moveCharacter(e.move.collider, vel, false, dt);
+                    e.move.position =
+                        impl_->world->moveCharacter(e.move.collider, vel, e.move.velocityY, false, dt);
                 else
                     e.move.position = e.move.position + vel * dt;
             }
@@ -554,6 +556,7 @@ void NetServer::tick(float dt) {
         s.yaw = e.move.facingYaw;
         s.animParam = e.move.animParam;
         s.speed01 = e.move.speed01;
+        s.velY = e.move.velocityY;
         s.hp = e.hp;
         s.aux = e.aux;
     }

@@ -33,6 +33,7 @@ struct EntityState {
     float yaw = 0.0f;
     float animParam = 0.0f;
     float speed01 = 0.0f;
+    float velY = 0.0f;     // вертикальная скорость (для реконсиляции прыжка на клиенте)
     float hp = 0.0f;       // здоровье (герой/враг/здание); 0 = не используется
     float aux = 0.0f;      // generic-слот по типу: ресурс в хранилище, прогресс, …
 };

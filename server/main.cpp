@@ -42,25 +42,28 @@ int runPhysicsSelfTest() {
 
     // 1) Лобовое: скорость строго +X ~1.5 c. Должен упереться около x≈1.45 (1.75 - r).
     ColliderCharId a = world.addCharacter(Vec3{0.0f, 0.0f, 0.0f}, r, cyl);
-    for (int i = 0; i < 90; ++i) world.moveCharacter(a, Vec3{5.0f, 0.0f, 0.0f}, false, dt);
+    float vyA = 0.0f;
+    for (int i = 0; i < 90; ++i) world.moveCharacter(a, Vec3{5.0f, 0.0f, 0.0f}, vyA, false, dt);
     Vec3 pa = world.characterPosition(a);
 
     // 2) По диагонали в стену (+X,+Z): X должен упереться, Z — заметно вырасти (скольжение).
     ColliderCharId b = world.addCharacter(Vec3{0.0f, 0.0f, -2.0f}, r, cyl);
-    for (int i = 0; i < 90; ++i) world.moveCharacter(b, Vec3{5.0f, 0.0f, 5.0f}, false, dt);
+    float vyB = 0.0f;
+    for (int i = 0; i < 90; ++i) world.moveCharacter(b, Vec3{5.0f, 0.0f, 5.0f}, vyB, false, dt);
     Vec3 pb = world.characterPosition(b);
 
     // 3) Прыжок: сначала «прогрев» на земле (у свежего контроллера ground-state
     // становится OnGround лишь после первого Update), затем jump с земли.
     ColliderCharId c = world.addCharacter(Vec3{-4.0f, 0.0f, 0.0f}, r, cyl);
-    for (int i = 0; i < 10; ++i) world.moveCharacter(c, Vec3{0.0f, 0.0f, 0.0f}, false, dt);
-    world.moveCharacter(c, Vec3{0.0f, 0.0f, 0.0f}, true, dt);  // прыжок с земли
+    float vyC = 0.0f;
+    for (int i = 0; i < 10; ++i) world.moveCharacter(c, Vec3{0.0f, 0.0f, 0.0f}, vyC, false, dt);
+    world.moveCharacter(c, Vec3{0.0f, 0.0f, 0.0f}, vyC, true, dt);  // прыжок с земли
     float apex = 0.0f;
     for (int i = 0; i < 15; ++i) {  // ~0.25 c вверх — ловим верхнюю точку
-        Vec3 p = world.moveCharacter(c, Vec3{0.0f, 0.0f, 0.0f}, false, dt);
+        Vec3 p = world.moveCharacter(c, Vec3{0.0f, 0.0f, 0.0f}, vyC, false, dt);
         if (p.y > apex) apex = p.y;
     }
-    for (int i = 0; i < 90; ++i) world.moveCharacter(c, Vec3{0.0f, 0.0f, 0.0f}, false, dt);  // падение
+    for (int i = 0; i < 90; ++i) world.moveCharacter(c, Vec3{0.0f, 0.0f, 0.0f}, vyC, false, dt);  // падение
     Vec3 pc = world.characterPosition(c);
 
     std::printf("[SelfTest] лоб:    x=%.3f z=%.3f (ждём x<1.6, стоп у стены)\n",

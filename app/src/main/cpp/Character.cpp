@@ -32,7 +32,8 @@ void Character::simulate(float dt, const InputCommand& in, CollisionWorld* world
 
     if (world != nullptr && collider != 0) {
         // Контроллер прогоняем КАЖДЫЙ тик (гравитация/земля/прыжок), даже стоя на месте.
-        position = world->moveCharacter(collider, horizVel, in.jump, dt);
+        // velocityY — наше состояние (реконсилируется), контроллер её только применяет.
+        position = world->moveCharacter(collider, horizVel, velocityY, in.jump, dt);
     } else {
         position = position + horizVel * dt;  // fallback без коллизий/гравитации
     }
