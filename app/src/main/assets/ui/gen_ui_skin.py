@@ -1,9 +1,22 @@
-"""Generate UiSkin PNG assets (9-slice panel + button states)."""
+"""Generate UiSkin PNG assets (9-slice panel + button states).
+
+Palette: docs/UI_PALETTE.md (TD × Orcs Must Die — warm stone + amber CTA).
+"""
 from pathlib import Path
 
 from PIL import Image, ImageDraw
 
 OUT = Path(__file__).resolve().parent
+
+# --- palette (see docs/UI_PALETTE.md) ---
+VOID = (26, 20, 16)          # #1A1410
+PANEL = (42, 34, 28)         # #2A221C
+STONE = (74, 63, 53)         # #4A3F35
+STONE_LIGHT = (122, 106, 88) # #7A6A58
+COPPER_RIM = (196, 165, 116) # #C4A574
+AMBER = (232, 161, 58)       # #E8A13A
+AMBER_HOVER = (240, 185, 90) # #F0B95A
+AMBER_PRESS = (196, 132, 34) # #C48422
 
 
 def lerp(a: int, b: int, t: float) -> int:
@@ -13,10 +26,10 @@ def lerp(a: int, b: int, t: float) -> int:
 def make_panel(size: int = 128, border: int = 32) -> None:
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     px = img.load()
-    rim = (110, 175, 255, 255)
-    frame_hi = (48, 78, 130, 255)
-    frame_lo = (22, 36, 62, 255)
-    fill = (10, 14, 26, 220)
+    rim = (*COPPER_RIM, 255)
+    frame_hi = (*STONE_LIGHT, 255)
+    frame_lo = (*STONE, 255)
+    fill = (*VOID, 220)
 
     for y in range(size):
         for x in range(size):
@@ -38,13 +51,14 @@ def make_panel(size: int = 128, border: int = 32) -> None:
                 )
                 hl = (x + y) / (2 * size)
                 px[x, y] = (
-                    min(255, int(c[0] + 18 * hl)),
-                    min(255, int(c[1] + 22 * hl)),
-                    min(255, int(c[2] + 30 * hl)),
+                    min(255, int(c[0] + 22 * hl)),
+                    min(255, int(c[1] + 16 * hl)),
+                    min(255, int(c[2] + 8 * hl)),
                     255,
                 )
 
     draw = ImageDraw.Draw(img)
+    bolt = (*AMBER, 255)
     for cx, cy in (
         (border // 2, border // 2),
         (size - border // 2 - 1, border // 2),
@@ -53,6 +67,7 @@ def make_panel(size: int = 128, border: int = 32) -> None:
     ):
         r = 5
         draw.ellipse([cx - r, cy - r, cx + r, cy + r], outline=rim, width=2)
+        draw.ellipse([cx - 2, cy - 2, cx + 2, cy + 2], fill=bolt)
 
     path = OUT / "panel.png"
     img.save(path)
@@ -85,7 +100,7 @@ def make_button(name: str, base_rgb: tuple[int, int, int], w: int = 128, h: int 
 
     spec = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     ImageDraw.Draw(spec).rounded_rectangle(
-        [4, 3, w - 5, h // 2], radius=max(1, radius - 2), fill=(255, 255, 255, 55)
+        [4, 3, w - 5, h // 2], radius=max(1, radius - 2), fill=(255, 248, 230, 50)
     )
     spec_a = Image.composite(spec.split()[-1], Image.new("L", (w, h), 0), mask)
     spec.putalpha(spec_a)
@@ -93,10 +108,15 @@ def make_button(name: str, base_rgb: tuple[int, int, int], w: int = 128, h: int 
 
     border = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     bd = ImageDraw.Draw(border)
-    rim = (min(255, r0 + 90), min(255, g0 + 90), min(255, b0 + 110), 230)
+    rim = (
+        min(255, r0 + 40),
+        min(255, g0 + 35),
+        min(255, b0 + 20),
+        230,
+    )
     bd.rounded_rectangle([1, 1, w - 2, h - 2], radius=radius, outline=rim, width=2)
     bd.rounded_rectangle(
-        [3, 3, w - 4, h - 4], radius=max(1, radius - 2), outline=(0, 0, 0, 70), width=1
+        [3, 3, w - 4, h - 4], radius=max(1, radius - 2), outline=(26, 20, 16, 90), width=1
     )
     img = Image.alpha_composite(img, border)
 
@@ -107,7 +127,7 @@ def make_button(name: str, base_rgb: tuple[int, int, int], w: int = 128, h: int 
 
 if __name__ == "__main__":
     make_panel(128, 32)
-    make_button("button_normal.png", (45, 110, 190))
-    make_button("button_hover.png", (70, 150, 235))
-    make_button("button_active.png", (28, 75, 145))
+    make_button("button_normal.png", AMBER)
+    make_button("button_hover.png", AMBER_HOVER)
+    make_button("button_active.png", AMBER_PRESS)
     print("done")

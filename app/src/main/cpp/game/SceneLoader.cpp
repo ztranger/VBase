@@ -174,13 +174,16 @@ bool loadSceneDesc(AssetSource& assets, const char* path, SceneDesc& out) {
             }
             out.colliders.push_back(c);
 
-        } else if (cmd == "generator" || cmd == "storage" || cmd == "spawner" || cmd == "core") {
+        } else if (cmd == "generator" || cmd == "storage" || cmd == "spawner" ||
+                   cmd == "core" || cmd == "tower") {
             // generator pos <x y z> rate <r>  |  storage pos <x y z> cap <c>
             // spawner   pos <x y z> interval <s> max <n>  |  core pos <x y z>
+            // tower     pos <x y z>   (параметры damage/range/interval — из конфига)
             BuildingSpec b;
             if (cmd == "generator") b.kind = BuildingSpec::Generator;
             else if (cmd == "storage") b.kind = BuildingSpec::Storage;
             else if (cmd == "spawner") b.kind = BuildingSpec::Spawner;
+            else if (cmd == "tower") b.kind = BuildingSpec::Tower;
             else b.kind = BuildingSpec::Core;
             size_t i = 1;
             while (i < t.size()) {
@@ -188,8 +191,11 @@ bool loadSceneDesc(AssetSource& assets, const char* path, SceneDesc& out) {
                 if (k == "pos") { if (!readVec3(t, i, line, b.pos)) return false; }
                 else if (k == "rate") { if (!readF(t, i, line, b.rate)) return false; }
                 else if (k == "cap") { if (!readF(t, i, line, b.cap)) return false; }
-                else if (k == "interval") { if (!readF(t, i, line, b.rate)) return false; }  // spawner: интервал -> rate
+                else if (k == "interval") { if (!readF(t, i, line, b.rate)) return false; }  // spawner/tower: интервал -> rate
                 else if (k == "max") { if (!readF(t, i, line, b.cap)) return false; }        // spawner: максимум -> cap
+                else if (k == "hp") { if (!readF(t, i, line, b.hp)) return false; }          // core
+                else if (k == "damage") { if (!readF(t, i, line, b.damage)) return false; }  // tower
+                else if (k == "range") { if (!readF(t, i, line, b.range)) return false; }    // tower
                 else { LOGE("scene: строка %d: неизвестный ключ %s '%s'", line, cmd.c_str(), k.c_str()); return false; }
             }
             out.buildings.push_back(b);
@@ -299,6 +305,9 @@ bool loadBuildingConfig(AssetSource& assets, const char* path, BuildingConfig& o
             else if (key == "desc") bi.desc = val;
             else if (key == "rate" || key == "interval") bi.rate = toF(val);
             else if (key == "cap" || key == "max") bi.cap = toF(val);
+            else if (key == "hp") bi.hp = toF(val);
+            else if (key == "damage") bi.damage = toF(val);
+            else if (key == "range") bi.range = toF(val);
             else { LOGE("config: строка %d: неизвестный ключ '%s'", line, key.c_str()); return false; }
         }
     }
@@ -312,10 +321,24 @@ void applyBuildingConfig(SceneDesc& desc, const BuildingConfig& cfg) {
             case BuildingSpec::Generator: t = EntityType::Generator; break;
             case BuildingSpec::Storage:   t = EntityType::Storage;   break;
             case BuildingSpec::Spawner:   t = EntityType::Spawner;   break;
+            case BuildingSpec::Tower:     t = EntityType::Tower;     break;
             case BuildingSpec::Core:      t = EntityType::Core;      break;
             default: continue;
         }
         const BuildingInfo& bi = cfg.get(t);
-        if (bi.defined) { b.rate = bi.rate; b.cap = bi.cap; }
+        if (bi.defined) {
+            b.rate = bi.rate;
+            b.cap = bi.cap;
+            b.hp = bi.hp;
+            b.damage = bi.damage;
+            b.range = bi.range;
+        }
+    }
+    // Боевые статы врага (враг не размещается в сцене — берём из блока `building enemy`).
+    const BuildingInfo& en = cfg.get(EntityType::Enemy);
+    if (en.defined) {
+        if (en.hp > 0.0f) desc.enemy.hp = en.hp;
+        if (en.damage > 0.0f) desc.enemy.damage = en.damage;
+        if (en.rate > 0.0f) desc.enemy.attackInterval = en.rate;
     }
 }

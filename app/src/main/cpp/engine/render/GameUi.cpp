@@ -96,6 +96,10 @@ void build(GameUiState& state, Scene& scene) {
     ImGui::SeparatorText("Base");
     ImGui::Text("Resource: %.0f / %.0f", (double)scene.resourceCurrent(),
                 (double)scene.resourceCap());
+    float chp = scene.coreHp();
+    if (chp >= 0.0f) {
+        ImGui::Text("Ядро: %.0f / %.0f", (double)chp, (double)scene.coreMaxHp());
+    }
 
     ImGui::SeparatorText("Character");
     ImGui::Text("Speed: %.2f", (double)scene.characterSpeed());
@@ -189,6 +193,17 @@ void build(GameUiState& state, Scene& scene) {
                 ImGui::Text("Интервал: %.1f с", (double)info->rate);
                 ImGui::Text("Максимум врагов: %.0f", (double)info->cap);
                 break;
+            case EntityType::Tower:
+                ImGui::Text("Урон: %.0f / выстрел", (double)info->damage);
+                ImGui::Text("Радиус: %.1f", (double)info->range);
+                ImGui::Text("Интервал: %.2f с", (double)info->rate);
+                break;
+            case EntityType::Core: {
+                float ch = scene.coreHp();
+                ImGui::Text("Здоровье: %.0f / %.0f", (double)(ch < 0.0f ? 0.0f : ch),
+                            (double)info->hp);
+                break;
+            }
             default:
                 break;
         }
@@ -196,6 +211,22 @@ void build(GameUiState& state, Scene& scene) {
         if (g_skin.ready) UiSkin::EndPanel();
         else ImGui::End();
         if (!open) scene.clearSelection();
+    }
+
+    // Баннер исхода матча по центру экрана (крупный текст поверх всего).
+    int phase = scene.matchPhase();
+    if (phase != 0) {  // 1 = победа, 2 = поражение
+        const char* msg = (phase == 1) ? "ПОБЕДА" : "ПОРАЖЕНИЕ";
+        ImU32 col = (phase == 1) ? IM_COL32(120, 230, 120, 255) : IM_COL32(240, 90, 80, 255);
+        ImDrawList* dl = ImGui::GetForegroundDrawList();
+        ImGuiIO& io = ImGui::GetIO();
+        float scale = 3.0f;
+        float fs = ImGui::GetFontSize() * scale;
+        ImVec2 ts = ImGui::CalcTextSize(msg);
+        ImVec2 pos(io.DisplaySize.x * 0.5f - ts.x * scale * 0.5f,
+                   io.DisplaySize.y * 0.32f - fs * 0.5f);
+        dl->AddText(ImGui::GetFont(), fs, ImVec2(pos.x + 3, pos.y + 3), IM_COL32(0, 0, 0, 200), msg);
+        dl->AddText(ImGui::GetFont(), fs, pos, col, msg);
     }
 
     // Виртуальный джойстик поверх всего (появляется под пальцем на тач-экране;

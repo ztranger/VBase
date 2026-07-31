@@ -162,6 +162,13 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
         md.baseColor = {0.85f, 0.25f, 0.25f};  // враг — красный
         enemyMat_ = renderer.createMaterial(md);
     }
+    towerMesh_ = renderer.createMesh(makeCube(0.9f));
+    {
+        MaterialDesc md;
+        md.shader = ShaderType::Phong;
+        md.baseColor = {0.70f, 0.72f, 0.78f};  // башня — стальная (с бликом)
+        towerMat_ = renderer.createMaterial(md);
+    }
 
     // --- Статичные коллайдеры физики (из описания сцены) ---
     for (const ColliderSpec& cs : desc.colliders) {
@@ -333,6 +340,7 @@ void Scene::applySnapshot() {
         r->type = s.type;
         r->team = s.team;
         r->aux = s.aux;  // ресурс в хранилище и т.п. (последнее значение)
+        r->hp = s.hp;    // здоровье (ядро/враг)
         r->buffer.push_back({simClock_, {s.x, s.y, s.z}, s.yaw, s.animParam});
         // Ограничиваем историю (~1 сек), чтобы буфер не рос.
         while (r->buffer.size() > 2 && r->buffer[1].t < simClock_ - 1.0) {
@@ -460,6 +468,10 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
                 frame.items.push_back(
                     {coreMesh_, coreMat_, Mat4::translation(r.ch.position + Vec3{0.0f, 1.0f, 0.0f})});
                 break;
+            case EntityType::Tower:
+                frame.items.push_back(
+                    {towerMesh_, towerMat_, Mat4::translation(r.ch.position + Vec3{0.0f, 0.9f, 0.0f})});
+                break;
             case EntityType::Enemy:
                 frame.items.push_back(
                     {enemyMesh_, enemyMat_, Mat4::translation(r.ch.position + Vec3{0.0f, 0.35f, 0.0f})});
@@ -492,6 +504,16 @@ float Scene::resourceCap() const {
     return sum;
 }
 
+int Scene::matchPhase() const { return (int)client_.gamePhase(); }
+
+float Scene::coreHp() const {
+    for (const RemoteEntity& r : remoteEntities_)
+        if ((EntityType)r.type == EntityType::Core) return r.hp;
+    return -1.0f;  // ядра нет в снапшотах (не подключены / соло без сети)
+}
+
+float Scene::coreMaxHp() const { return config_.get(EntityType::Core).hp; }
+
 namespace {
 // Сфера для пикинга по типу: смещение центра вверх (как в рендере) + радиус.
 // Возвращает false для не выбираемых типов (герой и пр.).
@@ -501,6 +523,7 @@ bool pickBounds(EntityType t, float& yoff, float& rad) {
         case EntityType::Storage:   yoff = 0.7f;  rad = 1.2f; return true;
         case EntityType::Spawner:   yoff = 0.6f;  rad = 1.1f; return true;
         case EntityType::Core:      yoff = 1.0f;  rad = 1.3f; return true;
+        case EntityType::Tower:     yoff = 0.9f;  rad = 1.0f; return true;
         case EntityType::Enemy:     yoff = 0.35f; rad = 0.6f; return true;
         default: return false;
     }

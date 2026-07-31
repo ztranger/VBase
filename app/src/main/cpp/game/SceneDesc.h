@@ -61,12 +61,23 @@ struct ColliderSpec {
 // Статичная сущность базы, заданная в сцене (сервер спавнит из неё сущность).
 // Generator капает ресурс (rate/сек) в пул с потолком (сумма cap хранилищ);
 // Spawner по таймеру (rate = интервал, сек) плодит врагов (cap = максимум);
-// Core — ядро базы, цель для врагов.
+// Core — ядро базы, цель для врагов (hp = здоровье);
+// Tower — башня-защита (rate = интервал выстрела, damage = урон, range = радиус).
 struct BuildingSpec {
-    enum Kind { Generator, Storage, Spawner, Core } kind = Generator;
+    enum Kind { Generator, Storage, Spawner, Core, Tower } kind = Generator;
     Vec3 pos{0.0f, 0.0f, 0.0f};
-    float rate = 0.0f;  // generator: ресурс/сек; spawner: интервал спавна, сек
-    float cap = 0.0f;   // storage: ёмкость; spawner: макс. врагов
+    float rate = 0.0f;    // generator: ресурс/сек; spawner: интервал спавна; tower: интервал выстрела
+    float cap = 0.0f;     // storage: ёмкость; spawner: макс. врагов
+    float hp = 0.0f;      // core: здоровье
+    float damage = 0.0f;  // tower: урон за выстрел
+    float range = 0.0f;   // tower: радиус поражения
+};
+
+// Боевые параметры врага (враги не в сцене — их плодит спавнер; статы из конфига).
+struct EnemySpec {
+    float hp = 10.0f;             // здоровье
+    float damage = 5.0f;          // урон по ядру за удар
+    float attackInterval = 1.0f;  // секунд между ударами по ядру
 };
 
 struct PlayerSpec {
@@ -95,7 +106,8 @@ struct SceneDesc {
     std::vector<MeshSpec> meshes;
     std::vector<ObjectSpec> objects;  // включая кольцевые (ring=true)
     std::vector<ColliderSpec> colliders;  // статичная геометрия для физики
-    std::vector<BuildingSpec> buildings;  // здания базы (генераторы/хранилища)
+    std::vector<BuildingSpec> buildings;  // здания базы (генераторы/хранилища/башни/ядро)
+    EnemySpec enemy;                      // боевые статы врага (из конфига)
     PlayerSpec player;
     CameraSpec camera;
     Vec3 lightDir{0.4f, 1.0f, 0.6f};  // направление НА источник света

@@ -57,6 +57,7 @@ add_library(vbase SHARED
         engine/assets/Model.cpp
         game/Character.cpp
         engine/net/Net.cpp
+        game/GameWorld.cpp
         game/Scene.cpp
         game/SceneLoader.cpp
         engine/physics/CollisionWorld.cpp

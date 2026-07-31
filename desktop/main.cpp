@@ -31,7 +31,7 @@
 
 namespace {
 
-constexpr float kTick = 1.0f / 30.0f;
+constexpr float kTick = kTickDt;  // единый шаг симуляции (из engine/net/Net.h)
 
 int keyAxis(GLFWwindow* w, int pos, int neg) {
     int v = 0;

@@ -92,6 +92,7 @@
   `python app/src/main/assets/ui/gen_ui_skin.py`.
   **Как рисовать PNG под 9-slice** (размеры, 25% border, чеклист) —
   отдельный гайд: [UI_SKIN.md](UI_SKIN.md).
+  **Цвета меню/кнопок/мира** (TD × OMD): [UI_PALETTE.md](UI_PALETTE.md).
 
 Шейдеры GL лежат ассетами в **`app/src/main/assets/shaders/`** (`*.vert`/`*.frag` +
 `common.glsl`) и грузятся через `AssetSource` (`GlRenderer::init` его получает).
@@ -108,16 +109,31 @@ NB: не путать с `app/src/main/cpp/shaders/` — там GLSL-исход�
 
 ## 4. Неткод
 
-- **Фиксированный тик** 30 Гц (`kTick` в `main.cpp` / десктоп), рендер интерполирует
+- **Транспорт vs игра разделены.** `NetServer` (`engine/net/Net.*`) — ЧИСТЫЙ транспорт:
+  ENet-события → вызовы `GameWorld`, затем сериализация состояния в дельта-снапшоты.
+  Вся авторитетная симуляция (сущности + системы: движение, экономика, спавнеры, враги,
+  дальше бой) — в `GameWorld` (`game/GameWorld.*`), БЕЗ ENet. Поэтому геймплей
+  тестируется headless (server `--selftest`) и не тонет в сетевом коде. Правило: новые
+  игровые системы добавляются в `GameWorld::step`, а не в `NetServer::tick`.
+- **Фиксированный тик** `kTickHz` = 30 Гц — единый источник `kTickDt` в `engine/net/Net.h`
+  (десктоп-цикл `kTick`, серверный цикл, `Scene::tickDt_` — все ссылаются на него; клиент
+  интерполирует чужих по этому шагу, рассинхрон частот = дрейф). Рендер интерполирует
   между тиками (`alpha`).
 - **Свой аватар**: предсказание (локальный `simulate`) + **reconciliation с реплеем**
   — по снапшоту ставим серверное состояние и переигрываем неподтверждённые вводы
   (`Scene::applySnapshot`, буфер `pending_`).
 - **Чужие**: **буфер снапшотов + интерполяция** с задержкой ~100 мс
   (`Scene::render`, `TimedState`).
-- **Протокол** (`Net.cpp`): `Welcome{entityId}`, `Input{seq,move,mag,face,jump,ackTick}`,
-  `Snapshot{tick,baseTick,ackSeq,changed[],removed[]}`. POD, `memcpy` (обе стороны ARM/x64,
-  little-endian — для кроссплатформы нужна явная сериализация).
+- **Протокол** (`Net.cpp`): `Welcome{protocolVersion,entityId}`,
+  `Input{seq,move,mag,face,jump,ackTick}`,
+  `Snapshot{tick,baseTick,ackSeq,changed[],removed[],phase}` (`phase` = `GamePhase` матча,
+  глобально). POD, `memcpy` (обе стороны ARM/x64, little-endian — для кроссплатформы нужна
+  явная сериализация).
+- **Версия протокола** (`kProtocolVersion` в `Net.h`): клиент передаёт её как connect-data,
+  сервер сверяет на CONNECT и отклоняет несовпадение ещё ДО спавна героя (+ дублирует в
+  Welcome для проверки клиентом). **БАМПАТЬ при любом изменении раскладки сетевых структур**
+  (Welcome/Input/Snapshot/`EntityState`) — иначе рассинхрон ABI между отдельно собранными
+  билдами Android/десктоп = порча памяти, а не понятная ошибка.
 - **Delta-сжатие снапшотов** (Quake3-подход): сервер шлёт изменения относительно
   подтверждённого клиентом тика (`Input.ackTick`), а не полный список. Кольцо истории
   снапшотов (64 тика) на обеих сторонах: сервер — база для дельт, клиент — чтобы применить
@@ -146,8 +162,8 @@ app/src/main/cpp/
     render/  GlRenderer.* GlApi.h VkApi.* VulkanRenderer.* VulkanProbe.* GameUi.* UiSkin.*
     assets/  Assets.* AssetSource.h FileAssetSource.h Model.* Mesh.* Font.*
     physics/ CollisionWorld.*   обёртка Jolt (pimpl, Jolt не течёт в заголовок)
-    net/     Net.*              транспорт ENet + авторитетный серверный тик (+геймплей, см. ниже)
-  game/      Scene.* Character.* SceneDesc.h BuildingConfig.h SceneLoader.*
+    net/     Net.*              ЧИСТЫЙ транспорт ENet (кормит GameWorld, сериализует снапшоты)
+  game/      GameWorld.* Scene.* Character.* SceneDesc.h BuildingConfig.h SceneLoader.*
 ```
 
 Слои по смыслу:
@@ -163,16 +179,18 @@ app/src/main/cpp/
   `Model.*`, `Mesh.*`, `Font.*`.
 - **engine/physics** — `CollisionWorld.*`: статика арены + кинематические капсулы
   (`CharacterVirtual`). `Character::simulate` двигает через неё; см. NEXT_STEPS §2.5.
-- **engine/net** — `Net.*`: транспорт ENet + авторитетный серверный `tick()`. Сейчас
-  тик содержит и игровую логику (экономика/спавнеры/сущности) — известный шов, при
-  разрастании геймплея логику стоит вынести в `game/`.
-- **game** — геймплей: `Scene.*` (клиентский мир, предсказание, реконсиляция, рендер-
-  диспетч), `Character.*` (POD-симуляция героя/врага), `SceneDesc.h`/`SceneLoader.*`
-  (описание+парсер сцены), `BuildingConfig.h` (типы зданий: параметры+тексты).
+- **engine/net** — `Net.*`: ЧИСТЫЙ транспорт ENet. `NetServer` кормит `GameWorld` вводом
+  (`setHeroInput`), двигает (`step`) и сериализует его состояние в дельта-снапшоты;
+  игровой логики в `Net.cpp` больше нет. `NetClient` — приём снапшотов/реконструкция.
+- **game** — геймплей: `GameWorld.*` (авторитетная серверная симуляция БЕЗ сети:
+  `Entity` + системы движения/экономики/спавнеров/врагов, дальше бой), `Scene.*`
+  (клиентский мир, предсказание, реконсиляция, рендер-диспетч), `Character.*`
+  (POD-симуляция героя/врага), `SceneDesc.h`/`SceneLoader.*` (описание+парсер сцены),
+  `BuildingConfig.h` (типы зданий: параметры+тексты).
 
 Что нужно каждой цели (общий код лежит в `app/.../cpp`, компилируется прямо из него):
-- **server** (headless): `engine/net/Net`, `game/Character`, `engine/physics/CollisionWorld`,
-  `game/SceneLoader` + enet.
+- **server** (headless): `engine/net/Net`, `game/GameWorld`, `game/Character`,
+  `engine/physics/CollisionWorld`, `game/SceneLoader` + enet.
 - **desktop**: то же + `engine/render/*`, `engine/assets/*`, `game/Scene` + imgui/glfw.
 - **Android**: всё + `platform/main.cpp`.
 

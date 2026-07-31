@@ -29,6 +29,7 @@ void putPixel(TextureData& t, uint32_t x, uint32_t y, uint8_t r, uint8_t g, uint
 }
 
 TextureData makePanelTexture() {
+    // Fallback, если нет assets/ui/panel.png. Палитра: docs/UI_PALETTE.md
     const uint32_t S = 64;
     const uint32_t B = 16;
     TextureData t;
@@ -43,10 +44,10 @@ TextureData makePanelTexture() {
                                  (x >= B - 2 && x < B) || (y >= B - 2 && y < B) ||
                                  (x >= S - B && x < S - B + 2) ||
                                  (y >= S - B && y < S - B + 2);
-                if (rim) putPixel(t, x, y, 90, 140, 210, 255);
-                else putPixel(t, x, y, 28, 42, 68, 255);
+                if (rim) putPixel(t, x, y, 196, 165, 116, 255);  // copper rim
+                else putPixel(t, x, y, 74, 63, 53, 255);         // stone
             } else {
-                putPixel(t, x, y, 12, 16, 28, 210);
+                putPixel(t, x, y, 26, 20, 16, 220);  // void fill
             }
         }
     }
@@ -136,12 +137,13 @@ bool load(Renderer& renderer, AssetSource& assets, Assets& out) {
     unload(renderer, out);
 
     TextureData panel = loadOrMake(assets, "ui/panel.png", []() { return makePanelTexture(); });
+    // Янтарь CTA: normal / hover / press — docs/UI_PALETTE.md
     TextureData bn = loadOrMake(assets, "ui/button_normal.png",
-                                []() { return makeButtonTexture(45, 110, 190); });
+                                []() { return makeButtonTexture(232, 161, 58); });
     TextureData bh = loadOrMake(assets, "ui/button_hover.png",
-                                []() { return makeButtonTexture(70, 145, 230); });
+                                []() { return makeButtonTexture(240, 185, 90); });
     TextureData ba = loadOrMake(assets, "ui/button_active.png",
-                                []() { return makeButtonTexture(30, 80, 150); });
+                                []() { return makeButtonTexture(196, 132, 34); });
 
     out.panelHandle = renderer.createTexture(panel, true);
     out.btnNormalHandle = renderer.createTexture(bn, true);
@@ -222,10 +224,10 @@ bool BeginPanel(const char* name, const Assets& skin, bool* p_open, ImGuiWindowF
         const float titleL = p0.x + frame;
         const float titleR = p0.x + wsz.x - frame;
         dl->AddRectFilled(ImVec2(titleL, titleTop), ImVec2(titleR, titleBot),
-                          IM_COL32(20, 40, 75, 220));
+                          IM_COL32(51, 40, 32, 220));  // title bar #332820
         dl->AddLine(ImVec2(titleL + pad * 0.5f, titleBot - 1.0f),
                     ImVec2(titleR - pad * 0.5f, titleBot - 1.0f),
-                    IM_COL32(110, 175, 255, 180), 1.5f);
+                    IM_COL32(196, 165, 116, 180), 1.5f);  // copper underline
 
         // Перетаскивание окна за title.
         ImGui::SetCursorPos(ImVec2(frame, frame));
@@ -239,7 +241,7 @@ bool BeginPanel(const char* name, const Assets& skin, bool* p_open, ImGuiWindowF
         if (!title.empty()) {
             const ImVec2 ts = ImGui::CalcTextSize(title.c_str());
             dl->AddText(ImVec2(titleL + pad, titleTop + (titleH - ts.y) * 0.5f),
-                        IM_COL32(200, 225, 255, 255), title.c_str());
+                        IM_COL32(242, 230, 212, 255), title.c_str());  // text primary
         }
 
         // Крестик закрытия справа в title (если передали p_open).
@@ -251,9 +253,9 @@ bool BeginPanel(const char* name, const Assets& skin, bool* p_open, ImGuiWindowF
             if (ImGui::InvisibleButton("##uiskin_close", ImVec2(btn, btn))) *p_open = false;
             const bool hov = ImGui::IsItemHovered();
             dl->AddRectFilled(cmin, cmax,
-                              hov ? IM_COL32(70, 120, 200, 220) : IM_COL32(40, 70, 120, 180),
+                              hov ? IM_COL32(232, 161, 58, 230) : IM_COL32(92, 61, 36, 200),
                               4.0f);
-            const ImU32 xcol = IM_COL32(230, 240, 255, 255);
+            const ImU32 xcol = IM_COL32(26, 20, 16, 255);
             const float m = btn * 0.28f;
             dl->AddLine(ImVec2(cmin.x + m, cmin.y + m), ImVec2(cmax.x - m, cmax.y - m), xcol,
                         2.0f);
@@ -329,7 +331,9 @@ bool Button(const char* label, const Assets& skin, const ImVec2& size) {
 
     const ImVec2 textPos(rmin.x + (rmax.x - rmin.x - labelSize.x) * 0.5f,
                          rmin.y + (rmax.y - rmin.y - labelSize.y) * 0.5f);
-    ImGui::GetWindowDrawList()->AddText(textPos, ImGui::GetColorU32(ImGuiCol_Text), label);
+    // Тёмный текст на янтаре — docs/UI_PALETTE.md (text on amber).
+    const int a = (int)(255.0f * ImGui::GetStyle().Alpha);
+    ImGui::GetWindowDrawList()->AddText(textPos, IM_COL32(26, 20, 16, a), label);
     return pressed;
 }
 

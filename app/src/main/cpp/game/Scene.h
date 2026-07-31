@@ -36,6 +36,7 @@ struct RemoteEntity {
     Character ch;       // трансформ для рендера/интерполяции
     std::vector<TimedState> buffer;
     float aux = 0.0f;   // ресурс в хранилище и т.п. (последнее значение, без интерполяции)
+    float hp = 0.0f;    // здоровье (ядро/враг) из снапшота
 };
 
 // Отправленная, но ещё не подтверждённая сервером команда (для реплея).
@@ -116,6 +117,11 @@ public:
     float resourceCurrent() const;  // сумма ресурса во всех хранилищах (из снапшотов)
     float resourceCap() const;      // суммарная ёмкость хранилищ (из описания сцены)
 
+    // Бой / жизненный цикл матча (для HUD).
+    int matchPhase() const;    // GamePhase (0 Playing / 1 Won / 2 Lost)
+    float coreHp() const;      // текущее здоровье ядра (из снапшотов; -1 если ядра нет)
+    float coreMaxHp() const;   // максимум ядра (из конфига)
+
     float modelScale() const { return foxScale_; }
     void setModelScale(float s) { foxScale_ = s; }
     float modelYawOffset() const { return foxYawOffset_; }
@@ -139,8 +145,8 @@ private:
     float foxYawOffset_ = 0.0f;
 
     // Визуалы сущностей базы/врагов (клиентский рендер по типу; создаются в build).
-    MeshHandle genMesh_ = 0, storMesh_ = 0, spawnMesh_ = 0, coreMesh_ = 0, enemyMesh_ = 0;
-    MaterialHandle genMat_ = 0, storMat_ = 0, spawnMat_ = 0, coreMat_ = 0, enemyMat_ = 0;
+    MeshHandle genMesh_ = 0, storMesh_ = 0, spawnMesh_ = 0, coreMesh_ = 0, enemyMesh_ = 0, towerMesh_ = 0;
+    MaterialHandle genMat_ = 0, storMat_ = 0, spawnMat_ = 0, coreMat_ = 0, enemyMat_ = 0, towerMat_ = 0;
     Character player_;        // управляемый актор (симуляция)
     std::unique_ptr<CollisionWorld> collision_;  // кинематическая физика (Jolt)
     VirtualJoystick joystick_;
@@ -163,7 +169,7 @@ private:
     std::vector<RemoteEntity> remoteEntities_;  // все чужие сущности (герои/здания/…)
     std::vector<PendingInput> pending_;  // неподтверждённые вводы (для реплея)
     double simClock_ = 0.0;              // часы симуляции (сек)
-    float tickDt_ = 1.0f / 30.0f;        // длительность тика (для расчёта времени рендера)
+    float tickDt_ = kTickDt;             // длительность тика (единый шаг, из engine/net/Net.h)
 
     void applySnapshot();
 };

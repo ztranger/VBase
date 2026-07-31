@@ -52,8 +52,10 @@ collider box center 4 0.5 -4  half 0.5 0.5 0.5
 # из config/buildings.cfg. Директивы: generator/storage/spawner/core pos <x y z>.
 generator pos -2 0 -6
 storage   pos  2 0 -6
-core      pos  0 0 -8              # ядро базы — цель врагов
+core      pos  0 0 -8              # ядро базы — цель врагов (hp из конфига)
 spawner   pos  9 0 -8             # плодит врагов, бегут к ядру (путь по z=-8 чист)
+tower     pos  4 0 -6             # башня-защита (урон/радиус/интервал из конфига)
+tower     pos  4 0 -10            # вторая башня — фланкируют путь врагов
 
 # --- Управляемый персонаж (glTF + скиннинг) ---
 # capsule <radius> <cylHalf> — кинематический контроллер (по умолчанию 0.3 0.3)

@@ -256,6 +256,84 @@ int runSpawnerTest() {
     return ok ? 0 : 1;
 }
 
+// Тест боя + жизненного цикла матча. Два сценария на одном коде:
+//  - без башен: враги добегают до ядра и разбивают его -> ПОРАЖЕНИЕ (phase=2), hp<=0;
+//  - с башнями: башни выбивают всех врагов -> ПОБЕДА (phase=1), врагов 0.
+// Фазу читаем С ПРОВОДА (client.gamePhase()) — заодно проверяем новый байт в заголовке
+// снапшота и версию протокола v2.
+int runCombatTest() {
+    auto scenario = [](bool withTowers, int& outPhase, float& outCoreHp, int& outEnemies) {
+        SceneDesc desc;
+        ColliderSpec floor;
+        floor.center = Vec3{0.0f, -0.5f, 0.0f};
+        floor.half = Vec3{50.0f, 0.5f, 50.0f};
+        desc.colliders.push_back(floor);
+
+        BuildingSpec core;
+        core.kind = BuildingSpec::Core;
+        core.pos = Vec3{0.0f, 0.0f, 0.0f};
+        core.hp = withTowers ? 500.0f : 20.0f;  // без защиты ядро хрупкое
+        desc.buildings.push_back(core);
+
+        BuildingSpec sp;
+        sp.kind = BuildingSpec::Spawner;
+        sp.pos = Vec3{8.0f, 0.0f, 0.0f};
+        sp.rate = 0.4f;                    // враг каждые 0.4 c
+        sp.cap = withTowers ? 3.0f : 5.0f;
+        desc.buildings.push_back(sp);
+
+        if (withTowers) {
+            BuildingSpec tw;
+            tw.kind = BuildingSpec::Tower;
+            tw.pos = Vec3{3.0f, 0.0f, 0.0f};
+            tw.damage = 25.0f;             // > hp врага -> с одного выстрела
+            tw.range = 7.0f;
+            tw.rate = 0.2f;
+            desc.buildings.push_back(tw);
+        }
+        desc.enemy.hp = 20.0f;
+        desc.enemy.damage = 10.0f;
+        desc.enemy.attackInterval = 0.5f;
+        desc.player.pos = Vec3{0.0f, 0.0f, 12.0f};  // герой клиента — в стороне от боя
+
+        NetServer server;
+        server.start(kNetPort);
+        server.configureWorld(desc);
+        NetClient client;
+        client.connect("127.0.0.1", kNetPort);
+
+        const float dt = kTickDt;
+        InputCommand idle;
+        uint32_t seq = 0;
+        for (int i = 0; i < 700; ++i) {  // ~23 c симуляции — с запасом на исход
+            server.poll();
+            if (client.connected() && client.myId() != 0) { idle.seq = ++seq; client.sendInput(idle); }
+            server.tick(dt);
+            client.poll();
+            client.consumeSnapshot();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        outPhase = (int)client.gamePhase();  // с провода
+        outCoreHp = server.debugCoreHp();
+        outEnemies = server.debugEnemyCount();
+    };
+
+    int lostPhase = 0, wonPhase = 0, lostEnemies = 0, wonEnemies = 0;
+    float lostHp = 0.0f, wonHp = 0.0f;
+    scenario(false, lostPhase, lostHp, lostEnemies);
+    scenario(true, wonPhase, wonHp, wonEnemies);
+
+    std::printf("[CombatTest] без защиты: phase=%d (ждём 2=поражение), hp ядра=%.1f (ждём <=0)\n",
+                lostPhase, (double)lostHp);
+    std::printf("[CombatTest] с башнями:  phase=%d (ждём 1=победа), врагов=%d (ждём 0)\n",
+                wonPhase, wonEnemies);
+    bool lostOk = lostPhase == 2 && lostHp <= 0.0f;
+    bool wonOk = wonPhase == 1 && wonEnemies == 0;
+    bool ok = lostOk && wonOk;
+    std::printf("[CombatTest] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
 // Печатает локальные IPv4-адреса машины — чтобы не искать их вручную.
 // Winsock уже инициализирован (enet_initialize в NetServer::start).
 void printLocalAddresses(uint16_t port) {
@@ -294,7 +372,8 @@ int main(int argc, char** argv) {
         int b = runServerPathTest();    // серверный путь: сеть -> авторитет с коллизиями
         int c = runEconomyTest();       // экономика: генератор -> ресурс с потолком
         int d = runSpawnerTest();       // спавнеры -> враги бегут к ядру
-        return (a == 0 && b == 0 && c == 0 && d == 0) ? 0 : 1;
+        int e = runCombatTest();        // бой: враги валят ядро / башни валят врагов + фаза матча
+        return (a == 0 && b == 0 && c == 0 && d == 0 && e == 0) ? 0 : 1;
     }
 
     uint16_t port = kNetPort;
@@ -327,7 +406,7 @@ int main(int argc, char** argv) {
                      scenePath, assetsDir.c_str());
     }
 
-    const double tick = 1.0 / 30.0;  // 30 Гц симуляции
+    const double tick = kTickDt;  // единый шаг симуляции (из engine/net/Net.h)
     auto last = std::chrono::steady_clock::now();
     double accumulator = 0.0;
     int lastClients = -1;

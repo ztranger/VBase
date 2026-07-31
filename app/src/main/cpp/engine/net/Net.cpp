@@ -6,10 +6,8 @@
 #include <cstring>
 #include <memory>
 
-#include "game/Character.h"
-#include "engine/physics/CollisionWorld.h"
 #include "engine/core/Log.h"
-#include "game/SceneDesc.h"
+#include "game/GameWorld.h"  // авторитетная игровая симуляция (сущности + системы)
 
 namespace {
 
@@ -19,6 +17,7 @@ enum : uint8_t { MSG_WELCOME = 1, MSG_INPUT = 2, MSG_SNAPSHOT = 3 };
 #pragma pack(push, 1)
 struct WelcomeMsg {
     uint8_t type;
+    uint32_t protocolVersion;  // сервер шлёт свою версию; клиент сверяет с kProtocolVersion
     uint32_t entityId;
 };
 struct InputMsg {
@@ -39,14 +38,9 @@ struct SnapshotHeader {
     uint32_t ackSeq;        // последний обработанный ввод (для реконсиляции)
     uint16_t changedCount;
     uint16_t removedCount;
+    uint8_t phase;          // GamePhase матча (глобально, не per-entity)
 };
 #pragma pack(pop)
-
-// Параметры врагов (G2): скорость бега, капсула, дистанция «дошёл до ядра».
-constexpr float kEnemySpeed = 3.0f;
-constexpr float kEnemyRadius = 0.3f;
-constexpr float kEnemyCylHalf = 0.3f;
-constexpr float kCoreStopDist = 1.0f;
 
 // Снимок состояния мира на конкретном тике (кольцо истории на обеих сторонах).
 constexpr uint32_t kSnapHistory = 64;  // ~2 c при 30 Гц
@@ -95,6 +89,7 @@ struct NetClient::Impl {
     bool connected = false;
     bool newSnapshot = false;
     uint32_t ackSeq = 0;
+    uint8_t gamePhase = 0;  // GamePhase из последнего снапшота
     std::vector<EntityState> states;   // текущее полное состояние (реконструированное)
     uint32_t stateTick = 0;            // тик текущего состояния (его подтверждаем серверу)
     SnapshotRecord recvHistory[kSnapHistory];  // кольцо принятых снапшотов (базы для дельт)
@@ -117,7 +112,9 @@ bool NetClient::connect(const char* host, uint16_t port) {
     ENetAddress addr;
     enet_address_set_host(&addr, host);
     addr.port = port;
-    impl_->peer = enet_host_connect(impl_->host, &addr, 2, 0);
+    // Версию протокола передаём как connect-data: сервер сверит её ещё на CONNECT,
+    // до спавна героя, и отклонит несовместимый билд.
+    impl_->peer = enet_host_connect(impl_->host, &addr, 2, kProtocolVersion);
     if (impl_->peer == nullptr) {
         LOGE("enet_host_connect failed");
         return false;
@@ -137,6 +134,7 @@ void NetClient::disconnect() {
     }
     impl_->connected = false;
     impl_->myId = 0;
+    impl_->gamePhase = 0;
     impl_->states.clear();
     impl_->stateTick = 0;
     for (SnapshotRecord& r : impl_->recvHistory) { r.tick = 0; r.states.clear(); }
@@ -145,6 +143,7 @@ void NetClient::disconnect() {
 bool NetClient::connected() const { return impl_->connected; }
 uint32_t NetClient::myId() const { return impl_->myId; }
 uint32_t NetClient::ackSeq() const { return impl_->ackSeq; }
+uint8_t NetClient::gamePhase() const { return impl_->gamePhase; }
 const std::vector<EntityState>& NetClient::states() const { return impl_->states; }
 
 bool NetClient::consumeSnapshot() {
@@ -186,6 +185,13 @@ void NetClient::poll() {
                 if (len >= 1 && data[0] == MSG_WELCOME && len >= sizeof(WelcomeMsg)) {
                     WelcomeMsg w;
                     std::memcpy(&w, data, sizeof(w));
+                    if (w.protocolVersion != kProtocolVersion) {
+                        LOGE("NetClient: версия протокола сервера %u != нашей %u — отключаюсь",
+                             (unsigned)w.protocolVersion, (unsigned)kProtocolVersion);
+                        enet_packet_destroy(ev.packet);
+                        disconnect();
+                        return;  // peer/host уничтожены — выходим из poll
+                    }
                     impl_->myId = w.entityId;
                 } else if (len >= sizeof(SnapshotHeader) && data[0] == MSG_SNAPSHOT) {
                     SnapshotHeader h;
@@ -237,6 +243,7 @@ void NetClient::poll() {
                             impl_->states = rec.states;  // копия для чтения Scene
                             impl_->stateTick = h.serverTick;
                             impl_->ackSeq = h.ackSeq;
+                            impl_->gamePhase = h.phase;  // фаза матча из заголовка
                             impl_->newSnapshot = true;
                         }
                     }
@@ -257,24 +264,8 @@ void NetClient::poll() {
 // ============================ NetServer ============================
 
 namespace {
-// Игровая сущность на сервере (авторитетная). Движение/трансформ — в `move`
-// (Character): для героя это тот же код, что предсказывает клиент; для будущих типов
-// (здания/враги) — своя логика систем, а `move.position/facingYaw` служат трансформом.
-struct Entity {
-    uint32_t id = 0;
-    EntityType type = EntityType::Hero;
-    uint8_t team = 0;
-    Character move;       // трансформ + (для подвижных) физика/анимация
-    InputCommand input;   // герой: последний ввод (иначе не используется)
-    float hp = 0.0f, maxHp = 0.0f;
-    float aux = 0.0f;     // сеть: ресурс в хранилище / прогресс / …
-    // Серверные параметры/рантайм (не в сети — фиксированы сценой или считаются здесь).
-    float rate = 0.0f;    // generator: ресурс/сек; spawner: интервал спавна, сек
-    float cap = 0.0f;     // storage: ёмкость; spawner: макс. врагов
-    float timer = 0.0f;   // spawner: накопитель времени до следующего спавна
-    int spawnedCount = 0; // spawner: сколько врагов уже породил (потолок = cap)
-};
 // Подключение клиента: peer, id управляемого им героя, подтверждённый снапшот (база дельт).
+// Игровые сущности живут в GameWorld — сервер здесь лишь транспорт.
 struct Conn {
     ENetPeer* peer = nullptr;
     uint32_t heroId = 0;
@@ -284,28 +275,15 @@ struct Conn {
 
 struct NetServer::Impl {
     ENetHost* host = nullptr;
-    uint32_t nextEntityId = 1;
     uint32_t tickCount = 0;
-    std::vector<Entity> entities;  // ВСЕ сущности мира (герои + позже здания/враги)
+    GameWorld game;                // авторитетная игровая симуляция (сущности + физика, без сети)
     std::vector<Conn> conns;       // подключённые клиенты
     std::vector<uint8_t> scratch;  // буфер снапшота
     SnapshotRecord history[kSnapHistory];  // кольцо разосланных состояний (базы для дельт)
     int lastChanged = 0;                   // changedCount последнего снапшота (для самотеста)
 
-    // Мир коллизий (та же геометрия, что у клиента). Может быть пуст — тогда fallback.
-    std::unique_ptr<CollisionWorld> world;
-    Vec3 spawnPos{0.0f, 0.0f, 0.0f};
-    float capsuleRadius = 0.3f;
-    float capsuleCylHalf = 0.3f;
-
-    float resource = 0.0f;  // общий пул ресурса базы (team 0; per-team — в кооп/PvP)
-
     Conn* connByPeer(ENetPeer* p) {
         for (auto& c : conns) if (c.peer == p) return &c;
-        return nullptr;
-    }
-    Entity* entityById(uint32_t id) {
-        for (auto& e : entities) if (e.id == id) return &e;
         return nullptr;
     }
 };
@@ -336,43 +314,12 @@ void NetServer::stop() {
         enet_host_destroy(impl_->host);
         impl_->host = nullptr;
     }
-    impl_->entities.clear();
+    impl_->game.reset();   // снести сущности + мир коллизий (контроллеры уйдут вместе с ним)
     impl_->conns.clear();
-    impl_->world.reset();  // сносим мир (контроллеры клиентов уйдут вместе с ним)
-    impl_->nextEntityId = 1;
     for (SnapshotRecord& r : impl_->history) { r.tick = 0; r.states.clear(); }
 }
 
-void NetServer::configureWorld(const SceneDesc& desc) {
-    impl_->world = std::make_unique<CollisionWorld>();
-    for (const ColliderSpec& cs : desc.colliders) {
-        impl_->world->addBox(cs.center, cs.half);
-    }
-    impl_->world->finalize();
-    impl_->spawnPos = desc.player.pos;
-    impl_->capsuleRadius = desc.player.colliderRadius;
-    impl_->capsuleCylHalf = desc.player.colliderCylHalf;
-
-    // Спавним статичные сущности базы из описания сцены (генератор/хранилище/спавнер/ядро).
-    impl_->resource = 0.0f;
-    for (const BuildingSpec& b : desc.buildings) {
-        Entity e;
-        e.id = impl_->nextEntityId++;
-        switch (b.kind) {
-            case BuildingSpec::Generator: e.type = EntityType::Generator; break;
-            case BuildingSpec::Storage:   e.type = EntityType::Storage;   break;
-            case BuildingSpec::Spawner:   e.type = EntityType::Spawner;   break;
-            case BuildingSpec::Core:      e.type = EntityType::Core;      break;
-        }
-        e.move.position = b.pos;
-        e.move.snapshot();
-        e.rate = b.rate;
-        e.cap = b.cap;
-        impl_->entities.push_back(e);
-    }
-    LOGI("NetServer: мир — %d коллайдеров, %d сущностей базы", (int)desc.colliders.size(),
-         (int)desc.buildings.size());
-}
+void NetServer::configureWorld(const SceneDesc& desc) { impl_->game.configure(desc); }
 
 bool NetServer::running() const { return impl_->host != nullptr; }
 int NetServer::clientCount() const { return (int)impl_->conns.size(); }
@@ -383,22 +330,21 @@ void NetServer::poll() {
     while (enet_host_service(impl_->host, &ev, 0) > 0) {
         switch (ev.type) {
             case ENET_EVENT_TYPE_CONNECT: {
-                // Создаём сущность-героя для клиента (авторитетная позиция + контроллер).
-                Entity hero;
-                hero.id = impl_->nextEntityId++;
-                hero.type = EntityType::Hero;
-                hero.move.position = impl_->spawnPos;
-                hero.move.snapshot();
-                if (impl_->world) {
-                    hero.move.collider = impl_->world->addCharacter(
-                        impl_->spawnPos, impl_->capsuleRadius, impl_->capsuleCylHalf);
+                // Версия протокола пришла как connect-data — отклоняем несовместимый билд
+                // ДО спавна героя (иначе рассинхрон раскладки = порча памяти в снапшотах).
+                if (ev.data != kProtocolVersion) {
+                    LOGW("NetServer: отклонён клиент — версия протокола %u != %u",
+                         (unsigned)ev.data, (unsigned)kProtocolVersion);
+                    enet_peer_disconnect_now(ev.peer, 0);
+                    break;
                 }
-                impl_->entities.push_back(hero);
-                impl_->conns.push_back(Conn{ev.peer, hero.id, 0});
-                WelcomeMsg w{MSG_WELCOME, hero.id};
+                // Создаём авторитетную сущность-героя (позиция + контроллер) в игровом мире.
+                uint32_t heroId = impl_->game.addHero();
+                impl_->conns.push_back(Conn{ev.peer, heroId, 0});
+                WelcomeMsg w{MSG_WELCOME, kProtocolVersion, heroId};
                 ENetPacket* pkt = enet_packet_create(&w, sizeof(w), ENET_PACKET_FLAG_RELIABLE);
                 enet_peer_send(ev.peer, 0, pkt);
-                LOGI("NetServer: клиент подключён (hero id=%u), всего %d", hero.id,
+                LOGI("NetServer: клиент подключён (hero id=%u), всего %d", heroId,
                      (int)impl_->conns.size());
                 break;
             }
@@ -410,15 +356,14 @@ void NetServer::poll() {
                     Conn* conn = impl_->connByPeer(ev.peer);
                     if (conn != nullptr) {
                         conn->ackTick = m.ackTick;  // база для дельты этому клиенту
-                        Entity* hero = impl_->entityById(conn->heroId);
-                        if (hero != nullptr) {
-                            hero->input.seq = m.seq;
-                            hero->input.moveX = m.moveX;
-                            hero->input.moveZ = m.moveZ;
-                            hero->input.magnitude = m.magnitude;
-                            hero->input.faceMove = (m.faceMove != 0);
-                            hero->input.jump = (m.jump != 0);
-                        }
+                        InputCommand cmd;
+                        cmd.seq = m.seq;
+                        cmd.moveX = m.moveX;
+                        cmd.moveZ = m.moveZ;
+                        cmd.magnitude = m.magnitude;
+                        cmd.faceMove = (m.faceMove != 0);
+                        cmd.jump = (m.jump != 0);
+                        impl_->game.setHeroInput(conn->heroId, cmd);
                     }
                 }
                 enet_packet_destroy(ev.packet);
@@ -429,15 +374,7 @@ void NetServer::poll() {
                 if (conn != nullptr) {
                     uint32_t heroId = conn->heroId;
                     LOGI("NetServer: клиент (hero id=%u) отключён", heroId);
-                    Entity* hero = impl_->entityById(heroId);
-                    if (hero != nullptr && impl_->world && hero->move.collider != 0) {
-                        impl_->world->removeCharacter(hero->move.collider);
-                    }
-                    for (size_t i = 0; i < impl_->entities.size(); ++i)
-                        if (impl_->entities[i].id == heroId) {
-                            impl_->entities.erase(impl_->entities.begin() + (long)i);
-                            break;
-                        }
+                    impl_->game.removeEntity(heroId);  // сущность + её контроллер
                     for (size_t i = 0; i < impl_->conns.size(); ++i)
                         if (impl_->conns[i].peer == ev.peer) {
                             impl_->conns.erase(impl_->conns.begin() + (long)i);
@@ -456,110 +393,13 @@ void NetServer::tick(float dt) {
     if (impl_->host == nullptr) return;
     impl_->tickCount++;
 
-    // Системы сущностей. Пока только герои: движение по вводу через общий мир коллизий
-    // (тот же код, что предсказывает клиент). Дальше здесь появятся генераторы (ресурс),
-    // спавнеры, движение врагов, бой.
-    for (Entity& e : impl_->entities) {
-        if (e.type == EntityType::Hero) {
-            e.move.snapshot();
-            e.move.simulate(dt, e.input, impl_->world.get());
-            e.input.jump = false;  // прыжок одноразовый
-        }
-    }
-
-    // Экономика: генераторы капают в общий пул, ограниченный суммой ёмкостей хранилищ
-    // (лишнее теряется — это и есть потолок накоплений). Пул раскладываем по хранилищам
-    // в поле aux (заполнение конкретного хранилища) — так он попадает в сеть.
-    {
-        float prod = 0.0f, cap = 0.0f;
-        for (const Entity& e : impl_->entities) {
-            if (e.type == EntityType::Generator) prod += e.rate;
-            else if (e.type == EntityType::Storage) cap += e.cap;
-        }
-        impl_->resource += prod * dt;
-        if (impl_->resource > cap) impl_->resource = cap;
-        if (impl_->resource < 0.0f) impl_->resource = 0.0f;
-        float rem = impl_->resource;
-        for (Entity& e : impl_->entities) {
-            if (e.type != EntityType::Storage) continue;
-            float amt = rem < e.cap ? rem : e.cap;
-            e.aux = amt;
-            rem -= amt;
-        }
-    }
-
-    // Спавнеры: по таймеру плодят врагов (до потолка cap). Новые сущности КОПИМ и
-    // добавляем ПОСЛЕ цикла — push_back в impl_->entities инвалидировал бы итерацию.
-    {
-        std::vector<Entity> spawned;
-        for (Entity& e : impl_->entities) {
-            if (e.type != EntityType::Spawner) continue;
-            if (e.rate <= 0.0f || e.spawnedCount >= (int)e.cap) continue;
-            e.timer += dt;
-            if (e.timer >= e.rate) {
-                e.timer -= e.rate;
-                Entity enemy;
-                enemy.id = impl_->nextEntityId++;
-                enemy.type = EntityType::Enemy;
-                enemy.team = e.team;
-                enemy.move.position = e.move.position;
-                enemy.move.snapshot();
-                if (impl_->world)
-                    enemy.move.collider = impl_->world->addCharacter(
-                        e.move.position, kEnemyRadius, kEnemyCylHalf);
-                spawned.push_back(enemy);
-                e.spawnedCount++;
-            }
-        }
-        for (Entity& n : spawned) impl_->entities.push_back(std::move(n));
-    }
-
-    // Враги бегут к ядру базы (первый Core) тем же кинематическим контроллером
-    // (гравитация + скольжение по стенам), что и герои.
-    {
-        Vec3 corePos{0.0f, 0.0f, 0.0f};
-        bool haveCore = false;
-        for (const Entity& e : impl_->entities)
-            if (e.type == EntityType::Core) { corePos = e.move.position; haveCore = true; break; }
-        if (haveCore) {
-            for (Entity& e : impl_->entities) {
-                if (e.type != EntityType::Enemy) continue;
-                Vec3 to = corePos - e.move.position;
-                to.y = 0.0f;
-                float dist = std::sqrt(to.x * to.x + to.z * to.z);
-                Vec3 vel{0.0f, 0.0f, 0.0f};
-                if (dist > kCoreStopDist) {
-                    Vec3 dir = to * (1.0f / dist);
-                    vel = dir * kEnemySpeed;
-                    e.move.facingYaw = std::atan2(dir.x, dir.z);
-                }
-                if (impl_->world && e.move.collider != 0)
-                    e.move.position =
-                        impl_->world->moveCharacter(e.move.collider, vel, e.move.velocityY, false, dt);
-                else
-                    e.move.position = e.move.position + vel * dt;
-            }
-        }
-    }
+    // Вся игровая симуляция — в GameWorld (движение/экономика/спавнеры/враги, дальше бой).
+    // Сервер лишь двигает мир и сериализует его состояние.
+    impl_->game.step(dt);
 
     // Полное текущее состояние мира — из ВСЕХ сущностей.
-    std::vector<EntityState> current(impl_->entities.size());
-    for (size_t i = 0; i < impl_->entities.size(); ++i) {
-        const Entity& e = impl_->entities[i];
-        EntityState& s = current[i];
-        s.id = e.id;
-        s.type = (uint8_t)e.type;
-        s.team = e.team;
-        s.x = e.move.position.x;
-        s.y = e.move.position.y;
-        s.z = e.move.position.z;
-        s.yaw = e.move.facingYaw;
-        s.animParam = e.move.animParam;
-        s.speed01 = e.move.speed01;
-        s.velY = e.move.velocityY;
-        s.hp = e.hp;
-        s.aux = e.aux;
-    }
+    std::vector<EntityState> current;
+    impl_->game.writeStates(current);
     // В кольцо истории — база для будущих дельт (когда клиент подтвердит этот тик).
     SnapshotRecord& rec = impl_->history[impl_->tickCount % kSnapHistory];
     rec.tick = impl_->tickCount;
@@ -592,8 +432,7 @@ void NetServer::tick(float dt) {
         impl_->lastChanged = (int)changed.size();
 
         // ackSeq — последний обработанный ввод героя этого клиента (для реконсиляции).
-        Entity* hero = impl_->entityById(conn.heroId);
-        uint32_t ackSeq = hero ? hero->input.seq : 0;
+        uint32_t ackSeq = impl_->game.inputSeq(conn.heroId);
 
         // Сериализация: заголовок + changed[] + removed[] (через memcpy — packed).
         size_t size = sizeof(SnapshotHeader) + changed.size() * sizeof(EntityState) +
@@ -606,6 +445,7 @@ void NetServer::tick(float dt) {
         head.ackSeq = ackSeq;
         head.changedCount = (uint16_t)changed.size();
         head.removedCount = (uint16_t)removed.size();
+        head.phase = (uint8_t)impl_->game.gamePhase();
         std::memcpy(impl_->scratch.data(), &head, sizeof(head));
         if (!changed.empty())
             std::memcpy(impl_->scratch.data() + sizeof(head), changed.data(),
@@ -619,9 +459,7 @@ void NetServer::tick(float dt) {
 }
 
 int NetServer::debugLastChanged() const { return impl_->lastChanged; }
-float NetServer::debugResource() const { return impl_->resource; }
-int NetServer::debugEnemyCount() const {
-    int n = 0;
-    for (const Entity& e : impl_->entities) if (e.type == EntityType::Enemy) ++n;
-    return n;
-}
+float NetServer::debugResource() const { return impl_->game.resource(); }
+int NetServer::debugEnemyCount() const { return impl_->game.enemyCount(); }
+int NetServer::debugPhase() const { return (int)impl_->game.gamePhase(); }
+float NetServer::debugCoreHp() const { return impl_->game.coreHp(); }

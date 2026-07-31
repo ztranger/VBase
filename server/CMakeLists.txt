@@ -33,6 +33,7 @@ endif()
 add_executable(vbase_server
         main.cpp
         ${APP}/engine/net/Net.cpp
+        ${APP}/game/GameWorld.cpp
         ${APP}/game/Character.cpp
         ${APP}/engine/physics/CollisionWorld.cpp
         ${APP}/game/SceneLoader.cpp
