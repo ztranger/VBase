@@ -92,10 +92,11 @@ struct PlayerSpec {
 };
 
 struct CameraSpec {
-    float distance = 6.0f;
-    float height = 3.0f;
+    float distance = 16.0f;   // «наклонная» дистанция ¾-камеры
+    float pitch = 0.9f;       // фиксированный наклon над горизонтом, рад (~51°)
+    float height = 3.0f;      // устаревшее (¾-камера считает высоту из pitch); парсится, игнор
     float lookHeight = 1.0f;
-    float fovY = 1.0f;
+    float fovY = 0.9f;
     float nearZ = 0.1f;
     float farZ = 200.0f;
 };

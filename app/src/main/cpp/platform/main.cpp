@@ -43,6 +43,9 @@ private:
 
 namespace {
 
+// Одно тач-событие пальца за кадр (kind: 0 = down, 1 = move, 2 = up).
+struct TouchEvent { int id; float x, y; int kind; };
+
 struct Engine {
     std::unique_ptr<Renderer> renderer;
     std::unique_ptr<Scene> scene;
@@ -54,17 +57,19 @@ struct Engine {
     float uiScale = 1.0f;    // масштаб UI по плотности экрана
     GameUiState ui;          // состояние панели — общее с десктопом
 
-    // Касание кадра: pumpInput кормит им ImGui и ЗАПОМИНАЕТ, а в геймплей (джойстик/
-    // пикинг) диспатчим ПОСЛЕ renderFrame — тогда WantCaptureMouse уже посчитан ImGui
-    // по этому касанию (иначе тап по GUI проскакивает и включает джойстик лисы).
-    bool touchHad = false;      // было ли касание-событие в кадре
-    float touchX = 0.0f, touchY = 0.0f;
-    bool touchPressed = false;  // палец на экране (по последнему событию кадра)
-    bool touchDownEdge = false; // был DOWN/POINTER_DOWN (для пикинга)
+    // Мультитач кадра: pumpInput собирает события ВСЕХ пальцев, а в геймплей (twin-stick)
+    // диспатчим ПОСЛЕ renderFrame — тогда WantCaptureMouse свеж (тап по GUI не стартует стик).
+    // ImGui кормим «первичным» пальцем (pointers[0]) для dev-панели; стики — по id/половине.
+    bool touchHad = false;
+    float touchX = 0.0f, touchY = 0.0f;  // первичный палец (позиция для ImGui)
+    bool touchPressed = false;           // есть ли палец на экране (кнопка ImGui)
+    static constexpr int kMaxTouchEvents = 32;
+    TouchEvent touchEvents[kMaxTouchEvents];
+    int touchEventCount = 0;
 };
 
-// Частота симуляции. Рендер идёт быстрее и интерполирует между тиками.
-constexpr float kTick = 1.0f / 30.0f;
+// Частота симуляции — единый шаг из engine/net/Net.h. Рендер быстрее и интерполирует.
+constexpr float kTick = kTickDt;
 
 // Создать рендер по engine->backend (0 = GL, 1 = Vulkan) из окна и построить мир.
 // Оба бэкенда создают surface из одного ANativeWindow, поэтому переключение —
@@ -132,42 +137,61 @@ void pumpInput(android_app* app, Engine* engine) {
         return;
     }
 
+    ImGuiIO& io = ImGui::GetIO();
     for (uint64_t i = 0; i < input->motionEventsCount; ++i) {
         GameActivityMotionEvent& event = input->motionEvents[i];
-        const int actionMasked = event.action & AMOTION_EVENT_ACTION_MASK;
+        const int32_t action = event.action;
+        const int actionMasked = action & AMOTION_EVENT_ACTION_MASK;
+        const int ptrIndex = (action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK) >>
+                             AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT;
 
-        bool pressed;
+        // ImGui кормим «первичным» пальцем (pointers[0]) — позиция для панели/кнопок.
+        if (event.pointerCount > 0) {
+            engine->touchX = GameActivityPointerAxes_getX(&event.pointers[0]);
+            engine->touchY = GameActivityPointerAxes_getY(&event.pointers[0]);
+            io.AddMousePosEvent(engine->touchX, engine->touchY);
+        }
+
+        auto push = [engine](int id, float x, float y, int kind) {
+            if (engine->touchEventCount < Engine::kMaxTouchEvents)
+                engine->touchEvents[engine->touchEventCount++] = TouchEvent{id, x, y, kind};
+        };
+
         switch (actionMasked) {
             case AMOTION_EVENT_ACTION_DOWN:
             case AMOTION_EVENT_ACTION_POINTER_DOWN:
+                push((int)event.pointers[ptrIndex].id,
+                     GameActivityPointerAxes_getX(&event.pointers[ptrIndex]),
+                     GameActivityPointerAxes_getY(&event.pointers[ptrIndex]), 0);
+                io.AddMouseButtonEvent(0, true);
+                engine->touchPressed = true;
+                engine->touchHad = true;
+                break;
             case AMOTION_EVENT_ACTION_MOVE:
-                pressed = true;
+                for (uint32_t p = 0; p < event.pointerCount; ++p)
+                    push((int)event.pointers[p].id,
+                         GameActivityPointerAxes_getX(&event.pointers[p]),
+                         GameActivityPointerAxes_getY(&event.pointers[p]), 1);
+                engine->touchHad = true;
                 break;
             case AMOTION_EVENT_ACTION_UP:
             case AMOTION_EVENT_ACTION_POINTER_UP:
+                push((int)event.pointers[ptrIndex].id, 0.0f, 0.0f, 2);
+                if (event.pointerCount <= 1) {  // последний палец ушёл — отпускаем кнопку ImGui
+                    io.AddMouseButtonEvent(0, false);
+                    engine->touchPressed = false;
+                }
+                engine->touchHad = true;
+                break;
             case AMOTION_EVENT_ACTION_CANCEL:
-                pressed = false;
+                for (uint32_t p = 0; p < event.pointerCount; ++p)
+                    push((int)event.pointers[p].id, 0.0f, 0.0f, 2);
+                io.AddMouseButtonEvent(0, false);
+                engine->touchPressed = false;
+                engine->touchHad = true;
                 break;
             default:
-                continue;
-        }
-
-        ImGuiIO& io = ImGui::GetIO();
-        if (event.pointerCount > 0) {
-            const float x = GameActivityPointerAxes_getX(&event.pointers[0]);
-            const float y = GameActivityPointerAxes_getY(&event.pointers[0]);
-            io.AddMousePosEvent(x, y);
-            engine->touchX = x;
-            engine->touchY = y;
-        }
-        io.AddMouseButtonEvent(0, pressed);
-
-        // Запоминаем — в геймплей отдадим после рендера (WantCaptureMouse будет свеж).
-        engine->touchHad = true;
-        engine->touchPressed = pressed;
-        if (actionMasked == AMOTION_EVENT_ACTION_DOWN ||
-            actionMasked == AMOTION_EVENT_ACTION_POINTER_DOWN) {
-            engine->touchDownEdge = true;
+                break;
         }
     }
     android_app_clear_motion_events(input);
@@ -251,18 +275,22 @@ extern "C" void android_main(android_app* app) {
             // -> джойстик/пикинг не активируем. Релиз отдаём всегда (чтобы не залипал).
             if (engine.touchHad && engine.scene) {
                 bool guiOwns = ImGui::GetIO().WantCaptureMouse;
-                if (engine.touchPressed) {
-                    if (!guiOwns) engine.scene->onPointer(engine.touchX, engine.touchY, true);
-                } else {
-                    engine.scene->onPointer(engine.touchX, engine.touchY, false);
-                }
-                if (engine.touchDownEdge && !guiOwns && app->window != nullptr) {
-                    float w = (float)ANativeWindow_getWidth(app->window);
-                    float h = (float)ANativeWindow_getHeight(app->window);
-                    engine.scene->onClick(engine.touchX, engine.touchY, w, h);
+                float w = app->window != nullptr ? (float)ANativeWindow_getWidth(app->window) : 1.0f;
+                float h = app->window != nullptr ? (float)ANativeWindow_getHeight(app->window) : 1.0f;
+                for (int i = 0; i < engine.touchEventCount; ++i) {
+                    const TouchEvent& e = engine.touchEvents[i];
+                    // DOWN не стартует стик, если палец пришёлся на GUI (тап по панели). MOVE/UP
+                    // диспатчим всегда — Scene игнорит id, не владеющий стиком (не залипнет).
+                    if (e.kind == 0) {
+                        if (!guiOwns) engine.scene->onTouchDown(e.id, e.x, e.y, w, h);
+                    } else if (e.kind == 1) {
+                        engine.scene->onTouchMove(e.id, e.x, e.y);
+                    } else {
+                        engine.scene->onTouchUp(e.id);
+                    }
                 }
                 engine.touchHad = false;
-                engine.touchDownEdge = false;
+                engine.touchEventCount = 0;
             }
 
             // Переключение бэкенда по кнопке в GameUi: сносим рендер+мир и

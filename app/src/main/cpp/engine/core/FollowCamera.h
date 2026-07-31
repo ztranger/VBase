@@ -4,38 +4,52 @@
 
 #include "engine/core/MathUtil.h"
 
-// Камера третьего лица: следует за ЛЮБОЙ целью (позиция + разворот), висит
-// позади и смотрит на неё. Про «лису» ничего не знает — Scene каждый кадр
-// передаёт ей позицию и facing управляемого актора.
+// Камера ¾-вида: висит над целью под ФИКСИРОВАННЫМ наклоном (pitch) и смотрит на неё
+// сверху-сбоку. Азимут (yaw) и зум (distance) управляются ИГРОКОМ (правый стик/стрелки),
+// а не разворотом актора. Про «лису» ничего не знает — Scene каждый кадр передаёт позицию
+// цели, а поворот/зум камеры двигает отдельными вызовами.
 struct FollowCamera {
-    float yaw = 0.0f;         // сглаженный азимут (следует за facing цели)
-    float distance = 6.0f;    // как далеко позади
-    float height = 3.0f;      // как высоко над целью
+    float yaw = 0.0f;         // орбитальный азимут камеры (управляется игроком)
+    float pitch = 0.9f;       // ФИКСИРОВАННЫЙ наклon над горизонтом, рад (~51° = ¾-вид)
+    float distance = 16.0f;   // «наклонная» дистанция от цели до камеры
     float lookHeight = 1.0f;  // куда смотреть относительно цели (чуть выше центра)
-    float fovY = 1.0f;
+    float fovY = 0.9f;
     float nearZ = 0.1f;
     float farZ = 200.0f;
+    float minDistance = 6.0f;
+    float maxDistance = 34.0f;
 
     Vec3 focus{0.0f, 0.0f, 0.0f};  // сглаженная точка, на которую смотрим
     bool inited = false;
 
-    void follow(Vec3 targetPos, float targetYaw, float dt) {
+    // Следуем только за ПОЗИЦИЕЙ цели (yaw/зум управляются игроком, не целью).
+    void follow(Vec3 targetPos, float dt) {
         if (!inited) {
             focus = targetPos;
-            yaw = targetYaw;
             inited = true;
             return;
         }
-        float kp = dt * 8.0f;  if (kp > 1.0f) kp = 1.0f;   // догоняем позицию
-        float ky = dt * 6.0f;  if (ky > 1.0f) ky = 1.0f;   // догоняем разворот
+        float kp = dt * 8.0f;
+        if (kp > 1.0f) kp = 1.0f;  // сглаженно догоняем позицию
         focus = focus + (targetPos - focus) * kp;
-        yaw = lerpAngle(yaw, targetYaw, ky);
     }
 
+    void rotate(float dYaw) { yaw += dYaw; }
+    void zoom(float dDist) {
+        distance += dDist;
+        if (distance < minDistance) distance = minDistance;
+        if (distance > maxDistance) distance = maxDistance;
+    }
+
+    // «Вперёд» камеры на плоскости земли (для camera-relative движения героя).
     Vec3 forward() const { return {std::sin(yaw), 0.0f, std::cos(yaw)}; }
 
     Vec3 eye() const {
-        return focus + Vec3{0.0f, height, 0.0f} - forward() * distance;
+        // Позади цели по forward (горизонтальная составляющая) и выше (вертикальная) —
+        // так «вверх на стике» = «от камеры вперёд», код движения не меняется.
+        float horiz = distance * std::cos(pitch);
+        float vert = distance * std::sin(pitch);
+        return focus - forward() * horiz + Vec3{0.0f, vert, 0.0f};
     }
 
     Mat4 view() const {

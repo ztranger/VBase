@@ -19,6 +19,10 @@ struct GameUiState {
     bool vulkanAvailable = false;   // доступен ли Vulkan (иначе кнопка disabled)
     int backend = 0;                // текущий бэкенд: 0 = OpenGL, 1 = Vulkan (ставит платформа)
     int requestBackend = -1;        // запрошенный кнопкой (-1 = нет; читает и сбрасывает платформа)
+
+    // Превью лоадинг-экрана (арт + пульсирующий свет). Не настоящая загрузка —
+    // включается кнопкой в GUI или флагом --loading на десктопе.
+    bool showLoadingPreview = false;
 };
 
 namespace GameUi {

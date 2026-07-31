@@ -31,7 +31,7 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
     // Свет и камера — прямо из описания.
     lightDir_ = desc.lightDir;
     camera_.distance = desc.camera.distance;
-    camera_.height = desc.camera.height;
+    camera_.pitch = desc.camera.pitch;
     camera_.lookHeight = desc.camera.lookHeight;
     camera_.fovY = desc.camera.fovY;
     camera_.nearZ = desc.camera.nearZ;
@@ -391,11 +391,37 @@ void Scene::onPointer(float x, float y, bool pressed) {
     joystick_.onPointer(x, y, pressed);
 }
 
+// --- Мультитач twin-stick: палец в левой половине владеет левым стиком (герой), в правой —
+// правым (камера). Стик держит палец по id, пока тот не отпущен; оба работают одновременно.
+void Scene::onTouchDown(int id, float x, float y, float vw, float vh) {
+    bool left = x < vw * 0.5f;
+    if (left) {
+        if (movePointer_ < 0) { movePointer_ = id; joystick_.onPointer(x, y, true); }
+    } else {
+        if (camPointer_ < 0) { camPointer_ = id; camJoystick_.onPointer(x, y, true); }
+    }
+}
+void Scene::onTouchMove(int id, float x, float y) {
+    if (id == movePointer_) joystick_.onPointer(x, y, true);
+    else if (id == camPointer_) camJoystick_.onPointer(x, y, true);
+}
+void Scene::onTouchUp(int id) {
+    if (id == movePointer_) { joystick_.onPointer(0.0f, 0.0f, false); movePointer_ = -1; }
+    else if (id == camPointer_) { camJoystick_.onPointer(0.0f, 0.0f, false); camPointer_ = -1; }
+}
+
 RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
-    // Камера следует за ИНТЕРПОЛИРОВАННОЙ позицией цели (плавно, на рендер-частоте).
+    // Камера ¾-вида следует за ИНТЕРПОЛИРОВАННОЙ позицией цели; азимут/зум двигает игрок
+    // (правый стик на Android либо стрелки на десктопе). Наклон камеры фиксирован.
     Vec3 focusPos = player_.prevPosition + (player_.position - player_.prevPosition) * alpha;
-    float focusYaw = lerpAngle(player_.prevFacingYaw, player_.facingYaw, alpha);
-    camera_.follow(focusPos, focusYaw, renderDt);
+
+    constexpr float kCamYawSpeed = 2.4f;    // рад/с при полном отклонении
+    constexpr float kCamZoomSpeed = 14.0f;  // world/с при полном отклонении
+    float camYaw = camJoystick_.active ? camJoystick_.x : extCamYaw_;
+    float camZoom = camJoystick_.active ? camJoystick_.y : extCamZoom_;
+    camera_.rotate(camYaw * kCamYawSpeed * renderDt);   // вправо -> камера поворачивается вправо
+    camera_.zoom(-camZoom * kCamZoomSpeed * renderDt);  // вверх -> приблизить (меньше distance)
+    camera_.follow(focusPos, renderDt);
 
     RenderFrame frame;
     frame.view = camera_.view();

@@ -9,5 +9,6 @@ Files:
   button_normal.png    — amber CTA idle
   button_hover.png     — amber hover
   button_active.png    — amber pressed
+  loading_core.png     — loading art (base core in niche, 16:9)
 
-Regenerate: python gen_ui_skin.py
+Regenerate UI chrome: python gen_ui_skin.py

@@ -230,6 +230,7 @@ bool loadSceneDesc(AssetSource& assets, const char* path, SceneDesc& out) {
                 std::string k = t[i++];
                 if (k == "distance") { if (!readF(t, i, line, out.camera.distance)) return false; }
                 else if (k == "height") { if (!readF(t, i, line, out.camera.height)) return false; }
+                else if (k == "pitch") { if (!readF(t, i, line, out.camera.pitch)) return false; }
                 else if (k == "lookHeight") { if (!readF(t, i, line, out.camera.lookHeight)) return false; }
                 else if (k == "fov") { if (!readF(t, i, line, out.camera.fovY)) return false; }
                 else if (k == "near") { if (!readF(t, i, line, out.camera.nearZ)) return false; }

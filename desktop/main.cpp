@@ -117,6 +117,14 @@ int runClient(int backend, GameUiState& ui, const std::string& assetsDir,
         }
         scene.setMoveInput(jx, jy);
 
+        // Стрелки -> камера: лево/право = орбита вокруг героя, верх/низ = зум.
+        float cyaw = 0.0f, czoom = 0.0f;
+        if (!ImGui::GetIO().WantCaptureKeyboard) {
+            cyaw = (float)keyAxis(window, GLFW_KEY_RIGHT, GLFW_KEY_LEFT);
+            czoom = (float)keyAxis(window, GLFW_KEY_UP, GLFW_KEY_DOWN);  // вверх = приблизить
+        }
+        scene.setCameraInput(cyaw, czoom);
+
         // Пробел (по фронту нажатия) -> прыжок.
         bool space = !ImGui::GetIO().WantCaptureKeyboard &&
                      glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
@@ -195,8 +203,10 @@ int main(int argc, char** argv) {
 
     // Начальный бэкенд: по умолчанию GL, --vk -> Vulkan. Дальше — кнопки в GameUi.
     int backend = 0;
+    bool startLoadingPreview = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--vk") == 0) backend = 1;
+        if (std::strcmp(argv[i], "--loading") == 0) startLoadingPreview = true;
     }
 
     if (!glfwInit()) {
@@ -209,6 +219,7 @@ int main(int argc, char** argv) {
 
     GameUiState ui;
     ui.vulkanAvailable = vulkanAvailable;
+    ui.showLoadingPreview = startLoadingPreview;
 
     // Цикл перезапуска: runClient возвращает следующий бэкенд или -1 (выход).
     while (backend >= 0) {

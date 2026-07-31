@@ -89,9 +89,19 @@ public:
     // Кадр с интерполяцией между тиками (alpha 0..1) + сглаживание камеры (renderDt).
     RenderFrame render(float alpha, float aspect, float renderDt);
 
-    void onPointer(float x, float y, bool pressed);  // -> джойстик (тач)
-    void setMoveInput(float x, float y) { extX_ = x; extY_ = y; }  // внешняя ось (клавиатура)
+    void onPointer(float x, float y, bool pressed);  // -> левый джойстик (одиночный тач/десктоп)
+    void setMoveInput(float x, float y) { extX_ = x; extY_ = y; }  // внешняя ось героя (WASD)
+    void setCameraInput(float yawAxis, float zoomAxis) {           // внешняя ось камеры (стрелки)
+        extCamYaw_ = yawAxis;
+        extCamZoom_ = zoomAxis;
+    }
     void requestJump() { jumpQueued_ = true; }  // прыжок на следующем тике (клавиша/кнопка)
+
+    // Мультитач (Android twin-stick): левая половина экрана — левый стик (герой),
+    // правая — правый стик (камера). Каждый стик держит палец по его id.
+    void onTouchDown(int id, float x, float y, float vw, float vh);
+    void onTouchMove(int id, float x, float y);
+    void onTouchUp(int id);
 
     // Клик/тап (пиксели x,y в вьюпорте vw×vh) -> raycast по зданиям, выделение для панели.
     void onClick(float x, float y, float vw, float vh);
@@ -112,7 +122,8 @@ public:
     int remoteCount() const;  // число ДРУГИХ героев (без зданий/врагов)
 
     // Для ImGui/HUD.
-    const VirtualJoystick& joystick() const { return joystick_; }
+    const VirtualJoystick& joystick() const { return joystick_; }         // левый стик (герой)
+    const VirtualJoystick& cameraJoystick() const { return camJoystick_; }  // правый стик (камера)
     float characterSpeed() const { return player_.speed01; }
     float resourceCurrent() const;  // сумма ресурса во всех хранилищах (из снапшотов)
     float resourceCap() const;      // суммарная ёмкость хранилищ (из описания сцены)
@@ -128,8 +139,8 @@ public:
     void setModelYawOffset(float y) { foxYawOffset_ = y; }
     float cameraDistance() const { return camera_.distance; }
     void setCameraDistance(float d) { camera_.distance = d; }
-    float cameraHeight() const { return camera_.height; }
-    void setCameraHeight(float h) { camera_.height = h; }
+    float cameraPitch() const { return camera_.pitch; }
+    void setCameraPitch(float p) { camera_.pitch = p; }
 
     Vec3 lightDir() const { return lightDir_; }
     void setLightDir(Vec3 d) { lightDir_ = d; }
@@ -149,8 +160,12 @@ private:
     MaterialHandle genMat_ = 0, storMat_ = 0, spawnMat_ = 0, coreMat_ = 0, enemyMat_ = 0, towerMat_ = 0;
     Character player_;        // управляемый актор (симуляция)
     std::unique_ptr<CollisionWorld> collision_;  // кинематическая физика (Jolt)
-    VirtualJoystick joystick_;
-    float extX_ = 0.0f, extY_ = 0.0f;  // внешняя ось движения (клавиатура на десктопе)
+    VirtualJoystick joystick_;         // левый стик — движение героя
+    VirtualJoystick camJoystick_;      // правый стик — камера (Android)
+    int movePointer_ = -1;             // id пальца, владеющего левым стиком (-1 нет)
+    int camPointer_ = -1;              // id пальца, владеющего правым стиком
+    float extX_ = 0.0f, extY_ = 0.0f;  // внешняя ось движения героя (WASD на десктопе)
+    float extCamYaw_ = 0.0f, extCamZoom_ = 0.0f;  // внешняя ось камеры (стрелки на десктопе)
     bool jumpQueued_ = false;          // запрошен прыжок (сбрасывается в fixedUpdate)
     float uiScale_ = 1.0f;
     Vec3 lightDir_{0.4f, 1.0f, 0.6f};  // направление НА свет (из файла сцены)
