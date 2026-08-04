@@ -275,14 +275,16 @@ extern "C" void android_main(android_app* app) {
             // -> джойстик/пикинг не активируем. Релиз отдаём всегда (чтобы не залипал).
             if (engine.touchHad && engine.scene) {
                 bool guiOwns = ImGui::GetIO().WantCaptureMouse;
+                const bool play = GameUi::gameplayActive();  // вне боя стик не стартуем
                 float w = app->window != nullptr ? (float)ANativeWindow_getWidth(app->window) : 1.0f;
                 float h = app->window != nullptr ? (float)ANativeWindow_getHeight(app->window) : 1.0f;
                 for (int i = 0; i < engine.touchEventCount; ++i) {
                     const TouchEvent& e = engine.touchEvents[i];
-                    // DOWN не стартует стик, если палец пришёлся на GUI (тап по панели). MOVE/UP
-                    // диспатчим всегда — Scene игнорит id, не владеющий стиком (не залипнет).
+                    // DOWN не стартует стик, если палец на GUI (тап по панели) или мы вне боя
+                    // (меню/лоадинг/диалог). MOVE/UP диспатчим всегда — Scene игнорит id, не
+                    // владеющий стиком (не залипнет).
                     if (e.kind == 0) {
-                        if (!guiOwns) engine.scene->onTouchDown(e.id, e.x, e.y, w, h);
+                        if (!guiOwns && play) engine.scene->onTouchDown(e.id, e.x, e.y, w, h);
                     } else if (e.kind == 1) {
                         engine.scene->onTouchMove(e.id, e.x, e.y);
                     } else {

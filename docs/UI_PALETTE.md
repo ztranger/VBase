@@ -142,10 +142,9 @@
 Файл: `app/src/main/assets/ui/loading_core.png` (16:9).
 
 **Превью в игре (ещё не настоящий лоадинг):**
-- Кнопка в панели VBase → **Debug → «Показать лоадинг»**
-- Десктоп: флаг `--loading` при старте (`vbase_desktop.exe --loading`)
-- `GameUiState.showLoadingPreview` / `UiMode::Loading` — арт + пульс ядра/луча/пыли +
-  фейковый бар (см. [UI_SYSTEM.md](UI_SYSTEM.md))
-- Скрыть: кнопка «Скрыть» на оверлее
+- Кнопка **Debug → «Показать лоадинг»** (`UiShell::setMode(UiMode::Loading)`)
+- Десктоп: флаг `--loading` при старте → `GameUi::requestLoadingScreen()`
+- `UiMode::Loading` — арт + пульс ядра/луча/пыли + фейковый бар (см. [UI_SYSTEM.md](UI_SYSTEM.md))
+- Скрыть: кнопка «Скрыть» на оверлее (→ `UiMode::MainMenu`)
 
 Настоящую загрузку ассетов/прогресс подключим позже; сейчас только визуал.

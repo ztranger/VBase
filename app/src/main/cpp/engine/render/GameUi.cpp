@@ -55,4 +55,8 @@ void unloadSkin(Renderer& renderer) {
 
 void build(GameUiState& state, Scene& scene) { UiShell::build(state, scene, g_skin); }
 
+bool gameplayActive() { return UiShell::gameplayActive(); }
+
+void requestLoadingScreen() { UiShell::setMode(UiMode::Loading); }
+
 }  // namespace GameUi

@@ -5,6 +5,7 @@
 #include "imgui.h"
 
 #include "engine/core/Input.h"
+#include "engine/render/ui/windows/BuildingInfo.h"
 #include "engine/render/ui/windows/DebugPanel.h"
 #include "game/BuildingConfig.h"
 #include "game/Scene.h"

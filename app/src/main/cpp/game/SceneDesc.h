@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -71,6 +72,7 @@ struct BuildingSpec {
     float hp = 0.0f;      // core: здоровье
     float damage = 0.0f;  // tower: урон за выстрел
     float range = 0.0f;   // tower: радиус поражения
+    uint8_t team = 0;     // сторона (0 = соло/кооп; 1/2 — PvP)
 };
 
 // Боевые параметры врага (враги не в сцене — их плодит спавнер; статы из конфига).

@@ -39,6 +39,10 @@ void pushOk(const char* title, const char* text, DialogCallback cb = {});
 void pushYesNo(const char* title, const char* text, DialogCallback cb = {});
 bool hasModal();
 
+// true только когда идёт бой и нет модалки. По нему платформа гейтит игровой ввод:
+// в меню/лоадинге/под диалогом WASD и тач-стики не должны двигать героя/камеру.
+bool gameplayActive();
+
 // Ассеты лоадинга (текстуры). Вызывать из GameUi::loadSkin / unloadSkin.
 void loadLoadingAssets(Renderer& renderer, AssetSource& assets);
 void unloadLoadingAssets(Renderer& renderer);

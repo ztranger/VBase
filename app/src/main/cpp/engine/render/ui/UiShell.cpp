@@ -12,7 +12,6 @@ namespace {
 UiMode g_mode = UiMode::MainMenu;
 MainMenuPanel g_panel = MainMenuPanel::Home;
 bool g_debugOpen = true;
-bool g_bootstrapped = false;
 UiDialogs::Stack g_dialogs;
 
 }  // namespace
@@ -61,6 +60,8 @@ void pushYesNo(const char* title, const char* text, DialogCallback cb) {
 
 bool hasModal() { return g_dialogs.hasModal(); }
 
+bool gameplayActive() { return g_mode == UiMode::Battle && !g_dialogs.hasModal(); }
+
 void loadLoadingAssets(Renderer& renderer, AssetSource& assets) {
     LoadingScreen::load(renderer, assets);
 }
@@ -70,14 +71,6 @@ void unloadLoadingAssets(Renderer& renderer) { LoadingScreen::unload(renderer); 
 bool hasLoadingArt() { return LoadingScreen::hasArt(); }
 
 void build(GameUiState& state, Scene& scene, const UiSkin::Assets& skin) {
-    // Платформенный флаг --loading / showLoadingPreview → режим Loading один раз.
-    if (!g_bootstrapped) {
-        g_bootstrapped = true;
-        if (state.showLoadingPreview) g_mode = UiMode::Loading;
-    }
-    // Синхронизация: Loading mode отражает preview-флаг для обратной совместимости.
-    state.showLoadingPreview = (g_mode == UiMode::Loading);
-
     Ctx ctx{state, scene, skin};
 
     switch (g_mode) {
@@ -89,10 +82,7 @@ void build(GameUiState& state, Scene& scene, const UiSkin::Assets& skin) {
                              ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
                                  ImGuiWindowFlags_NoSavedSettings)) {
                 ImGui::TextUnformatted("Превью лоадинга");
-                if (ctx.btn("Скрыть")) {
-                    setMode(UiMode::MainMenu);
-                    state.showLoadingPreview = false;
-                }
+                if (ctx.btn("Скрыть")) setMode(UiMode::MainMenu);
                 ImGui::SameLine();
                 ImGui::TextDisabled("(или --loading)");
             }

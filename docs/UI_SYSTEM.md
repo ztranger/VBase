@@ -35,8 +35,8 @@ UiShell::pushYesNo("Выход", "Покинуть бой?", [](DialogResult r){
 });
 ```
 
-`GameUiState.showLoadingPreview` при старте (`--loading`) переводит shell в
-`UiMode::Loading` один раз; далее флаг синхронизируется с режимом.
+Десктопный флаг `--loading` зовёт `GameUi::requestLoadingScreen()` один раз при
+старте (`UiShell::setMode(UiMode::Loading)`); дальше режимом рулит только shell.
 
 ## Как добавить раздел главного меню
 

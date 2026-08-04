@@ -22,6 +22,7 @@
 
 #include "engine/physics/CollisionWorld.h"
 #include "engine/assets/FileAssetSource.h"
+#include "game/GameWorld.h"
 #include "engine/net/Net.h"
 #include "game/SceneDesc.h"
 #include "game/SceneLoader.h"
@@ -395,6 +396,120 @@ int runBuildTest() {
     return ok ? 0 : 1;
 }
 
+// Тест ресурса per-team (#4): у каждой команды свой пул. Гоняем GameWorld напрямую (без
+// сети): пулы двух команд наполняются независимо в свои потолки, а tryBuild списывает пул
+// строителя, не трогая чужой.
+int runTeamEconomyTest() {
+    GameWorld world;
+    SceneDesc desc;
+    BuildingSpec g0; g0.kind = BuildingSpec::Generator; g0.pos = Vec3{0,0,0}; g0.rate = 10.0f; g0.team = 0;
+    BuildingSpec s0; s0.kind = BuildingSpec::Storage;   s0.pos = Vec3{2,0,0}; s0.cap = 50.0f;  s0.team = 0;
+    BuildingSpec g1; g1.kind = BuildingSpec::Generator; g1.pos = Vec3{0,0,4}; g1.rate = 20.0f; g1.team = 1;
+    BuildingSpec s1; s1.kind = BuildingSpec::Storage;   s1.pos = Vec3{2,0,4}; s1.cap = 100.0f; s1.team = 1;
+    desc.buildings = {g0, s0, g1, s1};
+    desc.build[(int)EntityType::Tower] = BuildTemplate{true, 30.0f, 0.5f, 0.0f, 0.0f, 8.0f, 5.0f};
+    world.configure(desc);
+
+    const float dt = kTickDt;
+    for (int i = 0; i < 300; ++i) world.step(dt);  // ~10 c — пулы упираются в потолки
+    float r0 = world.resource(0), r1 = world.resource(1);
+    bool econOk = r0 > 49.0f && r0 < 51.0f && r1 > 99.0f && r1 < 101.0f;  // независимо, в свой cap
+
+    // Строитель команды 1 ставит башню — списывается пул team1, team0 не меняется.
+    uint32_t hero1 = world.addHero(1);
+    float b0 = world.resource(0), b1 = world.resource(1);
+    bool built = world.tryBuild(hero1, EntityType::Tower, 3, 3);
+    float a0 = world.resource(0), a1 = world.resource(1);
+    bool buildOk = built && a0 == b0 && (b1 - a1) > 29.0f && (b1 - a1) < 31.0f;
+
+    std::printf("[TeamEcon] пулы: team0=%.0f (ждём 50), team1=%.0f (ждём 100)\n", (double)r0, (double)r1);
+    std::printf("[TeamEcon] постройка team1: списано team1=%.0f (ждём 30), team0 не тронут=%s\n",
+                (double)(b1 - a1), (a0 == b0) ? "да" : "нет");
+    bool ok = econOk && buildOk;
+    std::printf("[TeamEcon] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
+// Кооп-тест (G4): два клиента на одной команде (team 0) делят базу. Оба видят друг друга
+// (по 2 героя в снапшоте), оба строят из ОБЩЕГО пула на разных клетках; после дисконнекта
+// одного база и второй герой остаются.
+int runCoopTest() {
+    SceneDesc desc;
+    ColliderSpec floor;
+    floor.center = Vec3{0, -0.5f, 0};
+    floor.half = Vec3{50, 0.5f, 50};
+    desc.colliders.push_back(floor);
+    BuildingSpec gen; gen.kind = BuildingSpec::Generator; gen.pos = Vec3{0,0,0};  gen.rate = 50.0f; desc.buildings.push_back(gen);
+    BuildingSpec sto; sto.kind = BuildingSpec::Storage;   sto.pos = Vec3{-2,0,0}; sto.cap = 300.0f; desc.buildings.push_back(sto);
+    desc.build[(int)EntityType::Tower] = BuildTemplate{true, 30.0f, 0.5f, 0.0f, 0.0f, 8.0f, 5.0f};
+    desc.player.pos = Vec3{0, 0, 8};
+
+    NetServer server;
+    if (!server.start(kNetPort)) { std::printf("[CoopTest] FAIL: сервер не стартовал\n"); return 1; }
+    server.configureWorld(desc);
+    NetClient a, b;
+    a.connect("127.0.0.1", kNetPort);
+    b.connect("127.0.0.1", kNetPort);
+
+    const float dt = kTickDt;
+    InputCommand idle;
+    uint32_t sa = 0, sb = 0;
+    bool builtA = false, builtB = false;
+    int aHeroes = 0, bHeroes = 0, towers = 0;
+    for (int i = 0; i < 500; ++i) {
+        server.poll();
+        if (a.connected() && a.myId() != 0) { idle.seq = ++sa; a.sendInput(idle); }
+        if (b.connected() && b.myId() != 0) { idle.seq = ++sb; b.sendInput(idle); }
+        if (server.debugResource() >= 100.0f) {  // накопился общий пул -> оба строят
+            if (!builtA && a.myId() != 0) { a.sendBuild((uint8_t)EntityType::Tower, 3, 3); builtA = true; }
+            if (!builtB && b.myId() != 0) { b.sendBuild((uint8_t)EntityType::Tower, -3, 3); builtB = true; }
+        }
+        server.tick(dt);
+        a.poll(); b.poll();
+        if (a.consumeSnapshot()) {
+            aHeroes = 0; towers = 0;
+            for (const EntityState& s : a.states()) {
+                if ((EntityType)s.type == EntityType::Hero) aHeroes++;
+                if ((EntityType)s.type == EntityType::Tower) towers++;
+            }
+        }
+        if (b.consumeSnapshot()) {
+            bHeroes = 0;
+            for (const EntityState& s : b.states())
+                if ((EntityType)s.type == EntityType::Hero) bHeroes++;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    bool coopOk = aHeroes == 2 && bHeroes == 2 && towers == 2;  // видят друг друга + оба построили
+
+    // Фаза 2: b уходит — база (башни) и герой a остаются.
+    b.disconnect();
+    int aHeroesAfter = 0, towersAfter = 0;
+    for (int i = 0; i < 100; ++i) {
+        server.poll();
+        if (a.myId() != 0) { idle.seq = ++sa; a.sendInput(idle); }
+        server.tick(dt);
+        a.poll();
+        if (a.consumeSnapshot()) {
+            aHeroesAfter = 0; towersAfter = 0;
+            for (const EntityState& s : a.states()) {
+                if ((EntityType)s.type == EntityType::Hero) aHeroesAfter++;
+                if ((EntityType)s.type == EntityType::Tower) towersAfter++;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    bool dcOk = aHeroesAfter == 1 && towersAfter == 2;  // остался только свой герой, база цела
+
+    std::printf("[CoopTest] у обоих клиентов героев=%d/%d (ждём 2/2), башен=%d (ждём 2)\n",
+                aHeroes, bHeroes, towers);
+    std::printf("[CoopTest] после ухода b: героев у a=%d (ждём 1), башен=%d (ждём 2)\n",
+                aHeroesAfter, towersAfter);
+    bool ok = coopOk && dcOk;
+    std::printf("[CoopTest] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
 // Печатает локальные IPv4-адреса машины — чтобы не искать их вручную.
 // Winsock уже инициализирован (enet_initialize в NetServer::start).
 void printLocalAddresses(uint16_t port) {
@@ -435,7 +550,9 @@ int main(int argc, char** argv) {
         int d = runSpawnerTest();       // спавнеры -> враги бегут к ядру
         int e = runCombatTest();        // бой: враги валят ядро / башни валят врагов + фаза матча
         int f = runBuildTest();         // стройка: MSG_BUILD -> валидация на сетке -> сущность
-        return (a == 0 && b == 0 && c == 0 && d == 0 && e == 0 && f == 0) ? 0 : 1;
+        int g = runTeamEconomyTest();   // ресурс per-team: независимые пулы + трата пула команды
+        int h = runCoopTest();          // кооп: 2 клиента на одной базе + дисконнект
+        return (a == 0 && b == 0 && c == 0 && d == 0 && e == 0 && f == 0 && g == 0 && h == 0) ? 0 : 1;
     }
 
     uint16_t port = kNetPort;

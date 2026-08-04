@@ -196,6 +196,7 @@ bool loadSceneDesc(AssetSource& assets, const char* path, SceneDesc& out) {
                 else if (k == "hp") { if (!readF(t, i, line, b.hp)) return false; }          // core
                 else if (k == "damage") { if (!readF(t, i, line, b.damage)) return false; }  // tower
                 else if (k == "range") { if (!readF(t, i, line, b.range)) return false; }    // tower
+                else if (k == "team") { int tm = 0; if (!readI(t, i, line, tm)) return false; b.team = (uint8_t)tm; }
                 else { LOGE("scene: строка %d: неизвестный ключ %s '%s'", line, cmd.c_str(), k.c_str()); return false; }
             }
             out.buildings.push_back(b);

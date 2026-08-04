@@ -110,9 +110,13 @@ int runClient(int backend, GameUiState& ui, const std::string& assetsDir,
         last = now;
         if (dt > 0.25f) dt = 0.25f;
 
+        // Игровой ввод активен только в бою без модалки: в меню/лоадинге/под диалогом
+        // герой не ходит и камера не крутится, даже если жать по пустым зонам экрана.
+        const bool play = GameUi::gameplayActive();
+
         // WASD -> ось движения; если ImGui захватил клавиатуру — не двигаемся.
         float jx = 0.0f, jy = 0.0f;
-        if (!ImGui::GetIO().WantCaptureKeyboard) {
+        if (play && !ImGui::GetIO().WantCaptureKeyboard) {
             jx = (float)keyAxis(window, GLFW_KEY_D, GLFW_KEY_A);
             jy = (float)keyAxis(window, GLFW_KEY_W, GLFW_KEY_S);
         }
@@ -120,27 +124,27 @@ int runClient(int backend, GameUiState& ui, const std::string& assetsDir,
 
         // Стрелки -> камера: лево/право = орбита вокруг героя, верх/низ = зум.
         float cyaw = 0.0f, czoom = 0.0f;
-        if (!ImGui::GetIO().WantCaptureKeyboard) {
+        if (play && !ImGui::GetIO().WantCaptureKeyboard) {
             cyaw = (float)keyAxis(window, GLFW_KEY_RIGHT, GLFW_KEY_LEFT);
             czoom = (float)keyAxis(window, GLFW_KEY_UP, GLFW_KEY_DOWN);  // вверх = приблизить
         }
         scene.setCameraInput(cyaw, czoom);
 
         // Пробел (по фронту нажатия) -> прыжок.
-        bool space = !ImGui::GetIO().WantCaptureKeyboard &&
+        bool space = play && !ImGui::GetIO().WantCaptureKeyboard &&
                      glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
         if (space && !prevSpace) scene.requestJump();
         prevSpace = space;
 
         // Enter (по фронту) -> подтвердить постройку (в режиме стройки).
-        bool enter = !ImGui::GetIO().WantCaptureKeyboard &&
+        bool enter = play && !ImGui::GetIO().WantCaptureKeyboard &&
                      glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS;
         if (enter && !prevEnter) scene.confirmBuild();
         prevEnter = enter;
 
         // ЛКМ (по фронту, если ImGui не забрал мышь) -> пикинг здания под курсором.
         bool mouse = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
-        if (mouse && !prevMouse && !ImGui::GetIO().WantCaptureMouse) {
+        if (play && mouse && !prevMouse && !ImGui::GetIO().WantCaptureMouse) {
             double cx = 0.0, cy = 0.0;
             glfwGetCursorPos(window, &cx, &cy);
             int ww = 0, wh = 0;
@@ -204,16 +208,29 @@ int main(int argc, char** argv) {
 #endif
     std::setvbuf(stdout, nullptr, _IONBF, 0);
 
-    const char* serverIp = (argc > 1) ? argv[1] : "127.0.0.1";
-    std::string assetsDir = (argc > 2) ? argv[2] : "../../app/src/main/assets";
-    const char* scenePath = (argc > 3) ? argv[3] : "scenes/default.scene";
-
-    // Начальный бэкенд: по умолчанию GL, --vk -> Vulkan. Дальше — кнопки в GameUi.
-    int backend = 0;
+    // Аргументы: позиционные [serverIp] [assetsDir] [scenePath] + флаги (--vk / --loading)
+    // в любом месте. Флаги НЕ занимают позиционные слоты — поэтому `--loading` одним
+    // аргументом оставляет serverIp = 127.0.0.1 (иначе авто-joinGame виснет на DNS).
+    const char* serverIp = "127.0.0.1";
+    std::string assetsDir = "../../app/src/main/assets";
+    const char* scenePath = "scenes/default.scene";
+    int backend = 0;  // GL по умолчанию, --vk -> Vulkan; дальше — кнопки в GameUi
     bool startLoadingPreview = false;
+
+    int positional = 0;
     for (int i = 1; i < argc; ++i) {
-        if (std::strcmp(argv[i], "--vk") == 0) backend = 1;
-        if (std::strcmp(argv[i], "--loading") == 0) startLoadingPreview = true;
+        if (std::strcmp(argv[i], "--vk") == 0) {
+            backend = 1;
+        } else if (std::strcmp(argv[i], "--loading") == 0) {
+            startLoadingPreview = true;
+        } else {
+            switch (positional++) {
+                case 0: serverIp = argv[i]; break;
+                case 1: assetsDir = argv[i]; break;
+                case 2: scenePath = argv[i]; break;
+                default: break;  // лишние позиционные игнорируем
+            }
+        }
     }
 
     if (!glfwInit()) {
@@ -226,7 +243,7 @@ int main(int argc, char** argv) {
 
     GameUiState ui;
     ui.vulkanAvailable = vulkanAvailable;
-    ui.showLoadingPreview = startLoadingPreview;
+    if (startLoadingPreview) GameUi::requestLoadingScreen();  // --loading: стартуем на лоадинге
 
     // Цикл перезапуска: runClient возвращает следующий бэкенд или -1 (выход).
     while (backend >= 0) {

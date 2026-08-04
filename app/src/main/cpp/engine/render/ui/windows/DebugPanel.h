@@ -5,7 +5,3 @@
 namespace DebugPanel {
 void draw(UiShell::Ctx& ctx);
 }
-
-namespace BuildingInfoWindow {
-void draw(UiShell::Ctx& ctx);
-}

@@ -1,4 +1,4 @@
-#include "engine/render/ui/windows/DebugPanel.h"
+#include "engine/render/ui/windows/BuildingInfo.h"
 
 #include <cfloat>
 #include <string>

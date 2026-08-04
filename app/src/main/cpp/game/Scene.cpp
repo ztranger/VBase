@@ -315,6 +315,7 @@ void Scene::applySnapshot() {
         if (s.id == myId) {
             // Reconciliation: ставим авторитетное состояние сервера и ПЕРЕИГРЫВАЕМ
             // все вводы, которые сервер ещё не обработал (seq > ack).
+            localTeam_ = s.team;  // своя команда — для ресурса/стройки per-team
             player_.position = {s.x, s.y, s.z};
             player_.facingYaw = s.yaw;
             player_.speed01 = s.speed01;
@@ -488,10 +489,16 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
 
         // Рендер по типу сущности (задел под остальные типы — враги/башни/ядро).
         switch ((EntityType)r.type) {
-            case EntityType::Hero:
-                frame.skinned.push_back(
-                    makeFoxItem(r.ch.position, r.ch.facingYaw, r.ch.animParam, r.ch.animTime));
+            case EntityType::Hero: {
+                // Чужой герой: союзник (та же команда) — синеватый, противник (PvP) — красный.
+                // Свой герой рисуется отдельно (player_) обычным цветом — так их не спутать.
+                SkinnedItem it =
+                    makeFoxItem(r.ch.position, r.ch.facingYaw, r.ch.animParam, r.ch.animTime);
+                it.color = (r.team == localTeam_) ? Vec3{0.55f, 0.75f, 1.0f}   // союзник
+                                                  : Vec3{1.0f, 0.45f, 0.45f};  // враг
+                frame.skinned.push_back(it);
                 break;
+            }
             case EntityType::Generator:
                 frame.items.push_back(
                     {genMesh_, genMat_, Mat4::translation(r.ch.position + Vec3{0.0f, 0.5f, 0.0f})});
@@ -544,16 +551,16 @@ int Scene::remoteCount() const {
 }
 
 float Scene::resourceCurrent() const {
-    float sum = 0.0f;
+    float sum = 0.0f;  // только хранилища СВОЕЙ команды (aux из снапшотов)
     for (const RemoteEntity& r : remoteEntities_)
-        if ((EntityType)r.type == EntityType::Storage) sum += r.aux;
+        if ((EntityType)r.type == EntityType::Storage && r.team == localTeam_) sum += r.aux;
     return sum;
 }
 
 float Scene::resourceCap() const {
-    float sum = 0.0f;
+    float sum = 0.0f;  // ёмкость хранилищ своей команды (из сцены; рантайм-хранилища — позже)
     for (const BuildingSpec& b : sceneDesc_.buildings)
-        if (b.kind == BuildingSpec::Storage) sum += b.cap;
+        if (b.kind == BuildingSpec::Storage && b.team == localTeam_) sum += b.cap;
     return sum;
 }
 

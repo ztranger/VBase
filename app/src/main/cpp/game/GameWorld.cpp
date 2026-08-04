@@ -37,7 +37,7 @@ void GameWorld::reset() {
     entities_.clear();
     world_.reset();  // контроллеры уйдут вместе с миром
     nextEntityId_ = 1;
-    resource_ = 0.0f;
+    for (float& r : resourcePerTeam_) r = 0.0f;
     spawnPos_ = Vec3{0.0f, 0.0f, 0.0f};
     capsuleRadius_ = 0.3f;
     capsuleCylHalf_ = 0.3f;
@@ -70,6 +70,7 @@ void GameWorld::configure(const SceneDesc& desc) {
             case BuildingSpec::Tower:     e.type = EntityType::Tower;     break;
             case BuildingSpec::Core:      e.type = EntityType::Core;      break;
         }
+        e.team = b.team;        // сторона (соло/кооп = 0; PvP 1/2)
         e.move.position = b.pos;
         e.move.snapshot();
         e.rate = b.rate;        // generator/spawner/tower: интервал/скорость
@@ -118,7 +119,13 @@ bool GameWorld::tryBuild(uint32_t builderId, EntityType type, int cellX, int cel
     if ((int)type < 0 || (int)type >= 8) return false;
     const BuildTemplate& t = buildTemplates_[(int)type];
     if (!t.buildable) return false;          // тип нельзя ставить (нет cost в конфиге)
-    if (resource_ < t.cost) return false;    // не хватает ресурса
+
+    uint8_t team = 0;  // команда строителя — из неё тратим ресурс и ей же принадлежит здание
+    const Entity* builder = entityById(builderId);
+    if (builder != nullptr) team = builder->team;
+    if (team >= kMaxTeams) return false;
+    if (resourcePerTeam_[team] < t.cost) return false;  // не хватает ресурса команды
+
     if (!grid::inArena(cellX, cellZ)) return false;  // вне зоны строительства
     for (const Entity& e : entities_) {      // клетка занята другим зданием?
         if (!isBuildingType(e.type)) continue;
@@ -126,11 +133,7 @@ bool GameWorld::tryBuild(uint32_t builderId, EntityType type, int cellX, int cel
             return false;
     }
 
-    uint8_t team = 0;  // команда строителя (для будущего per-team; сейчас всё team 0)
-    const Entity* builder = entityById(builderId);
-    if (builder != nullptr) team = builder->team;
-
-    resource_ -= t.cost;
+    resourcePerTeam_[team] -= t.cost;
     Entity e;
     e.id = nextEntityId_++;
     e.type = type;
@@ -145,8 +148,8 @@ bool GameWorld::tryBuild(uint32_t builderId, EntityType type, int cellX, int cel
     // Пока БЕЗ футпринт-коллайдера: враги — steer-to-target без пасфайндинга, блок бы их
     // стопорил. Башня влияет позицией/радиусом, генератор/хранилище — экономикой.
     entities_.push_back(e);
-    LOGI("GameWorld: возведено type=%d в клетке (%d,%d), ресурс=%.0f",
-         (int)type, cellX, cellZ, (double)resource_);
+    LOGI("GameWorld: возведено type=%d team=%d в клетке (%d,%d), ресурс=%.0f",
+         (int)type, (int)team, cellX, cellZ, (double)resourcePerTeam_[team]);
     return true;
 }
 
@@ -163,24 +166,28 @@ void GameWorld::step(float dt) {
 
     if (phase_ != GamePhase::Playing) return;  // матч кончился — экономика/бой стоят
 
-    // Экономика: генераторы капают в общий пул, ограниченный суммой ёмкостей хранилищ
-    // (лишнее теряется — это и есть потолок накоплений). Пул раскладываем по хранилищам
-    // в поле aux (заполнение конкретного хранилища) — так он попадает в сеть.
+    // Экономика ПО КОМАНДАМ: у каждой стороны свой пул, питаемый её генераторами и
+    // ограниченный суммой ёмкостей её хранилищ (лишнее теряется — потолок накоплений).
+    // Пул раскладываем по хранилищам этой команды в aux — так он попадает в сеть.
     {
-        float prod = 0.0f, cap = 0.0f;
+        float prod[kMaxTeams] = {0.0f}, cap[kMaxTeams] = {0.0f};
         for (const Entity& e : entities_) {
-            if (e.type == EntityType::Generator) prod += e.rate;
-            else if (e.type == EntityType::Storage) cap += e.cap;
+            if (e.team >= kMaxTeams) continue;
+            if (e.type == EntityType::Generator) prod[e.team] += e.rate;
+            else if (e.type == EntityType::Storage) cap[e.team] += e.cap;
         }
-        resource_ += prod * dt;
-        if (resource_ > cap) resource_ = cap;
-        if (resource_ < 0.0f) resource_ = 0.0f;
-        float rem = resource_;
+        float rem[kMaxTeams];
+        for (int t = 0; t < kMaxTeams; ++t) {
+            resourcePerTeam_[t] += prod[t] * dt;
+            if (resourcePerTeam_[t] > cap[t]) resourcePerTeam_[t] = cap[t];
+            if (resourcePerTeam_[t] < 0.0f) resourcePerTeam_[t] = 0.0f;
+            rem[t] = resourcePerTeam_[t];
+        }
         for (Entity& e : entities_) {
-            if (e.type != EntityType::Storage) continue;
-            float amt = rem < e.cap ? rem : e.cap;
+            if (e.type != EntityType::Storage || e.team >= kMaxTeams) continue;
+            float amt = rem[e.team] < e.cap ? rem[e.team] : e.cap;
             e.aux = amt;
-            rem -= amt;
+            rem[e.team] -= amt;
         }
     }
 

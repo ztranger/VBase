@@ -62,8 +62,13 @@ public:
     uint32_t inputSeq(uint32_t heroId) const; // seq последнего ввода героя (для ackSeq снапшота)
     GamePhase gamePhase() const { return phase_; }  // фаза матча (в заголовок снапшота)
 
+    // Максимум команд (0 = соло/кооп; для PvP 2v2 хватает; запас на free-for-all).
+    static constexpr int kMaxTeams = 4;
+
     // Отладка/самотесты.
-    float resource() const { return resource_; }
+    float resource(uint8_t team = 0) const {  // пул ресурса команды
+        return team < kMaxTeams ? resourcePerTeam_[team] : 0.0f;
+    }
     int enemyCount() const;
     float coreHp() const;  // здоровье первого ядра (для CombatTest)
 
@@ -74,7 +79,7 @@ private:
     Vec3 spawnPos_{0.0f, 0.0f, 0.0f};         // точка спавна героев (из сцены)
     float capsuleRadius_ = 0.3f;
     float capsuleCylHalf_ = 0.3f;
-    float resource_ = 0.0f;                   // общий пул ресурса базы (team 0; per-team — позже)
+    float resourcePerTeam_[kMaxTeams] = {0.0f};  // пул ресурса на каждую команду
     EnemySpec enemyStats_;                    // hp/урон/интервал врага (из конфига через сцену)
     BuildTemplate buildTemplates_[8];         // шаблоны построек героя по EntityType (из сцены)
     GamePhase phase_ = GamePhase::Playing;    // жизненный цикл матча
