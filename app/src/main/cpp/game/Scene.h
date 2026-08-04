@@ -111,6 +111,16 @@ public:
     const BuildingInfo* selectedInfo() const;  // тексты/параметры из конфига (или nullptr)
     float selectedAux() const;              // динамика (ресурс в хранилище и т.п.)
 
+    // Стройка (G3-B): выбор типа -> призрак перед героем на клетке сетки -> подтверждение.
+    // Размещение авторитетно на сервере (клиент лишь шлёт запрос и рисует превью).
+    void beginBuild(int type);
+    void cancelBuild() { buildActive_ = false; }
+    void confirmBuild();                       // отправить запрос постройки на клетку призрака
+    bool buildMode() const { return buildActive_; }
+    int buildType() const { return (int)buildType_; }
+    bool buildGhostValid() const;              // клетка призрака валидна (клиентская оценка)
+    const BuildingInfo* buildInfo(int type) const;  // имя/стоимость/параметры типа из конфига
+
     void setUiScale(float s);  // масштаб джойстика под DPI
 
     // Сеть.
@@ -179,6 +189,13 @@ private:
     SceneDesc sceneDesc_;      // сохранённое описание (host-режим отдаёт его серверу)
     BuildingConfig config_;    // параметры/тексты типов зданий (из конфига)
     uint32_t selectedId_ = 0;  // id выделенной кликом сущности (0 = нет)
+
+    // Стройка: активный режим + выбранный тип + материалы призрака (валид/невалид).
+    bool buildActive_ = false;
+    EntityType buildType_ = EntityType::Tower;
+    MaterialHandle ghostOkMat_ = 0, ghostBadMat_ = 0;
+    // Призрак: клетка перед героем + мировой центр + валидность. Возвращает валидность.
+    bool computeGhost(int& cx, int& cz, Vec3& center) const;
     bool host_ = false;
     uint32_t inputSeq_ = 0;
     std::vector<RemoteEntity> remoteEntities_;  // все чужие сущности (герои/здания/…)

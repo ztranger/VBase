@@ -20,8 +20,8 @@ constexpr float kTickDt = 1.0f / kTickHz;
 // и отклоняет несовпадение (+ дублируется в Welcome для проверки клиентом). БАМПАТЬ при
 // любом изменении раскладки сетевых структур (WelcomeMsg/InputMsg/SnapshotHeader/
 // EntityState) — иначе рассинхрон ABI между отдельно собранными билдами = порча памяти.
-// v2: SnapshotHeader получил байт GamePhase (G3-A, бой + жизненный цикл матча).
-constexpr uint32_t kProtocolVersion = 2;
+// v2: SnapshotHeader получил байт GamePhase (G3-A, бой). v3: сообщение MSG_BUILD (G3-B).
+constexpr uint32_t kProtocolVersion = 3;
 
 // Тип игровой сущности (тег в снапшоте; по нему клиент выбирает визуал/поведение).
 // Пока используется только Hero; остальные — задел под геймплей (генераторы,
@@ -73,6 +73,7 @@ public:
     uint32_t myId() const;              // 0, пока не пришёл Welcome
 
     void sendInput(const InputCommand& cmd);
+    void sendBuild(uint8_t buildType, int cellX, int cellZ);  // запрос постройки (надёжно)
     void poll();                        // прокачать сеть, разобрать сообщения
     bool consumeSnapshot();             // true если пришёл новый снапшот (сбрасывает флаг)
     uint32_t ackSeq() const;            // последний обработанный сервером seq (для сверки)

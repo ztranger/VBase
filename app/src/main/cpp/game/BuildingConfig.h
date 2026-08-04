@@ -16,6 +16,7 @@ struct BuildingInfo {
     float hp = 0.0f;      // core/enemy: здоровье
     float damage = 0.0f;  // tower: урон выстрела; enemy: урон по ядру
     float range = 0.0f;   // tower: радиус поражения
+    float cost = 0.0f;    // стоимость постройки героем (0 = нельзя ставить в рантайме)
 };
 
 // Таблица по EntityType (Generator/Storage/Spawner/Enemy/Tower/Core/Hero).

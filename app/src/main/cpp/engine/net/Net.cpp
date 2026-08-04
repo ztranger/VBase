@@ -12,7 +12,7 @@
 namespace {
 
 // --- Протокол (POD, фиксированная раскладка; клиенты одной ABI) ---
-enum : uint8_t { MSG_WELCOME = 1, MSG_INPUT = 2, MSG_SNAPSHOT = 3 };
+enum : uint8_t { MSG_WELCOME = 1, MSG_INPUT = 2, MSG_SNAPSHOT = 3, MSG_BUILD = 4 };
 
 #pragma pack(push, 1)
 struct WelcomeMsg {
@@ -27,6 +27,12 @@ struct InputMsg {
     uint8_t faceMove;
     uint8_t jump;
     uint32_t ackTick;  // последний применённый клиентом снапшот (база для дельты)
+};
+// Запрос постройки: тип здания + клетка сетки. Надёжно (дискретное событие).
+struct BuildMsg {
+    uint8_t type;       // MSG_BUILD
+    uint8_t buildType;  // EntityType возводимого здания
+    int32_t cellX, cellZ;
 };
 // Дельта-снапшот: изменения относительно снапшота baseTick, который клиент подтвердил.
 // baseTick=0 — полный снапшот (база пуста). Далее: changedCount×EntityState (новые/
@@ -167,6 +173,14 @@ void NetClient::sendInput(const InputCommand& cmd) {
     // одноразовое событие (иначе клиент подпрыгнет в предсказании, а сервер — нет).
     uint32_t flags = cmd.jump ? ENET_PACKET_FLAG_RELIABLE : 0;
     ENetPacket* pkt = enet_packet_create(&msg, sizeof(msg), flags);
+    enet_peer_send(impl_->peer, 0, pkt);
+}
+
+void NetClient::sendBuild(uint8_t buildType, int cellX, int cellZ) {
+    if (impl_->peer == nullptr || !impl_->connected) return;
+    BuildMsg msg{MSG_BUILD, buildType, (int32_t)cellX, (int32_t)cellZ};
+    // Надёжно: постройка — одноразовое событие, терять нельзя.
+    ENetPacket* pkt = enet_packet_create(&msg, sizeof(msg), ENET_PACKET_FLAG_RELIABLE);
     enet_peer_send(impl_->peer, 0, pkt);
 }
 
@@ -349,8 +363,8 @@ void NetServer::poll() {
                 break;
             }
             case ENET_EVENT_TYPE_RECEIVE: {
-                if (ev.packet->dataLength >= sizeof(InputMsg) &&
-                    ev.packet->data[0] == MSG_INPUT) {
+                const uint8_t msgType = ev.packet->dataLength >= 1 ? ev.packet->data[0] : 0;
+                if (msgType == MSG_INPUT && ev.packet->dataLength >= sizeof(InputMsg)) {
                     InputMsg m;
                     std::memcpy(&m, ev.packet->data, sizeof(m));
                     Conn* conn = impl_->connByPeer(ev.peer);
@@ -365,6 +379,12 @@ void NetServer::poll() {
                         cmd.jump = (m.jump != 0);
                         impl_->game.setHeroInput(conn->heroId, cmd);
                     }
+                } else if (msgType == MSG_BUILD && ev.packet->dataLength >= sizeof(BuildMsg)) {
+                    BuildMsg m;
+                    std::memcpy(&m, ev.packet->data, sizeof(m));
+                    Conn* conn = impl_->connByPeer(ev.peer);
+                    if (conn != nullptr)  // валидацию (клетка/ресурс/границы) делает GameWorld
+                        impl_->game.tryBuild(conn->heroId, (EntityType)m.buildType, m.cellX, m.cellZ);
                 }
                 enet_packet_destroy(ev.packet);
                 break;

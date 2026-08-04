@@ -4,6 +4,7 @@
 
 #include "engine/core/Log.h"
 #include "engine/physics/CollisionWorld.h"
+#include "game/Grid.h"
 #include "game/SceneDesc.h"
 
 namespace {
@@ -12,6 +13,12 @@ constexpr float kEnemySpeed = 3.0f;
 constexpr float kEnemyRadius = 0.3f;
 constexpr float kEnemyCylHalf = 0.3f;
 constexpr float kCoreStopDist = 1.0f;
+
+// Занимает ли тип клетку сетки (для проверки коллизии размещения).
+bool isBuildingType(EntityType t) {
+    return t == EntityType::Generator || t == EntityType::Storage ||
+           t == EntityType::Spawner || t == EntityType::Tower || t == EntityType::Core;
+}
 }  // namespace
 
 GameWorld::GameWorld() = default;
@@ -35,6 +42,7 @@ void GameWorld::reset() {
     capsuleRadius_ = 0.3f;
     capsuleCylHalf_ = 0.3f;
     enemyStats_ = EnemySpec{};
+    for (BuildTemplate& t : buildTemplates_) t = BuildTemplate{};
     phase_ = GamePhase::Playing;
 }
 
@@ -49,6 +57,7 @@ void GameWorld::configure(const SceneDesc& desc) {
     capsuleRadius_ = desc.player.colliderRadius;
     capsuleCylHalf_ = desc.player.colliderCylHalf;
     enemyStats_ = desc.enemy;  // hp/урон/интервал врага (враг не в сцене — плодит спавнер)
+    for (int i = 0; i < 8; ++i) buildTemplates_[i] = desc.build[i];  // шаблоны построек героя
 
     // Спавним статичные сущности базы из описания (генератор/хранилище/спавнер/башня/ядро).
     for (const BuildingSpec& b : desc.buildings) {
@@ -103,6 +112,42 @@ void GameWorld::removeEntity(uint32_t id) {
 void GameWorld::setHeroInput(uint32_t heroId, const InputCommand& in) {
     Entity* hero = entityById(heroId);
     if (hero != nullptr) hero->input = in;
+}
+
+bool GameWorld::tryBuild(uint32_t builderId, EntityType type, int cellX, int cellZ) {
+    if ((int)type < 0 || (int)type >= 8) return false;
+    const BuildTemplate& t = buildTemplates_[(int)type];
+    if (!t.buildable) return false;          // тип нельзя ставить (нет cost в конфиге)
+    if (resource_ < t.cost) return false;    // не хватает ресурса
+    if (!grid::inArena(cellX, cellZ)) return false;  // вне зоны строительства
+    for (const Entity& e : entities_) {      // клетка занята другим зданием?
+        if (!isBuildingType(e.type)) continue;
+        if (grid::cellOf(e.move.position.x) == cellX && grid::cellOf(e.move.position.z) == cellZ)
+            return false;
+    }
+
+    uint8_t team = 0;  // команда строителя (для будущего per-team; сейчас всё team 0)
+    const Entity* builder = entityById(builderId);
+    if (builder != nullptr) team = builder->team;
+
+    resource_ -= t.cost;
+    Entity e;
+    e.id = nextEntityId_++;
+    e.type = type;
+    e.team = team;
+    e.move.position = grid::cellCenter(cellX, cellZ);
+    e.move.snapshot();
+    e.rate = t.rate;
+    e.cap = t.cap;
+    e.hp = e.maxHp = t.hp;
+    e.damage = t.damage;
+    e.range = t.range;
+    // Пока БЕЗ футпринт-коллайдера: враги — steer-to-target без пасфайндинга, блок бы их
+    // стопорил. Башня влияет позицией/радиусом, генератор/хранилище — экономикой.
+    entities_.push_back(e);
+    LOGI("GameWorld: возведено type=%d в клетке (%d,%d), ресурс=%.0f",
+         (int)type, cellX, cellZ, (double)resource_);
+    return true;
 }
 
 void GameWorld::step(float dt) {

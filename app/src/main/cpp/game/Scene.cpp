@@ -6,6 +6,7 @@
 
 #include "engine/assets/Assets.h"
 #include "engine/physics/CollisionWorld.h"
+#include "game/Grid.h"
 #include "engine/core/Log.h"
 #include "engine/core/Renderer.h"
 #include "game/SceneLoader.h"
@@ -168,6 +169,19 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
         md.shader = ShaderType::Phong;
         md.baseColor = {0.70f, 0.72f, 0.78f};  // башня — стальная (с бликом)
         towerMat_ = renderer.createMaterial(md);
+    }
+    // Материалы призрака размещения (Unlit): зелёный = можно, красный = нельзя.
+    {
+        MaterialDesc md;
+        md.shader = ShaderType::Unlit;
+        md.baseColor = {0.30f, 0.90f, 0.40f};
+        ghostOkMat_ = renderer.createMaterial(md);
+    }
+    {
+        MaterialDesc md;
+        md.shader = ShaderType::Unlit;
+        md.baseColor = {0.95f, 0.35f, 0.30f};
+        ghostBadMat_ = renderer.createMaterial(md);
     }
 
     // --- Статичные коллайдеры физики (из описания сцены) ---
@@ -506,6 +520,19 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
                 break;
         }
     }
+
+    // Призрак размещения (режим стройки): куб типа на клетке перед героем, зелёный/красный.
+    if (buildActive_) {
+        int cx, cz;
+        Vec3 center;
+        bool valid = computeGhost(cx, cz, center);
+        MeshHandle gm = towerMesh_;
+        float yoff = 0.9f;
+        if (buildType_ == EntityType::Generator) { gm = genMesh_; yoff = 0.5f; }
+        else if (buildType_ == EntityType::Storage) { gm = storMesh_; yoff = 0.7f; }
+        frame.items.push_back({gm, valid ? ghostOkMat_ : ghostBadMat_,
+                               Mat4::translation(center + Vec3{0.0f, yoff, 0.0f})});
+    }
     return frame;
 }
 
@@ -614,4 +641,54 @@ float Scene::selectedAux() const {
     for (const RemoteEntity& r : remoteEntities_)
         if (r.id == selectedId_) return r.aux;
     return 0.0f;
+}
+
+// --- Стройка (G3-B) ---
+bool Scene::computeGhost(int& cx, int& cz, Vec3& center) const {
+    // Клетка перед героем (по facing, ~1.5 клетки вперёд), снап на сетку.
+    float yaw = player_.facingYaw;
+    Vec3 fwd{std::sin(yaw), 0.0f, std::cos(yaw)};
+    Vec3 p = player_.position + fwd * (grid::kCell * 1.5f);
+    cx = grid::cellOf(p.x);
+    cz = grid::cellOf(p.z);
+    center = grid::cellCenter(cx, cz);
+
+    if (!grid::inArena(cx, cz)) return false;             // вне зоны строительства
+    for (const RemoteEntity& r : remoteEntities_) {       // клетка занята зданием?
+        EntityType t = (EntityType)r.type;
+        bool building = (t == EntityType::Generator || t == EntityType::Storage ||
+                         t == EntityType::Spawner || t == EntityType::Tower ||
+                         t == EntityType::Core);
+        if (!building) continue;
+        if (grid::cellOf(r.ch.position.x) == cx && grid::cellOf(r.ch.position.z) == cz)
+            return false;
+    }
+    if (resourceCurrent() < config_.get(buildType_).cost) return false;  // не хватает ресурса
+    return true;
+}
+
+bool Scene::buildGhostValid() const {
+    int cx, cz;
+    Vec3 c;
+    return computeGhost(cx, cz, c);
+}
+
+const BuildingInfo* Scene::buildInfo(int type) const {
+    if (type < 0 || type >= 8) return nullptr;
+    return &config_.get((EntityType)type);
+}
+
+void Scene::beginBuild(int type) {
+    buildType_ = (EntityType)type;
+    buildActive_ = true;
+    clearSelection();
+}
+
+void Scene::confirmBuild() {
+    if (!buildActive_ || !client_.connected()) return;
+    int cx, cz;
+    Vec3 center;
+    if (!computeGhost(cx, cz, center)) return;  // невалидно — не шлём запрос
+    client_.sendBuild((uint8_t)buildType_, cx, cz);
+    // Остаёмся в режиме — можно ставить дальше (сервер авторитетно применит/отвергнет).
 }

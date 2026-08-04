@@ -53,6 +53,9 @@ public:
     uint32_t addHero(uint8_t team = 0);       // создать героя (спавн + контроллер), вернуть id
     void removeEntity(uint32_t id);           // убрать сущность и её коллайдер
     void setHeroInput(uint32_t heroId, const InputCommand& in);
+    // Попытка возвести здание героем на клетке сетки. Валидирует (тип buildable, хватает
+    // ресурса, клетка в арене и свободна), тратит ресурс, спавнит сущность. false = отказ.
+    bool tryBuild(uint32_t builderId, EntityType type, int cellX, int cellZ);
     void step(float dt);                      // прогнать все игровые системы на шаг dt
     void writeStates(std::vector<EntityState>& out) const;  // состояние всех сущностей -> сеть
 
@@ -73,6 +76,7 @@ private:
     float capsuleCylHalf_ = 0.3f;
     float resource_ = 0.0f;                   // общий пул ресурса базы (team 0; per-team — позже)
     EnemySpec enemyStats_;                    // hp/урон/интервал врага (из конфига через сцену)
+    BuildTemplate buildTemplates_[8];         // шаблоны построек героя по EntityType (из сцены)
     GamePhase phase_ = GamePhase::Playing;    // жизненный цикл матча
 
     Entity* entityById(uint32_t id);

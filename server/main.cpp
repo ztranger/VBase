@@ -334,6 +334,67 @@ int runCombatTest() {
     return ok ? 0 : 1;
 }
 
+// Тест размещения зданий героем (G3-B): клиент шлёт MSG_BUILD, сервер валидирует на сетке.
+// Валидная клетка -> башня появляется в снапшоте; клетка здания и вне-арены -> отказ.
+int runBuildTest() {
+    SceneDesc desc;
+    ColliderSpec floor;
+    floor.center = Vec3{0.0f, -0.5f, 0.0f};
+    floor.half = Vec3{50.0f, 0.5f, 50.0f};
+    desc.colliders.push_back(floor);
+    BuildingSpec gen;  // генератор быстро копит ресурс (клетка (0,0) — цель теста «занято»)
+    gen.kind = BuildingSpec::Generator;
+    gen.pos = Vec3{0.0f, 0.0f, 0.0f};
+    gen.rate = 50.0f;
+    desc.buildings.push_back(gen);
+    BuildingSpec sto;
+    sto.kind = BuildingSpec::Storage;
+    sto.pos = Vec3{4.0f, 0.0f, 0.0f};
+    sto.cap = 300.0f;
+    desc.buildings.push_back(sto);
+    // Шаблон башни задаём вручную (тест не грузит конфиг): {buildable,cost,rate,cap,hp,damage,range}.
+    desc.build[(int)EntityType::Tower] = BuildTemplate{true, 50.0f, 0.5f, 0.0f, 0.0f, 8.0f, 5.0f};
+    desc.player.pos = Vec3{0.0f, 0.0f, 10.0f};
+
+    NetServer server;
+    if (!server.start(kNetPort)) { std::printf("[BuildTest] FAIL: сервер не стартовал\n"); return 1; }
+    server.configureWorld(desc);
+    NetClient client;
+    client.connect("127.0.0.1", kNetPort);
+
+    const float dt = kTickDt;
+    InputCommand idle;
+    uint32_t seq = 0;
+    bool sentValid = false, sentBad = false;
+    int towers = 0;
+    for (int i = 0; i < 400; ++i) {
+        server.poll();
+        if (client.connected() && client.myId() != 0) { idle.seq = ++seq; client.sendInput(idle); }
+        if (!sentValid && server.debugResource() >= 100.0f) {
+            client.sendBuild((uint8_t)EntityType::Tower, 3, 3);  // свободная клетка -> ОК
+            sentValid = true;
+        } else if (sentValid && !sentBad) {
+            client.sendBuild((uint8_t)EntityType::Tower, 0, 0);        // клетка генератора -> занято
+            client.sendBuild((uint8_t)EntityType::Tower, 100, 100);   // вне арены -> отказ
+            sentBad = true;
+        }
+        server.tick(dt);
+        client.poll();
+        if (client.consumeSnapshot()) {
+            towers = 0;
+            for (const EntityState& s : client.states())
+                if ((EntityType)s.type == EntityType::Tower) towers++;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+
+    std::printf("[BuildTest] башен по проводу=%d (ждём 1: валид принят, занято/вне-арены отвергнуты)\n",
+                towers);
+    bool ok = towers == 1;
+    std::printf("[BuildTest] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
 // Печатает локальные IPv4-адреса машины — чтобы не искать их вручную.
 // Winsock уже инициализирован (enet_initialize в NetServer::start).
 void printLocalAddresses(uint16_t port) {
@@ -373,7 +434,8 @@ int main(int argc, char** argv) {
         int c = runEconomyTest();       // экономика: генератор -> ресурс с потолком
         int d = runSpawnerTest();       // спавнеры -> враги бегут к ядру
         int e = runCombatTest();        // бой: враги валят ядро / башни валят врагов + фаза матча
-        return (a == 0 && b == 0 && c == 0 && d == 0 && e == 0) ? 0 : 1;
+        int f = runBuildTest();         // стройка: MSG_BUILD -> валидация на сетке -> сущность
+        return (a == 0 && b == 0 && c == 0 && d == 0 && e == 0 && f == 0) ? 0 : 1;
     }
 
     uint16_t port = kNetPort;

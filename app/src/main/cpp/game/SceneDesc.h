@@ -80,6 +80,18 @@ struct EnemySpec {
     float attackInterval = 1.0f;  // секунд между ударами по ядру
 };
 
+// Шаблон постройки, которую герой может ВОЗВЕСТИ в рантайме (по EntityType). Заполняется
+// из конфига (applyBuildingConfig). Сервер (GameWorld::tryBuild) спавнит сущность по нему.
+struct BuildTemplate {
+    bool buildable = false;  // можно ли ставить героем (cost>0 в конфиге)
+    float cost = 0.0f;       // стоимость в ресурсе
+    float rate = 0.0f;       // generator: ресурс/сек; tower: интервал выстрела
+    float cap = 0.0f;        // storage: ёмкость
+    float hp = 0.0f;         // здоровье
+    float damage = 0.0f;     // tower: урон
+    float range = 0.0f;      // tower: радиус
+};
+
 struct PlayerSpec {
     bool present = false;
     std::string model;   // путь к glTF (скиннинг)
@@ -109,6 +121,7 @@ struct SceneDesc {
     std::vector<ColliderSpec> colliders;  // статичная геометрия для физики
     std::vector<BuildingSpec> buildings;  // здания базы (генераторы/хранилища/башни/ядро)
     EnemySpec enemy;                      // боевые статы врага (из конфига)
+    BuildTemplate build[8];               // шаблоны построек героя по EntityType (из конфига)
     PlayerSpec player;
     CameraSpec camera;
     Vec3 lightDir{0.4f, 1.0f, 0.6f};  // направление НА источник света

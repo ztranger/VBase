@@ -309,6 +309,7 @@ bool loadBuildingConfig(AssetSource& assets, const char* path, BuildingConfig& o
             else if (key == "hp") bi.hp = toF(val);
             else if (key == "damage") bi.damage = toF(val);
             else if (key == "range") bi.range = toF(val);
+            else if (key == "cost") bi.cost = toF(val);
             else { LOGE("config: строка %d: неизвестный ключ '%s'", line, key.c_str()); return false; }
         }
     }
@@ -341,5 +342,18 @@ void applyBuildingConfig(SceneDesc& desc, const BuildingConfig& cfg) {
         if (en.hp > 0.0f) desc.enemy.hp = en.hp;
         if (en.damage > 0.0f) desc.enemy.damage = en.damage;
         if (en.rate > 0.0f) desc.enemy.attackInterval = en.rate;
+    }
+
+    // Шаблоны построек героя: любой тип с cost>0 в конфиге становится доступным к возведению.
+    for (int t = 0; t < 8; ++t) {
+        const BuildingInfo& bi = cfg.byType[t];
+        BuildTemplate& bt = desc.build[t];
+        bt.buildable = bi.defined && bi.cost > 0.0f;
+        bt.cost = bi.cost;
+        bt.rate = bi.rate;
+        bt.cap = bi.cap;
+        bt.hp = bi.hp;
+        bt.damage = bi.damage;
+        bt.range = bi.range;
     }
 }

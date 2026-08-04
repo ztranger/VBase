@@ -129,8 +129,8 @@ NB: не путать с `app/src/main/cpp/shaders/` — там GLSL-исход�
 - **Протокол** (`Net.cpp`): `Welcome{protocolVersion,entityId}`,
   `Input{seq,move,mag,face,jump,ackTick}`,
   `Snapshot{tick,baseTick,ackSeq,changed[],removed[],phase}` (`phase` = `GamePhase` матча,
-  глобально). POD, `memcpy` (обе стороны ARM/x64, little-endian — для кроссплатформы нужна
-  явная сериализация).
+  глобально), `Build{buildType,cellX,cellZ}` (запрос постройки клиентом, надёжно). POD,
+  `memcpy` (обе стороны ARM/x64, little-endian — для кроссплатформы нужна явная сериализация).
 - **Версия протокола** (`kProtocolVersion` в `Net.h`): клиент передаёт её как connect-data,
   сервер сверяет на CONNECT и отклоняет несовпадение ещё ДО спавна героя (+ дублирует в
   Welcome для проверки клиентом). **БАМПАТЬ при любом изменении раскладки сетевых структур**
@@ -165,7 +165,7 @@ app/src/main/cpp/
     assets/  Assets.* AssetSource.h FileAssetSource.h Model.* Mesh.* Font.*
     physics/ CollisionWorld.*   обёртка Jolt (pimpl, Jolt не течёт в заголовок)
     net/     Net.*              ЧИСТЫЙ транспорт ENet (кормит GameWorld, сериализует снапшоты)
-  game/      GameWorld.* Scene.* Character.* SceneDesc.h BuildingConfig.h SceneLoader.*
+  game/      GameWorld.* Scene.* Character.* SceneDesc.h BuildingConfig.h SceneLoader.* Grid.h
 ```
 
 Слои по смыслу:

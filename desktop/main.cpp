@@ -98,6 +98,7 @@ int runClient(int backend, GameUiState& ui, const std::string& assetsDir,
     float accumulator = 0.0f;
     bool prevSpace = false;  // фронт нажатия пробела -> прыжок
     bool prevMouse = false;  // фронт клика ЛКМ -> пикинг здания
+    bool prevEnter = false;  // фронт Enter -> подтвердить постройку
     int next = -1;  // -1 = выход
 
     while (!glfwWindowShouldClose(window)) {
@@ -130,6 +131,12 @@ int runClient(int backend, GameUiState& ui, const std::string& assetsDir,
                      glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS;
         if (space && !prevSpace) scene.requestJump();
         prevSpace = space;
+
+        // Enter (по фронту) -> подтвердить постройку (в режиме стройки).
+        bool enter = !ImGui::GetIO().WantCaptureKeyboard &&
+                     glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS;
+        if (enter && !prevEnter) scene.confirmBuild();
+        prevEnter = enter;
 
         // ЛКМ (по фронту, если ImGui не забрал мышь) -> пикинг здания под курсором.
         bool mouse = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;

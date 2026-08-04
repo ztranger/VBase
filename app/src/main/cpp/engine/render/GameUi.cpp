@@ -415,6 +415,36 @@ void build(GameUiState& state, Scene& scene) {
     float cp = scene.cameraPitch();
     if (ImGui::SliderFloat("Pitch", &cp, 0.40f, 1.45f)) scene.setCameraPitch(cp);  // ¾-наклон, рад
 
+    // Строительство доступно только в сетевой сессии (база/ресурс живут на сервере).
+    if (scene.netConnected()) {
+        ImGui::SeparatorText("Строительство");
+        if (!scene.buildMode()) {
+            const EntityType kBuildable[] = {EntityType::Generator, EntityType::Storage,
+                                             EntityType::Tower};
+            for (EntityType bt : kBuildable) {
+                const BuildingInfo* bi = scene.buildInfo((int)bt);
+                if (bi == nullptr || bi->cost <= 0.0f) continue;  // не покупается
+                bool afford = scene.resourceCurrent() >= bi->cost;
+                ImGui::BeginDisabled(!afford);
+                std::string lbl = (bi->name.empty() ? std::string("Здание") : bi->name) +
+                                  " (" + std::to_string((int)bi->cost) + ")";
+                if (Btn(lbl.c_str())) scene.beginBuild((int)bt);
+                ImGui::EndDisabled();
+            }
+        } else {
+            const BuildingInfo* bi = scene.buildInfo(scene.buildType());
+            ImGui::Text("Ставим: %s", (bi != nullptr && !bi->name.empty()) ? bi->name.c_str()
+                                                                           : "Здание");
+            bool valid = scene.buildGhostValid();
+            ImGui::TextColored(valid ? ImVec4(0.4f, 0.9f, 0.4f, 1.0f)
+                                     : ImVec4(0.95f, 0.5f, 0.4f, 1.0f),
+                               valid ? "Клетка свободна — ставь" : "Занято / далеко / нет ресурса");
+            if (Btn("Поставить")) scene.confirmBuild();
+            ImGui::SameLine();
+            if (Btn("Отмена")) scene.cancelBuild();
+        }
+    }
+
     ImGui::SeparatorText("Network");
     if (scene.netConnected()) {
         ImGui::Text("%s | remotes: %d", scene.netHost() ? "HOST" : "CLIENT",
