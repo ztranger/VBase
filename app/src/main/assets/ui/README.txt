@@ -10,5 +10,9 @@ Files:
   button_hover.png     — amber hover
   button_active.png    — amber pressed
   loading_core.png     — loading art (base core in niche, 16:9)
+  loading_glow.png     — soft radial bloom (gen_loading_fx.py)
+  loading_beam.png     — soft god-ray (gen_loading_fx.py)
+  loading_mote.png     — dust mote (gen_loading_fx.py)
 
 Regenerate UI chrome: python gen_ui_skin.py
+Regenerate loading FX:  python gen_loading_fx.py

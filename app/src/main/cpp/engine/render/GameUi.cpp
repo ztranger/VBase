@@ -26,31 +26,81 @@ UiSkin::Assets g_skin;
 
 // Текстуры превью лоадинга (живут вместе со skin / контекстом ImGui).
 ImTextureID g_loadingBg = ImTextureID_Invalid;
-ImTextureID g_softBlob = ImTextureID_Invalid;
+ImTextureID g_loadingGlow = ImTextureID_Invalid;
+ImTextureID g_loadingBeam = ImTextureID_Invalid;
+ImTextureID g_loadingMote = ImTextureID_Invalid;
 TextureHandle g_loadingBgHandle = 0;
-TextureHandle g_softBlobHandle = 0;
+TextureHandle g_loadingGlowHandle = 0;
+TextureHandle g_loadingBeamHandle = 0;
+TextureHandle g_loadingMoteHandle = 0;
 float g_loadingAspect = 16.0f / 9.0f;
+bool g_loadingFxLogged = false;
 
 bool Btn(const char* label, const ImVec2& size = ImVec2(0, 0)) {
     return UiSkin::Button(label, g_skin, size);
 }
 
-TextureData makeSoftBlob(uint32_t size) {
+TextureData makeGlowTex(uint32_t size) {
     TextureData t;
     t.width = size;
     t.height = size;
     t.rgba.assign((size_t)size * size * 4, 0);
     const float c = (size - 1) * 0.5f;
-    const float invR = 1.0f / (c + 0.5f);
     for (uint32_t y = 0; y < size; ++y) {
         for (uint32_t x = 0; x < size; ++x) {
-            const float dx = ((float)x - c) * invR;
-            const float dy = ((float)y - c) * invR;
-            float d = std::sqrt(dx * dx + dy * dy);
-            if (d > 1.0f) continue;
-            // Мягкое ядро + длинный хвост — для «свечения» поверх арта.
-            float a = std::clamp(1.0f - d, 0.0f, 1.0f);
-            a = a * a * (0.35f + 0.65f * a);
+            const float dx = ((float)x - c) / c;
+            const float dy = ((float)y - c) / c;
+            const float d2 = dx * dx + dy * dy;
+            float a = std::exp(-d2 * 2.8f);
+            if (a < 0.004f) continue;
+            const size_t i = ((size_t)y * size + x) * 4;
+            // Белая маска: цвет задаём tint'ом в AddImage (как у font atlas).
+            t.rgba[i + 0] = 255;
+            t.rgba[i + 1] = 255;
+            t.rgba[i + 2] = 255;
+            t.rgba[i + 3] = (uint8_t)std::clamp(a * 255.0f, 0.0f, 255.0f);
+        }
+    }
+    return t;
+}
+
+TextureData makeBeamTex(uint32_t w, uint32_t h) {
+    TextureData t;
+    t.width = w;
+    t.height = h;
+    t.rgba.assign((size_t)w * h * 4, 0);
+    const float cx = (w - 1) * 0.5f;
+    for (uint32_t y = 0; y < h; ++y) {
+        const float along = (float)y / (float)std::max(h - 1, 1u);
+        const float fallY = std::pow(1.0f - along, 1.25f);
+        const float half = (0.18f + along * 0.40f) * w * 0.5f;
+        for (uint32_t x = 0; x < w; ++x) {
+            const float dx = std::fabs((float)x - cx) / std::max(half, 1.0f);
+            const float fallX = std::exp(-dx * dx * 2.4f);
+            float a = fallX * fallY;
+            if (a < 0.004f) continue;
+            const size_t i = ((size_t)y * w + x) * 4;
+            t.rgba[i + 0] = 255;
+            t.rgba[i + 1] = 255;
+            t.rgba[i + 2] = 255;
+            t.rgba[i + 3] = (uint8_t)std::clamp(a * 255.0f, 0.0f, 255.0f);
+        }
+    }
+    return t;
+}
+
+TextureData makeMoteTex(uint32_t size) {
+    TextureData t;
+    t.width = size;
+    t.height = size;
+    t.rgba.assign((size_t)size * size * 4, 0);
+    const float c = (size - 1) * 0.5f;
+    for (uint32_t y = 0; y < size; ++y) {
+        for (uint32_t x = 0; x < size; ++x) {
+            const float dx = ((float)x - c) / c;
+            const float dy = ((float)y - c) / c;
+            const float a = std::exp(-(dx * dx + dy * dy) * 5.0f);
+            if (a < 0.01f) continue;
             const size_t i = ((size_t)y * size + x) * 4;
             t.rgba[i + 0] = 255;
             t.rgba[i + 1] = 255;
@@ -59,6 +109,12 @@ TextureData makeSoftBlob(uint32_t size) {
         }
     }
     return t;
+}
+
+ImTextureID uploadUiTex(Renderer& renderer, const TextureData& data, TextureHandle& outHandle) {
+    outHandle = renderer.createTexture(data, true);
+    if (outHandle == 0) return ImTextureID_Invalid;
+    return (ImTextureID)renderer.getImGuiTexture(outHandle);
 }
 
 void unloadLoading(Renderer& renderer) {
@@ -70,7 +126,10 @@ void unloadLoading(Renderer& renderer) {
         h = 0;
     };
     release(g_loadingBg, g_loadingBgHandle);
-    release(g_softBlob, g_softBlobHandle);
+    release(g_loadingGlow, g_loadingGlowHandle);
+    release(g_loadingBeam, g_loadingBeamHandle);
+    release(g_loadingMote, g_loadingMoteHandle);
+    g_loadingFxLogged = false;
 }
 
 void loadLoading(Renderer& renderer, AssetSource& assets) {
@@ -86,9 +145,12 @@ void loadLoading(Renderer& renderer, AssetSource& assets) {
         LOGW("Loading preview: ui/loading_core.png не найден");
     }
 
-    TextureData blob = makeSoftBlob(128);
-    g_softBlobHandle = renderer.createTexture(blob, true);
-    g_softBlob = (ImTextureID)renderer.getImGuiTexture(g_softBlobHandle);
+    // FX всегда процедурно — не зависим от внешних PNG (на Android/пути часто мимо).
+    g_loadingGlow = uploadUiTex(renderer, makeGlowTex(256), g_loadingGlowHandle);
+    g_loadingBeam = uploadUiTex(renderer, makeBeamTex(96, 320), g_loadingBeamHandle);
+    g_loadingMote = uploadUiTex(renderer, makeMoteTex(32), g_loadingMoteHandle);
+    LOGI("Loading FX: glow=%d beam=%d mote=%d", g_loadingGlow != ImTextureID_Invalid,
+         g_loadingBeam != ImTextureID_Invalid, g_loadingMote != ImTextureID_Invalid);
 }
 
 // Cover: картинка заполняет экран с обрезкой, сохраняя aspect.
@@ -110,34 +172,35 @@ void coverRect(ImVec2 display, float imgAspect, ImVec2& outMin, ImVec2& outMax) 
     outMax = ImVec2(off.x + size.x, off.y + size.y);
 }
 
-void addTintedBlob(ImDrawList* dl, ImVec2 center, float radius, ImU32 col) {
-    if (radius <= 1.0f) return;
-    if (g_softBlob != ImTextureID_Invalid) {
-        dl->AddImage(ImTextureRef(g_softBlob),
-                     ImVec2(center.x - radius, center.y - radius),
-                     ImVec2(center.x + radius, center.y + radius), ImVec2(0, 0), ImVec2(1, 1),
-                     col);
-    } else {
-        // Fallback, если blob-текстура не поднялась.
-        dl->AddCircleFilled(center, radius, col, 48);
-    }
-}
-
 void drawLoadingPreview() {
     ImGuiIO& io = ImGui::GetIO();
     const ImVec2 disp = io.DisplaySize;
     if (disp.x < 1.0f || disp.y < 1.0f) return;
 
+    ImGuiViewport* vp = ImGui::GetMainViewport();
     ImDrawList* dl = ImGui::GetForegroundDrawList();
-    // Без клипа окна — эффекты на весь экран.
-    dl->PushClipRect(ImVec2(0, 0), disp, false);
+    const ImVec2 origin = vp ? vp->Pos : ImVec2(0, 0);
+    const ImVec2 screen = vp ? vp->Size : disp;
+    dl->PushClipRect(origin, ImVec2(origin.x + screen.x, origin.y + screen.y), false);
+
+    if (!g_loadingFxLogged) {
+        LOGI("Loading draw: bg=%d glow=%d beam=%d mote=%d size=%.0fx%.0f",
+             g_loadingBg != ImTextureID_Invalid, g_loadingGlow != ImTextureID_Invalid,
+             g_loadingBeam != ImTextureID_Invalid, g_loadingMote != ImTextureID_Invalid,
+             screen.x, screen.y);
+        g_loadingFxLogged = true;
+    }
 
     const float t = (float)ImGui::GetTime();
-    const float pulse = 0.55f + 0.45f * std::sin(t * 2.0f);
-    const float pulseFast = 0.55f + 0.45f * std::sin(t * 3.4f);
+    const float breath = 0.5f + 0.5f * std::sin(t * 1.6f);
+    const float breath2 = 0.5f + 0.5f * std::sin(t * 1.6f + 1.7f);
 
     ImVec2 imgMin, imgMax;
-    coverRect(disp, g_loadingAspect, imgMin, imgMax);
+    coverRect(screen, g_loadingAspect, imgMin, imgMax);
+    imgMin.x += origin.x;
+    imgMin.y += origin.y;
+    imgMax.x += origin.x;
+    imgMax.y += origin.y;
     const float imgW = imgMax.x - imgMin.x;
     const float imgH = imgMax.y - imgMin.y;
 
@@ -145,93 +208,87 @@ void drawLoadingPreview() {
     if (g_loadingBg != ImTextureID_Invalid) {
         dl->AddImage(ImTextureRef(g_loadingBg), imgMin, imgMax);
     } else {
-        dl->AddRectFilled(ImVec2(0, 0), disp, IM_COL32(26, 20, 16, 255));
+        dl->AddRectFilled(imgMin, imgMax, IM_COL32(26, 20, 16, 255));
     }
 
-    // Лёгкая виньетка ПОД светом (только края), чтобы не гасить ядро.
-    dl->AddRectFilledMultiColor(ImVec2(0, 0), ImVec2(disp.x, disp.y * 0.22f),
-                                IM_COL32(0, 0, 0, 160), IM_COL32(0, 0, 0, 160),
-                                IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0));
-    dl->AddRectFilledMultiColor(ImVec2(0, disp.y * 0.72f), disp, IM_COL32(0, 0, 0, 0),
-                                IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 200),
-                                IM_COL32(0, 0, 0, 200));
+    // Центр сердца.
+    const ImVec2 core(imgMin.x + imgW * 0.50f, imgMin.y + imgH * 0.47f);
 
-    // Ядро на арта ~центр ниши (подстроено под loading_core.png).
-    const ImVec2 core(imgMin.x + imgW * 0.50f, imgMin.y + imgH * 0.48f);
-    const float baseR = std::min(imgW, imgH);
-
-    // 2) Сильное пульсирующее свечение ядра (несколько непрозрачных слоёв).
-    addTintedBlob(dl, core, baseR * 0.70f * (0.90f + 0.10f * pulse),
-                  IM_COL32(255, 100, 20, (int)(40 + 35 * pulse)));
-    addTintedBlob(dl, core, baseR * 0.42f * (0.92f + 0.08f * pulse),
-                  IM_COL32(255, 150, 40, (int)(70 + 55 * pulse)));
-    addTintedBlob(dl, core, baseR * 0.22f * (0.94f + 0.06f * pulse),
-                  IM_COL32(255, 200, 80, (int)(100 + 70 * pulse)));
-    addTintedBlob(dl, core, baseR * 0.09f * (0.96f + 0.04f * pulseFast),
-                  IM_COL32(255, 245, 200, (int)(140 + 80 * pulseFast)));
-    // Яркое «ядро» кругами — гарантированно видно даже без blob-текстуры.
-    dl->AddCircleFilled(core, baseR * 0.035f * (0.95f + 0.05f * pulseFast),
-                        IM_COL32(255, 250, 220, (int)(180 + 60 * pulseFast)), 24);
-
-    // 3) Луч: широкий конус вниз (как god-ray на артах) + мерцание.
-    const ImVec2 beamEnd(core.x + imgW * 0.02f, imgMax.y - imgH * 0.02f);
-    const ImVec2 beamDir(beamEnd.x - core.x, beamEnd.y - core.y);
-    for (int i = 0; i < 14; ++i) {
-        const float u = (i + 1) / 14.0f;
-        const ImVec2 p(core.x + beamDir.x * u, core.y + beamDir.y * u);
-        const float widen = baseR * (0.10f + u * 0.38f);
-        const float flicker = 0.65f + 0.35f * std::sin(t * 2.8f + u * 8.0f);
-        const int alpha = (int)(90.0f * (1.0f - u * 0.55f) * pulse * flicker);
-        addTintedBlob(dl, p, widen, IM_COL32(255, 150, 45, alpha));
-    }
-    // Центральная «жила» луча поярче.
-    for (int i = 0; i < 8; ++i) {
-        const float u = (i + 1) / 8.0f;
-        const ImVec2 p(core.x + beamDir.x * u * 0.85f, core.y + beamDir.y * u * 0.85f);
-        const float flicker = 0.7f + 0.3f * std::sin(t * 4.0f + u * 10.0f);
-        addTintedBlob(dl, p, baseR * (0.04f + u * 0.10f),
-                      IM_COL32(255, 220, 140, (int)(110 * (1.0f - u * 0.4f) * flicker * pulse)));
+    // 2) Bloom ядра.
+    if (g_loadingGlow != ImTextureID_Invalid) {
+        const float g0 = imgH * (0.62f + 0.04f * breath);
+        const float g1 = imgH * (0.34f + 0.03f * breath2);
+        dl->AddImage(ImTextureRef(g_loadingGlow), ImVec2(core.x - g0, core.y - g0),
+                     ImVec2(core.x + g0, core.y + g0), ImVec2(0, 0), ImVec2(1, 1),
+                     IM_COL32(255, 140, 40, (int)(90 + 50 * breath)));
+        dl->AddImage(ImTextureRef(g_loadingGlow), ImVec2(core.x - g1, core.y - g1),
+                     ImVec2(core.x + g1, core.y + g1), ImVec2(0, 0), ImVec2(1, 1),
+                     IM_COL32(255, 210, 120, (int)(110 + 60 * breath2)));
     }
 
-    // 4) Пыль / искры — крупнее и ярче.
-    for (int i = 0; i < 48; ++i) {
-        const float seed = (float)i * 12.9898f;
-        const float along = std::fmod(t * (0.10f + 0.05f * std::fmod(seed, 1.0f)) +
-                                          std::fmod(seed * 0.17f, 1.0f),
+    // 3) God-ray вниз.
+    if (g_loadingBeam != ImTextureID_Invalid) {
+        const float beamH = imgH * 0.68f;
+        const float beamW = imgW * (0.22f + 0.02f * breath);
+        dl->AddImage(ImTextureRef(g_loadingBeam),
+                     ImVec2(core.x - beamW * 0.5f, core.y - imgH * 0.02f),
+                     ImVec2(core.x + beamW * 0.5f, core.y + beamH), ImVec2(0, 0), ImVec2(1, 1),
+                     IM_COL32(255, 170, 70, (int)(130 + 50 * breath)));
+        const float beamW2 = beamW * 1.45f;
+        const float yOff = imgH * 0.012f * std::sin(t * 0.9f);
+        dl->AddImage(ImTextureRef(g_loadingBeam),
+                     ImVec2(core.x - beamW2 * 0.5f, core.y + yOff),
+                     ImVec2(core.x + beamW2 * 0.5f, core.y + beamH * 0.92f + yOff),
+                     ImVec2(0, 0), ImVec2(1, 1),
+                     IM_COL32(255, 200, 110, (int)(70 + 35 * breath2)));
+    }
+
+    // 4) Пыль — всегда, даже без mote-текстуры.
+    for (int i = 0; i < 22; ++i) {
+        const float seed = (float)i * 17.13f;
+        const float along = std::fmod(0.05f + t * (0.06f + 0.03f * std::fmod(seed, 1.0f)) +
+                                          std::fmod(seed * 0.11f, 1.0f),
                                       1.0f);
-        const float side = std::sin(seed * 1.7f + t * 0.9f) * (baseR * (0.02f + along * 0.12f));
-        const ImVec2 p(core.x + beamDir.x * along + side,
-                       core.y + beamDir.y * along + side * 0.2f);
-        const float twinkle = 0.35f + 0.65f * (0.5f + 0.5f * std::sin(t * 6.0f + seed));
-        const int a = (int)(220.0f * twinkle * (1.0f - along * 0.35f));
-        const float r = 1.8f + along * 3.5f + 1.5f * twinkle;
-        dl->AddCircleFilled(p, r, IM_COL32(255, 230, 170, a), 10);
-        if ((i % 4) == 0) {
-            dl->AddCircleFilled(p, r * 2.2f, IM_COL32(255, 160, 50, a / 3), 10);
+        const float side = std::sin(seed + t * 0.45f) * (imgW * (0.012f + along * 0.055f));
+        const ImVec2 p(core.x + side, core.y + along * imgH * 0.60f);
+        const float tw = 0.40f + 0.60f * (0.5f + 0.5f * std::sin(t * 3.0f + seed));
+        const float r = imgH * (0.006f + along * 0.008f) * (0.75f + 0.5f * tw);
+        const int a = (int)(200.0f * tw * (1.0f - along * 0.4f));
+        if (g_loadingMote != ImTextureID_Invalid) {
+            dl->AddImage(ImTextureRef(g_loadingMote), ImVec2(p.x - r, p.y - r),
+                         ImVec2(p.x + r, p.y + r), ImVec2(0, 0), ImVec2(1, 1),
+                         IM_COL32(255, 230, 170, a));
+        } else {
+            dl->AddCircleFilled(p, r, IM_COL32(255, 230, 170, a), 12);
         }
     }
 
-    // 5) Подпись / бар внизу (поверх виньетки).
+    // 5) Низ под текст.
+    const ImVec2 bot0(origin.x, origin.y + screen.y * 0.70f);
+    const ImVec2 bot1(origin.x + screen.x, origin.y + screen.y);
+    dl->AddRectFilledMultiColor(bot0, bot1, IM_COL32(0, 0, 0, 0), IM_COL32(0, 0, 0, 0),
+                                IM_COL32(0, 0, 0, 200), IM_COL32(0, 0, 0, 200));
+
     const char* title = "VBase";
     const float titleFs = ImGui::GetFontSize() * 2.4f;
     ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(titleFs, FLT_MAX, 0.0f, title);
-    ImVec2 titlePos(disp.x * 0.5f - ts.x * 0.5f, disp.y * 0.78f);
+    ImVec2 titlePos(origin.x + screen.x * 0.5f - ts.x * 0.5f, origin.y + screen.y * 0.78f);
     dl->AddText(ImGui::GetFont(), titleFs, ImVec2(titlePos.x + 2, titlePos.y + 2),
                 IM_COL32(0, 0, 0, 180), title);
     dl->AddText(ImGui::GetFont(), titleFs, titlePos, IM_COL32(242, 230, 212, 255), title);
 
     const char* tip = "Готовим оборону…";
     ImVec2 tipSz = ImGui::CalcTextSize(tip);
-    dl->AddText(ImVec2(disp.x * 0.5f - tipSz.x * 0.5f, titlePos.y + titleFs + 8.0f),
+    dl->AddText(ImVec2(origin.x + screen.x * 0.5f - tipSz.x * 0.5f, titlePos.y + titleFs + 8.0f),
                 IM_COL32(184, 169, 148, 255), tip);
 
-    const float barW = std::min(disp.x * 0.45f, 420.0f);
-    const float barH = 10.0f;
-    const ImVec2 barMin(disp.x * 0.5f - barW * 0.5f, titlePos.y + titleFs + 36.0f);
+    const float barW = std::min(screen.x * 0.45f, 420.0f);
+    const float barH = 8.0f;
+    const ImVec2 barMin(origin.x + screen.x * 0.5f - barW * 0.5f, titlePos.y + titleFs + 36.0f);
     const ImVec2 barMax(barMin.x + barW, barMin.y + barH);
     dl->AddRectFilled(barMin, barMax, IM_COL32(42, 34, 28, 230), 4.0f);
-    dl->AddRect(barMin, barMax, IM_COL32(196, 165, 116, 200), 4.0f, 0, 1.5f);
-    float prog = 0.5f + 0.5f * std::sin(t * 0.9f);
+    dl->AddRect(barMin, barMax, IM_COL32(196, 165, 116, 160), 4.0f, 0, 1.0f);
+    float prog = 0.5f + 0.5f * std::sin(t * 0.7f);
     prog = std::clamp(prog, 0.08f, 1.0f);
     dl->AddRectFilled(barMin, ImVec2(barMin.x + barW * prog, barMax.y),
                       IM_COL32(232, 161, 58, 255), 4.0f);
