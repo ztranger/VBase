@@ -1,43 +1,32 @@
 #pragma once
 
-// Построение игрового GUI (Dear ImGui), общее для Android и десктопа.
-// Живёт рядом с платформенным слоем (не в Scene/Character), чтобы не тянуть
-// ImGui в платформонезависимое ядро. Вызывается из RenderFrame::ui, между
-// ImGui NewFrame и Render.
+// Фасад игрового GUI: шрифт/skin + делегирование в UiShell (режимы, панели, диалоги).
+// Живёт рядом с платформенным слоем (не в Scene). Вызывается из RenderFrame::ui.
+// Иерархия: docs/UI_SYSTEM.md.
 
 class Scene;
 class Renderer;
 struct AssetSource;
 
-// Небольшое состояние панели, которым владеет приложение, а не игровой слой.
-// И Android, и десктоп держат экземпляр у себя и передают его в build().
+// Состояние, которым владеет приложение (Android / десктоп), не игровой слой.
 struct GameUiState {
-    float fps = 0.0f;               // сглаженный FPS (считает приложение)
-    char joinIp[64] = "127.0.0.1";  // адрес сервера для Join
+    float fps = 0.0f;
+    char joinIp[64] = "127.0.0.1";
 
-    // Переключение графического бэкенда через панель.
-    bool vulkanAvailable = false;   // доступен ли Vulkan (иначе кнопка disabled)
-    int backend = 0;                // текущий бэкенд: 0 = OpenGL, 1 = Vulkan (ставит платформа)
-    int requestBackend = -1;        // запрошенный кнопкой (-1 = нет; читает и сбрасывает платформа)
+    bool vulkanAvailable = false;
+    int backend = 0;         // 0 = OpenGL, 1 = Vulkan
+    int requestBackend = -1; // -1 = нет
 
-    // Превью лоадинг-экрана (арт + пульсирующий свет). Не настоящая загрузка —
-    // включается кнопкой в GUI или флагом --loading на десктопе.
+    // Совместимость: true при старте (--loading) → UiMode::Loading.
+    // Каждый кадр синхронизируется с текущим режимом UiShell.
     bool showLoadingPreview = false;
 };
 
 namespace GameUi {
 
-// Загрузить UI-шрифт с кириллицей (assets/fonts/ui.ttf) в текущий контекст ImGui.
-// Вызывать после ImGui::CreateContext и ДО инициализации бэкенда (сборки атласа).
-// Байты шрифта держатся живыми весь процесс (нужны атласу).
 void loadFont(AssetSource& assets);
-
-// Загрузить skin (9-slice + кнопки). После ImGui_Impl*_Init. При пересоздании
-// рендера — снова; перед Shutdown — unloadSkin.
 void loadSkin(Renderer& renderer, AssetSource& assets);
 void unloadSkin(Renderer& renderer);
-
-// Собрать виджеты кадра. Тянет только imgui + Scene, ничего платформенного.
 void build(GameUiState& state, Scene& scene);
 
 }  // namespace GameUi

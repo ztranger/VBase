@@ -8,6 +8,7 @@
 см. **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 План дальнейших работ (что делаем следующим): **[docs/NEXT_STEPS.md](docs/NEXT_STEPS.md)**.
 Как рисовать UI-текстуры под 9-slice: **[docs/UI_SKIN.md](docs/UI_SKIN.md)**.
+Система экранов / панелей / диалогов: **[docs/UI_SYSTEM.md](docs/UI_SYSTEM.md)**.
 Цветовая палитра (TD × Orcs Must Die): **[docs/UI_PALETTE.md](docs/UI_PALETTE.md)**.
 Ниже — самое нужное для старта.
 
@@ -42,8 +43,13 @@ Include — **квалифицированные** от корня `cpp/` (на�
 - Android: NDK `28.2.13676358`, GameActivity `3.0.5`, `minSdk 30`, `targetSdk 36`,
   namespace `com.hpg.vbase`. Сборка — только через Android Studio (Gradle wrapper
   не генерировали; из консоли мешает блокировка общего кэша `~/.gradle`).
-- Десктоп/сервер: MSVC (VS Build Tools 18, `vcvars64.bat`) + bundled CMake —
-  всё зашито в `server/build.bat` и `desktop/build.bat`.
+- Десктоп/сервер: MSVC (VS Build Tools 18, `vcvars64.bat`) + bundled CMake + **Ninja**
+  (тоже из поставки VS) — всё зашито в `server/build.bat` и `desktop/build.bat`. Ninja
+  собирает параллельно на всех ядрах (NMake был однопоточным, полная сборка Jolt ~3× дольше)
+  и точно инкрементит — правка `CMakeLists.txt` больше НЕ пересобирает Jolt. Батник при
+  смене генератора сам сносит старую `build/`.
+  **Грабля:** комментарии в `.bat` — только ASCII (cmd читает батник в OEM-кодировке, а наши
+  файлы сохраняются UTF-8 → кириллица в `REM` станет мусором и «выполнится» как команды).
 - Проверка компиляции нативного кода без Gradle: NDK clang с
   `--target=aarch64-linux-android30 -std=c++20 -fsyntax-only` (см. ARCHITECTURE).
 

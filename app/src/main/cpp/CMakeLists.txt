@@ -64,6 +64,14 @@ add_library(vbase SHARED
         engine/render/GlRenderer.cpp
         engine/render/GameUi.cpp
         engine/render/UiSkin.cpp
+        engine/render/ui/UiShell.cpp
+        engine/render/ui/Dialogs.cpp
+        engine/render/ui/screens/LoadingScreen.cpp
+        engine/render/ui/screens/MainMenuScreen.cpp
+        engine/render/ui/screens/BattleScreen.cpp
+        engine/render/ui/panels/HomePanel.cpp
+        engine/render/ui/windows/DebugPanel.cpp
+        engine/render/ui/windows/BuildingInfo.cpp
         engine/render/VulkanProbe.cpp
         engine/render/VkApi.cpp
         engine/render/VulkanRenderer.cpp

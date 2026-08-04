@@ -77,8 +77,10 @@
 - **HUD**: свой растровый шрифт 5×7 (`Font.*`), 2D-оверлей; DPI-масштаб.
 - **ImGui**: renderer-бэкенд `imgui_impl_opengl3` (общий, в `GlRenderer`); platform-бэкенд
   вне рендера — Android кормит ввод вручную (touch→mouse), десктоп через официальный
-  `imgui_impl_glfw`. Содержимое панели — общий модуль `GameUi.{h,cpp}` (imgui+`Scene`),
-  один на обе платформы; отдаётся рендеру через колбэк `RenderFrame::ui`.
+  `imgui_impl_glfw`. Содержимое GUI — фасад `GameUi.{h,cpp}` → `engine/render/ui/UiShell`
+  (режимы Loading/MainMenu/Battle, hub-панели, floating-окна, DialogStack Ok/YesNo).
+  Один код на обе платформы; отдаётся рендеру через колбэк `RenderFrame::ui`.
+  Иерархия и чеклист расширения: [UI_SYSTEM.md](UI_SYSTEM.md).
 - **UiSkin** (`UiSkin.{h,cpp}`) — тонкий skin поверх ImGui: логика окон/кликов и шрифт
   остаются у ImGui, меняется только отрисовка. `BeginPanel` — окно без стандартного
   фона/title bar + **9-slice** рамка на `DrawList`; `Button` — `InvisibleButton` +
@@ -95,6 +97,7 @@
   **Как рисовать PNG под 9-slice** (размеры, 25% border, чеклист) —
   отдельный гайд: [UI_SKIN.md](UI_SKIN.md).
   **Цвета меню/кнопок/мира** (TD × OMD): [UI_PALETTE.md](UI_PALETTE.md).
+  **Система экранов/диалогов**: [UI_SYSTEM.md](UI_SYSTEM.md).
 
 Шейдеры GL лежат ассетами в **`app/src/main/assets/shaders/`** (`*.vert`/`*.frag` +
 `common.glsl`) и грузятся через `AssetSource` (`GlRenderer::init` его получает).
@@ -162,6 +165,7 @@ app/src/main/cpp/
   engine/                     переиспользуемый движок
     core/    MathUtil.h Log.h Input.h Camera.h FollowCamera.h Renderer.h RenderFrame.h Texture.h
     render/  GlRenderer.* GlApi.h VkApi.* VulkanRenderer.* VulkanProbe.* GameUi.* UiSkin.*
+             ui/  UiShell.* Dialogs.* UiTypes.h screens/ panels/ windows/
     assets/  Assets.* AssetSource.h FileAssetSource.h Model.* Mesh.* Font.*
     physics/ CollisionWorld.*   обёртка Jolt (pimpl, Jolt не течёт в заголовок)
     net/     Net.*              ЧИСТЫЙ транспорт ENet (кормит GameWorld, сериализует снапшоты)
@@ -175,8 +179,9 @@ app/src/main/cpp/
 - **engine/render** — два бэкенда за интерфейсом `Renderer` + ImGui: `GlRenderer.*`
   (Android GLES3+EGL и desktop GL 3.3+GLFW через `#ifdef`), `GlApi.h`, Vulkan
   (`VulkanRenderer.*`, `VkApi.*` динамический загрузчик, `VulkanProbe.*`), GUI
-  (`GameUi.*` — панель ImGui, вызывается из `RenderFrame::ui`; шрифт `loadFont`, skin
-  `loadSkin`/`unloadSkin`, см. §3) и skin (`UiSkin.*` — 9-slice панели + image-кнопки).
+  (`GameUi.*` — фасад ImGui → `ui/UiShell`; шрифт `loadFont`, skin
+  `loadSkin`/`unloadSkin`, см. §3 / [UI_SYSTEM.md](UI_SYSTEM.md)) и skin (`UiSkin.*` —
+  9-slice панели + image-кнопки).
 - **engine/assets** — загрузка ресурсов: `Assets.*`, `AssetSource.h`/`FileAssetSource.h`,
   `Model.*`, `Mesh.*`, `Font.*`.
 - **engine/physics** — `CollisionWorld.*`: статика арены + кинематические капсулы

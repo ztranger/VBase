@@ -45,6 +45,14 @@ add_executable(vbase_desktop
         ${APP}/engine/render/VulkanRenderer.cpp
         ${APP}/engine/render/GameUi.cpp
         ${APP}/engine/render/UiSkin.cpp
+        ${APP}/engine/render/ui/UiShell.cpp
+        ${APP}/engine/render/ui/Dialogs.cpp
+        ${APP}/engine/render/ui/screens/LoadingScreen.cpp
+        ${APP}/engine/render/ui/screens/MainMenuScreen.cpp
+        ${APP}/engine/render/ui/screens/BattleScreen.cpp
+        ${APP}/engine/render/ui/panels/HomePanel.cpp
+        ${APP}/engine/render/ui/windows/DebugPanel.cpp
+        ${APP}/engine/render/ui/windows/BuildingInfo.cpp
         ${APP}/engine/assets/Font.cpp
         ${IMGUI}/imgui.cpp
         ${IMGUI}/imgui_draw.cpp
