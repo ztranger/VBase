@@ -72,6 +72,11 @@ const EntityState* findState(const std::vector<EntityState>& v, uint32_t id) {
     return nullptr;
 }
 
+// enet_peer_send при ошибке (<0) НЕ освобождает пакет — освобождаем сами, иначе течёт.
+void sendPacket(ENetPeer* peer, uint8_t channel, ENetPacket* pkt) {
+    if (enet_peer_send(peer, channel, pkt) < 0) enet_packet_destroy(pkt);
+}
+
 // Единичная инициализация ENet на процесс.
 bool ensureEnet() {
     static bool ok = false;
@@ -173,7 +178,7 @@ void NetClient::sendInput(const InputCommand& cmd) {
     // одноразовое событие (иначе клиент подпрыгнет в предсказании, а сервер — нет).
     uint32_t flags = cmd.jump ? ENET_PACKET_FLAG_RELIABLE : 0;
     ENetPacket* pkt = enet_packet_create(&msg, sizeof(msg), flags);
-    enet_peer_send(impl_->peer, 0, pkt);
+    sendPacket(impl_->peer, 0, pkt);
 }
 
 void NetClient::sendBuild(uint8_t buildType, int cellX, int cellZ) {
@@ -181,7 +186,7 @@ void NetClient::sendBuild(uint8_t buildType, int cellX, int cellZ) {
     BuildMsg msg{MSG_BUILD, buildType, (int32_t)cellX, (int32_t)cellZ};
     // Надёжно: постройка — одноразовое событие, терять нельзя.
     ENetPacket* pkt = enet_packet_create(&msg, sizeof(msg), ENET_PACKET_FLAG_RELIABLE);
-    enet_peer_send(impl_->peer, 0, pkt);
+    sendPacket(impl_->peer, 0, pkt);
 }
 
 void NetClient::poll() {
@@ -357,7 +362,7 @@ void NetServer::poll() {
                 impl_->conns.push_back(Conn{ev.peer, heroId, 0});
                 WelcomeMsg w{MSG_WELCOME, kProtocolVersion, heroId};
                 ENetPacket* pkt = enet_packet_create(&w, sizeof(w), ENET_PACKET_FLAG_RELIABLE);
-                enet_peer_send(ev.peer, 0, pkt);
+                sendPacket(ev.peer, 0, pkt);
                 LOGI("NetServer: клиент подключён (hero id=%u), всего %d", heroId,
                      (int)impl_->conns.size());
                 break;
@@ -474,7 +479,7 @@ void NetServer::tick(float dt) {
             std::memcpy(impl_->scratch.data() + sizeof(head) + changed.size() * sizeof(EntityState),
                         removed.data(), removed.size() * sizeof(uint32_t));
         ENetPacket* pkt = enet_packet_create(impl_->scratch.data(), size, 0);
-        enet_peer_send(conn.peer, 0, pkt);
+        sendPacket(conn.peer, 0, pkt);
     }
 }
 

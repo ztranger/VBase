@@ -135,6 +135,7 @@ bool GlRenderer::initGlResources() {
     if (assets_ != nullptr) GameUi::loadFont(*assets_);  // кириллический шрифт ДО сборки атласа
     if (!ImGui_ImplOpenGL3_Init(IMGUI_GLSL_VERSION)) {
         LOGE("ImGui_ImplOpenGL3_Init failed");
+        ImGui::DestroyContext();  // не оставляем осиротевший контекст (imguiReady_ ещё false)
         return false;
     }
     imguiReady_ = true;

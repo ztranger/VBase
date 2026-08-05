@@ -115,7 +115,16 @@ void handleCmd(android_app* app, int32_t cmd) {
 
     switch (cmd) {
         case APP_CMD_INIT_WINDOW:
-            if (app->window != nullptr) createRenderer(engine, app);
+            if (app->window != nullptr) {
+                // Если рендер уже жив (INIT без парного TERM) — снести ДО пересоздания:
+                // createRenderer делает ImGui::CreateContext внутри init, а деструктор старого
+                // рендера потом дёрнул бы Shutdown/DestroyContext уже по НОВОМУ контексту (UAF).
+                if (engine->renderer) {
+                    engine->scene.reset();
+                    engine->renderer.reset();
+                }
+                createRenderer(engine, app);
+            }
             break;
 
         case APP_CMD_TERM_WINDOW:

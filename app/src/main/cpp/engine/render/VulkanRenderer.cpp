@@ -181,6 +181,7 @@ bool VulkanRenderer::init(ANativeWindow* window, void* (*glGetProc)(const char*)
         GameUi::loadSkin(*this, assets);
     } else {
         LOGW("Vulkan: ImGui_ImplVulkan_Init failed (панель не будет рисоваться)");
+        ImGui::DestroyContext();  // осиротевший контекст: cleanup его не тронет (imguiReady_=false)
     }
 
     ready_ = true;

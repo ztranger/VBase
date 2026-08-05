@@ -586,10 +586,14 @@ float Scene::resourceCurrent() const {
 }
 
 float Scene::resourceCap() const {
-    float sum = 0.0f;  // ёмкость хранилищ своей команды (из сцены; рантайм-хранилища — позже)
-    for (const BuildingSpec& b : sceneDesc_.buildings)
-        if (b.kind == BuildingSpec::Storage && b.team == localTeam_) sum += b.cap;
-    return sum;
+    // Ёмкость хранилищ своей команды из ЖИВЫХ сущностей (снапшоты) — как и resourceCurrent,
+    // иначе построенные в рантайме хранилища не учитывались бы (в sceneDesc_ их нет). Cap
+    // одинаков для типа (из конфига), поэтому = число хранилищ × ёмкость из конфига.
+    const float perStorage = config_.get(EntityType::Storage).cap;
+    int count = 0;
+    for (const RemoteEntity& r : remoteEntities_)
+        if ((EntityType)r.type == EntityType::Storage && r.team == localTeam_) ++count;
+    return (float)count * perStorage;
 }
 
 int Scene::matchPhase() const { return (int)client_.gamePhase(); }

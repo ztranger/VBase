@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -57,6 +58,15 @@ struct EntityState {
     float hp = 0.0f;       // здоровье (герой/враг/здание); 0 = не используется
     float aux = 0.0f;      // generic-слот по типу: ресурс в хранилище, прогресс, …
 };
+
+// EntityState шлётся сырым memcpy (Net.cpp) и НЕ входит в pack(1)-блок — между team (off 5)
+// и x (off 8) есть 2 байта паддинга. На ARM64/x64 (обе LE, natural-align) раскладка совпадает,
+// но kProtocolVersion этого не ловит: страхуемся статик-проверкой. Любое поле, сместившее
+// layout, уронит сборку ЗДЕСЬ (а не породит порчу памяти в снапшотах) — напоминание бампнуть
+// версию И сверить раскладку на обеих целях.
+static_assert(sizeof(EntityState) == 44, "EntityState: размер изменился — бампни kProtocolVersion");
+static_assert(alignof(EntityState) == 4, "EntityState: выравнивание изменилось");
+static_assert(offsetof(EntityState, x) == 8, "EntityState: паддинг после team съехал");
 
 // Клиент: подключается к серверу, шлёт InputCommand, принимает снапшоты.
 // ENet спрятан за pimpl, чтобы не тащить его заголовки в остальной код.
