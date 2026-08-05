@@ -467,6 +467,96 @@ int runHeroStakesTest() {
     return ok ? 0 : 1;
 }
 
+// Тест team-aware таргетинга (фундамент PvP): бой считает целью только ВРАЖДЕБНЫЕ команды.
+// Ч.1 «свои не бьют своих» (всё team 1): враги НЕ валят своё ядро, башня НЕ бьёт своих врагов.
+// Ч.2 «чужих бьют» (враги team 1 vs ядро team 2): чужое ядро получает урон. Гоняем GameWorld
+// напрямую (headless). PvE (всё team 0) не затронут — там hostile(0,0)=true, см. CombatTest.
+int runTeamCombatTest() {
+    ColliderSpec floor;
+    floor.center = Vec3{0, -0.5f, 0};
+    floor.half = Vec3{50, 0.5f, 50};
+
+    // Ч.1: всё team 1 — дружественный огонь выключен.
+    float friendlyCoreHp = 0.0f;
+    int friendlyEnemies = 0;
+    {
+        GameWorld world;
+        SceneDesc desc;
+        desc.colliders.push_back(floor);
+        BuildingSpec core; core.kind = BuildingSpec::Core; core.pos = Vec3{0,0,0}; core.hp = 100.0f; core.team = 1; desc.buildings.push_back(core);
+        BuildingSpec sp; sp.kind = BuildingSpec::Spawner; sp.pos = Vec3{5,0,0}; sp.rate = 0.3f; sp.cap = 5.0f; sp.team = 1; desc.buildings.push_back(sp);
+        BuildingSpec tw; tw.kind = BuildingSpec::Tower; tw.pos = Vec3{2,0,0}; tw.damage = 100.0f; tw.range = 8.0f; tw.rate = 0.3f; tw.team = 1; desc.buildings.push_back(tw);
+        desc.enemy.hp = 50.0f; desc.enemy.damage = 20.0f; desc.enemy.attackInterval = 0.3f;
+        world.configure(desc);
+        for (int i = 0; i < 250; ++i) world.step(kTickDt);  // ~8 c
+        friendlyCoreHp = world.coreHp();       // ядро team1 (единственное) — не должно пострадать
+        friendlyEnemies = world.enemyCount();  // враги должны выжить (башня своих не бьёт)
+    }
+
+    // Ч.2: враги team 1 vs ядро team 2 — чужое ядро получает урон.
+    float enemyCoreHp = 0.0f;
+    {
+        GameWorld world;
+        SceneDesc desc;
+        desc.colliders.push_back(floor);
+        BuildingSpec core; core.kind = BuildingSpec::Core; core.pos = Vec3{0,0,0}; core.hp = 100.0f; core.team = 2; desc.buildings.push_back(core);
+        BuildingSpec sp; sp.kind = BuildingSpec::Spawner; sp.pos = Vec3{6,0,0}; sp.rate = 0.3f; sp.cap = 5.0f; sp.team = 1; desc.buildings.push_back(sp);
+        desc.enemy.hp = 50.0f; desc.enemy.damage = 20.0f; desc.enemy.attackInterval = 0.3f;
+        world.configure(desc);
+        for (int i = 0; i < 350; ++i) world.step(kTickDt);  // ~12 c — добежать и бить
+        enemyCoreHp = world.coreHp();  // ядро team2 — должно быть повреждено
+    }
+
+    std::printf("[TeamCombat] свои: ядро team1 hp=%.0f (ждём 100), врагов=%d (ждём >0 — башня своих не бьёт)\n",
+                (double)friendlyCoreHp, friendlyEnemies);
+    std::printf("[TeamCombat] чужие: ядро team2 hp=%.0f (ждём <100 — враги team1 его бьют)\n",
+                (double)enemyCoreHp);
+    bool friendlyOk = friendlyCoreHp >= 99.0f && friendlyEnemies > 0;
+    bool hostileOk = enemyCoreHp < 100.0f;
+    bool ok = friendlyOk && hostileOk;
+    std::printf("[TeamCombat] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
+// Тест PvP (G5): назначение стороны + спавн-точки + per-team исход. Две базы (team 1/2) со
+// своими spawn-точками; подключаем двух игроков — балансируются 1 и 2, каждый у своей точки.
+// Спавнер team1 шлёт врагов на ядро team2 → team2 проигрывает, team1 побеждает. GameWorld напрямую.
+int runPvpTest() {
+    GameWorld world;
+    SceneDesc desc;
+    ColliderSpec floor; floor.center = Vec3{0, -0.5f, 0}; floor.half = Vec3{50, 0.5f, 50}; desc.colliders.push_back(floor);
+    SpawnSpec sp1; sp1.team = 1; sp1.pos = Vec3{-12, 0, 0}; desc.spawns.push_back(sp1);
+    SpawnSpec sp2; sp2.team = 2; sp2.pos = Vec3{12, 0, 0};  desc.spawns.push_back(sp2);
+    BuildingSpec c1; c1.kind = BuildingSpec::Core; c1.pos = Vec3{-10, 0, 0}; c1.hp = 1000.0f; c1.team = 1; desc.buildings.push_back(c1);
+    BuildingSpec c2; c2.kind = BuildingSpec::Core; c2.pos = Vec3{10, 0, 0};  c2.hp = 100.0f;  c2.team = 2; desc.buildings.push_back(c2);
+    BuildingSpec s1; s1.kind = BuildingSpec::Spawner; s1.pos = Vec3{6, 0, 0}; s1.rate = 0.3f; s1.cap = 5.0f; s1.team = 1; desc.buildings.push_back(s1);
+    desc.enemy.hp = 50.0f; desc.enemy.damage = 20.0f; desc.enemy.attackInterval = 0.3f;
+    world.configure(desc);
+
+    // Назначение сторон: два подключившихся игрока -> балансировка 1 и 2.
+    uint32_t p1 = world.addPlayer();
+    uint32_t p2 = world.addPlayer();
+    uint8_t t1 = world.teamOf(p1), t2 = world.teamOf(p2);
+    Vec3 pos1 = world.heroPos(p1), pos2 = world.heroPos(p2);  // сразу после спавна (у своих точек)
+
+    for (int i = 0; i < 400; ++i) world.step(kTickDt);  // ~13 c — враги team1 валят ядро team2
+
+    GamePhase ph1 = world.phaseForTeam(1), ph2 = world.phaseForTeam(2);
+
+    bool teamsOk = (t1 == 1 && t2 == 2) || (t1 == 2 && t2 == 1);  // игроки на разных сторонах
+    float want1 = (t1 == 1) ? -12.0f : 12.0f;                     // спавн у точки своей стороны
+    float want2 = (t2 == 1) ? -12.0f : 12.0f;
+    bool spawnOk = std::fabs(pos1.x - want1) < 0.5f && std::fabs(pos2.x - want2) < 0.5f;
+    bool outcomeOk = ph2 == GamePhase::Lost && ph1 == GamePhase::Won;
+
+    std::printf("[PvP] стороны игроков: %d,%d (ждём {1,2}); спавн у своих точек=%s\n",
+                (int)t1, (int)t2, spawnOk ? "да" : "нет");
+    std::printf("[PvP] исход: team1=%d team2=%d (ждём 1=победа/2=поражение)\n", (int)ph1, (int)ph2);
+    bool ok = teamsOk && spawnOk && outcomeOk;
+    std::printf("[PvP] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
 // Кооп-тест (G4): два клиента на одной команде (team 0) делят базу. Оба видят друг друга
 // (по 2 героя в снапшоте), оба строят из ОБЩЕГО пула на разных клетках; после дисконнекта
 // одного база и второй герой остаются.
@@ -590,7 +680,10 @@ int main(int argc, char** argv) {
         int g = runTeamEconomyTest();   // ресурс per-team: независимые пулы + трата пула команды
         int h = runCoopTest();          // кооп: 2 клиента на одной базе + дисконнект
         int k = runHeroStakesTest();    // ставки героя: урон от врагов -> повержен -> респаун
-        return (a == 0 && b == 0 && c == 0 && d == 0 && e == 0 && f == 0 && g == 0 && h == 0 && k == 0) ? 0 : 1;
+        int m = runTeamCombatTest();    // team-aware бой: свои не бьют своих, чужих бьют (PvP)
+        int n = runPvpTest();           // PvP: назначение стороны + спавн-точки + per-team исход
+        return (a == 0 && b == 0 && c == 0 && d == 0 && e == 0 && f == 0 && g == 0 && h == 0 &&
+                k == 0 && m == 0 && n == 0) ? 0 : 1;
     }
 
     uint16_t port = kNetPort;

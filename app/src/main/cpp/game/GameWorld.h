@@ -63,7 +63,8 @@ public:
 
     void reset();                             // снести всё (сущности, мир, ресурс)
     void configure(const SceneDesc& desc);    // построить мир коллизий + здания базы
-    uint32_t addHero(uint8_t team = 0);       // создать героя (спавн + контроллер), вернуть id
+    uint32_t addHero(uint8_t team = 0);       // создать героя (спавн команды + контроллер)
+    uint32_t addPlayer();                     // подключившийся игрок: авто-выбор стороны + спавн
     void removeEntity(uint32_t id);           // убрать сущность и её коллайдер
     void setHeroInput(uint32_t heroId, const InputCommand& in);
     // Попытка возвести здание героем на клетке сетки. Валидирует (тип buildable, хватает
@@ -73,7 +74,11 @@ public:
     void writeStates(std::vector<EntityState>& out) const;  // состояние всех сущностей -> сеть
 
     uint32_t inputSeq(uint32_t heroId) const; // seq последнего ввода героя (для ackSeq снапшота)
-    GamePhase gamePhase() const { return phase_; }  // фаза матча (в заголовок снапшота)
+    // Исход матча ДЛЯ КОМАНДЫ (в заголовок снапшота кладём фазу команды игрока): своё ядро пало
+    // → Lost; все чужие ядра пали → Won (PvP); в соло/PvE (одна сторона) — победа по волнам.
+    GamePhase phaseForTeam(uint8_t team) const;
+    GamePhase gamePhase() const { return phaseForTeam(0); }  // совместимость: перспектива team 0
+    uint8_t teamOf(uint32_t id) const;        // команда сущности по id (0, если нет)
 
     // Максимум команд (0 = соло/кооп; для PvP 2v2 хватает; запас на free-for-all).
     static constexpr int kMaxTeams = 4;
@@ -92,7 +97,9 @@ private:
     std::unordered_map<uint32_t, HeroInputBuf> heroInputs_;  // ввод по героям (heroId -> буфер)
     uint32_t nextEntityId_ = 1;
     std::unique_ptr<CollisionWorld> world_;   // та же геометрия, что у клиента (может быть пуст)
-    Vec3 spawnPos_{0.0f, 0.0f, 0.0f};         // точка спавна героев (из сцены)
+    Vec3 spawnPos_{0.0f, 0.0f, 0.0f};         // спавн по умолчанию (player.pos; fallback без spawn-точек)
+    Vec3 spawnByTeam_[kMaxTeams];             // точка спавна каждой стороны (из директив spawn)
+    bool spawnValid_[kMaxTeams] = {false};    // у команды задана spawn-точка → она «играбельна»
     float capsuleRadius_ = 0.3f;
     float capsuleCylHalf_ = 0.3f;
     float resourcePerTeam_[kMaxTeams] = {0.0f};  // пул ресурса на каждую команду
@@ -101,8 +108,15 @@ private:
     float heroHp_ = 100.0f;                   // здоровье героя при спавне/респауне (из конфига)
     float heroRespawn_ = 5.0f;                // задержка респауна героя, сек (из конфига)
     Grid grid_;                               // строительная сетка (из описания сцены)
-    GamePhase phase_ = GamePhase::Playing;    // жизненный цикл матча
 
+    // Жизненный цикл матча — per-team. `decided_` замораживает системы (экономика/бой) после
+    // исхода; кэш ядер/волн обновляется в step и читается phaseForTeam.
+    bool decided_ = false;
+    float coreMaxByTeam_[kMaxTeams] = {0.0f};  // суммарный maxHp ядер команды (0 = нет ядра)
+    float coreHpByTeam_[kMaxTeams] = {0.0f};   // суммарный текущий hp ядер команды
+    bool waveCleared_ = false;                 // PvE: все спавнеры отработали и врагов нет
+
+    Vec3 spawnFor(uint8_t team) const;         // spawn-точка команды или spawnPos_ (fallback)
     Entity* entityById(uint32_t id);
     const Entity* entityById(uint32_t id) const;
 };

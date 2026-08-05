@@ -1,0 +1,48 @@
+# PvP-сцена VBase: две симметричные базы (team 1 — юг/−Z, team 2 — север/+Z). У каждой стороны
+# офенсив-спавнер, чьи враги бегут к ЧУЖОМУ ядру (team-aware таргетинг), и башни-оборона против
+# входящих чужих врагов. Сервер назначает подключившихся игроков стороне 1/2 (баланс) и сажает
+# их в spawn-точку своей команды. Победа стороны — когда разрушено ЧУЖОЕ ядро (per-team исход).
+# Параметры зданий/врага — из config/buildings.cfg (сцена только размещает).
+
+# --- Текстуры / материалы / меши (пол) ---
+texture checker procedural 256 8
+material floor lit color 1 1 1 tex checker
+mesh ground plane 24 12
+
+# --- Свет, камера, строительная сетка ---
+light  dir 0.4 1 0.6
+camera distance 20 pitch 0.95
+grid   cell 2 arena 11
+
+# --- Пол ---
+object ground mat floor
+
+# --- Коллайдеры: пол + стены-границы. Середина чиста — коридор для кросс-мап пути врагов. ---
+collider box center 0 -0.5 0  half 12 0.5 12       # пол (верх на y=0)
+collider box center 12 1 0    half 0.25 1 12        # стена +X
+collider box center -12 1 0   half 0.25 1 12        # стена -X
+collider box center 0 1 12    half 12 1 0.25         # стена +Z
+collider box center 0 1 -12   half 12 1 0.25         # стена -Z
+
+# --- База team 1 (юг, -Z) ---
+core      pos  0 0 -9  team 1        # ядро — цель врагов team 2
+generator pos -3 0 -9  team 1
+storage   pos  3 0 -9  team 1
+spawner   pos  0 0 -7  team 1        # враги team 1 бегут на север к ядру team 2
+tower     pos -3 0 -5  team 1        # оборона от входящих врагов team 2
+tower     pos  3 0 -5  team 1
+
+# --- База team 2 (север, +Z) ---
+core      pos  0 0 9   team 2
+generator pos -3 0 9   team 2
+storage   pos  3 0 9   team 2
+spawner   pos  0 0 7   team 2        # враги team 2 бегут на юг к ядру team 1
+tower     pos -3 0 5   team 2
+tower     pos  3 0 5   team 2
+
+# --- Спавн-точки сторон (сервер сажает игрока сюда по назначенной команде) ---
+spawn team 1 pos 0 0 -10
+spawn team 2 pos 0 0 10
+
+# --- Управляемый персонаж (fox). player.pos — fallback-спавн (не используется при наличии spawn). ---
+player model models/Fox.glb pos 0 0 -10 scale 0.03

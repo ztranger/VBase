@@ -358,7 +358,7 @@ void NetServer::poll() {
                     break;
                 }
                 // Создаём авторитетную сущность-героя (позиция + контроллер) в игровом мире.
-                uint32_t heroId = impl_->game.addHero();
+                uint32_t heroId = impl_->game.addPlayer();  // авто-выбор стороны (PvP-баланс)
                 impl_->conns.push_back(Conn{ev.peer, heroId, 0});
                 WelcomeMsg w{MSG_WELCOME, kProtocolVersion, heroId};
                 ENetPacket* pkt = enet_packet_create(&w, sizeof(w), ENET_PACKET_FLAG_RELIABLE);
@@ -470,7 +470,8 @@ void NetServer::tick(float dt) {
         head.ackSeq = ackSeq;
         head.changedCount = (uint16_t)changed.size();
         head.removedCount = (uint16_t)removed.size();
-        head.phase = (uint8_t)impl_->game.gamePhase();
+        // Фаза матча — С ПЕРСПЕКТИВЫ КОМАНДЫ этого клиента (PvP: у сторон разный исход).
+        head.phase = (uint8_t)impl_->game.phaseForTeam(impl_->game.teamOf(conn.heroId));
         std::memcpy(impl_->scratch.data(), &head, sizeof(head));
         if (!changed.empty())
             std::memcpy(impl_->scratch.data() + sizeof(head), changed.data(),

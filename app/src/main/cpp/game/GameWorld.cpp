@@ -26,6 +26,14 @@ bool isBuildingType(EntityType t) {
     return t == EntityType::Generator || t == EntityType::Storage ||
            t == EntityType::Spawner || t == EntityType::Tower || t == EntityType::Core;
 }
+
+// Враждебны ли команды (кого бой считает целью). team 0 — нейтрал/PvE: враждебен всем,
+// в т.ч. сам себе — иначе чисто-PvE-сцена (всё team 0) перестала бы воевать. Стороны 1/2
+// враждебны разным командам и дружественны своей (PvP: башни/враги не бьют своих).
+bool hostile(uint8_t a, uint8_t b) {
+    if (a == 0 && b == 0) return true;  // чистый PvE — прежнее поведение
+    return a != b;
+}
 }  // namespace
 
 GameWorld::GameWorld() = default;
@@ -54,7 +62,14 @@ void GameWorld::reset() {
     heroHp_ = 100.0f;
     heroRespawn_ = 5.0f;
     grid_ = Grid{};
-    phase_ = GamePhase::Playing;
+    for (int t = 0; t < kMaxTeams; ++t) {
+        spawnByTeam_[t] = Vec3{0.0f, 0.0f, 0.0f};
+        spawnValid_[t] = false;
+        coreMaxByTeam_[t] = 0.0f;
+        coreHpByTeam_[t] = 0.0f;
+    }
+    decided_ = false;
+    waveCleared_ = false;
 }
 
 void GameWorld::configure(const SceneDesc& desc) {
@@ -72,6 +87,14 @@ void GameWorld::configure(const SceneDesc& desc) {
     heroHp_ = desc.player.hp;
     heroRespawn_ = desc.player.respawnDelay > 0.0f ? desc.player.respawnDelay : 5.0f;
     grid_ = desc.grid;  // строительная сетка из сцены (та же, что у клиента)
+
+    // Точки спавна сторон (PvP). Играбельны только команды с заданной точкой. Нет ни одной —
+    // fallback: команда 0 спавнит в player.pos (соло/кооп ведут себя как раньше).
+    for (const SpawnSpec& s : desc.spawns)
+        if (s.team < kMaxTeams) { spawnByTeam_[s.team] = s.pos; spawnValid_[s.team] = true; }
+    bool anySpawn = false;
+    for (bool v : spawnValid_) anySpawn = anySpawn || v;
+    if (!anySpawn) { spawnByTeam_[0] = spawnPos_; spawnValid_[0] = true; }
 
     // Спавним статичные сущности базы из описания (генератор/хранилище/спавнер/башня/ядро).
     for (const BuildingSpec& b : desc.buildings) {
@@ -98,16 +121,35 @@ void GameWorld::configure(const SceneDesc& desc) {
          (int)desc.buildings.size());
 }
 
+Vec3 GameWorld::spawnFor(uint8_t team) const {
+    return (team < kMaxTeams && spawnValid_[team]) ? spawnByTeam_[team] : spawnPos_;
+}
+
+uint32_t GameWorld::addPlayer() {
+    // Наименее населённая ИГРАБЕЛЬНАЯ команда (у неё есть точка спавна). PvP балансирует 1/2;
+    // соло/кооп — все в единственную валидную (team 0). Балансировка по числу живых героев.
+    int count[kMaxTeams] = {0};
+    for (const Entity& e : entities_)
+        if (e.type == EntityType::Hero && e.team < kMaxTeams) count[e.team]++;
+    int best = -1;
+    for (int t = 0; t < kMaxTeams; ++t) {
+        if (!spawnValid_[t]) continue;
+        if (best < 0 || count[t] < count[best]) best = t;
+    }
+    return addHero(best < 0 ? 0 : (uint8_t)best);
+}
+
 uint32_t GameWorld::addHero(uint8_t team) {
+    const Vec3 sp = spawnFor(team);
     Entity hero;
     hero.id = nextEntityId_++;
     hero.type = EntityType::Hero;
     hero.team = team;
     hero.hp = hero.maxHp = heroHp_;  // ставки: героя можно повергнуть
-    hero.move.position = spawnPos_;
+    hero.move.position = sp;
     hero.move.snapshot();
     if (world_) {
-        hero.move.collider = world_->addCharacter(spawnPos_, capsuleRadius_, capsuleCylHalf_);
+        hero.move.collider = world_->addCharacter(sp, capsuleRadius_, capsuleCylHalf_);
     }
     entities_.push_back(hero);
     return hero.id;
@@ -216,7 +258,7 @@ void GameWorld::step(float dt) {
         }
     }
 
-    if (phase_ != GamePhase::Playing) return;  // матч кончился — экономика/бой стоят
+    if (decided_) return;  // матч завершён — экономика/бой стоят (герои двигаются выше)
 
     // Экономика ПО КОМАНДАМ: у каждой стороны свой пул, питаемый её генераторами и
     // ограниченный суммой ёмкостей её хранилищ (лишнее теряется — потолок накоплений).
@@ -271,35 +313,38 @@ void GameWorld::step(float dt) {
         for (Entity& n : spawned) entities_.push_back(std::move(n));
     }
 
-    // Ядро базы (первое Core) — цель ДВИЖЕНИЯ врагов. Указатель валиден до уборки трупов
-    // ниже (враги ещё не удаляются, ядро не удаляется).
-    Entity* core = nullptr;
-    for (Entity& e : entities_)
-        if (e.type == EntityType::Core) { core = &e; break; }
-
-    // Враги бегут к ядру тем же кинематическим контроллером (гравитация + скольжение), а по
-    // кулдауну бьют БЛИЖАЙШУЮ цель в радиусе: ядро (kCoreStopDist) ИЛИ живого героя
-    // (kHeroHitRange). Так герой, влезший в поток врагов, получает урон — это и есть ставки.
+    // Враги бегут к ближайшему ВРАЖДЕБНОМУ ядру (в PvP у каждой стороны своё — враг бежит на
+    // чужое; в PvE всё team 0 и hostile(0,0)=true, поведение как раньше), а по кулдауну бьют
+    // БЛИЖАЙШУЮ цель в радиусе: враждебное ядро (kCoreStopDist) ИЛИ живого враждебного героя
+    // (kHeroHitRange). Цель зависит от команды врага — считаем пер-врага.
     for (Entity& e : entities_) {
         if (e.type != EntityType::Enemy) continue;
-        Vec3 vel{0.0f, 0.0f, 0.0f};
+        // Ближайшее враждебное ядро — цель движения (указатель валиден: entities_ не меняется
+        // до уборки трупов ниже).
+        Entity* core = nullptr;
         float coreDist = 1e30f;
-        if (core != nullptr) {
+        for (Entity& c : entities_) {
+            if (c.type != EntityType::Core || !hostile(e.team, c.team)) continue;
+            Vec3 to = c.move.position - e.move.position;
+            to.y = 0.0f;
+            float d = std::sqrt(to.x * to.x + to.z * to.z);
+            if (d < coreDist) { coreDist = d; core = &c; }
+        }
+        Vec3 vel{0.0f, 0.0f, 0.0f};
+        if (core != nullptr && coreDist > kCoreStopDist) {
             Vec3 to = core->move.position - e.move.position;
             to.y = 0.0f;
-            coreDist = std::sqrt(to.x * to.x + to.z * to.z);
-            if (coreDist > kCoreStopDist) {
-                Vec3 dir = to * (1.0f / coreDist);
-                vel = dir * kEnemySpeed;
-                e.move.facingYaw = std::atan2(dir.x, dir.z);
-            }
+            Vec3 dir = to * (1.0f / coreDist);
+            vel = dir * kEnemySpeed;
+            e.move.facingYaw = std::atan2(dir.x, dir.z);
         }
-        // Цель удара — ближайшее в радиусе: ядро (в упоре) или ближайший живой герой.
+        // Цель удара — ближайшее в радиусе: враждебное ядро (в упоре) или ближайший живой
+        // враждебный герой.
         Entity* atk = nullptr;
         float atkDist = 1e30f;
         if (core != nullptr && coreDist <= kCoreStopDist) { atk = core; atkDist = coreDist; }
         for (Entity& h : entities_) {
-            if (h.type != EntityType::Hero || h.hp <= 0.0f) continue;
+            if (h.type != EntityType::Hero || h.hp <= 0.0f || !hostile(e.team, h.team)) continue;
             Vec3 d = h.move.position - e.move.position;
             d.y = 0.0f;
             float hd = std::sqrt(d.x * d.x + d.z * d.z);
@@ -330,7 +375,7 @@ void GameWorld::step(float dt) {
         Entity* target = nullptr;
         float bestD2 = tw.range * tw.range;
         for (Entity& en : entities_) {
-            if (en.type != EntityType::Enemy || en.hp <= 0.0f) continue;
+            if (en.type != EntityType::Enemy || en.hp <= 0.0f || !hostile(tw.team, en.team)) continue;
             Vec3 d = en.move.position - tw.move.position;
             float d2 = d.x * d.x + d.y * d.y + d.z * d.z;
             if (d2 <= bestD2) { bestD2 = d2; target = &en; }
@@ -351,14 +396,15 @@ void GameWorld::step(float dt) {
             e.aux = heroRespawn_;  // только что повержен — запустить отсчёт
         } else {
             e.aux -= dt;
-            if (e.aux <= 0.0f) {  // отсчёт вышел — возрождаем
+            if (e.aux <= 0.0f) {  // отсчёт вышел — возрождаем в спавн-точке своей команды
+                const Vec3 sp = spawnFor(e.team);
                 e.hp = e.maxHp;
                 e.aux = 0.0f;
-                e.move.position = spawnPos_;
+                e.move.position = sp;
                 e.move.velocityY = 0.0f;
                 e.move.snapshot();
                 if (world_ && e.move.collider != 0)
-                    world_->setCharacterPosition(e.move.collider, spawnPos_);
+                    world_->setCharacterPosition(e.move.collider, sp);
             }
         }
     }
@@ -375,29 +421,54 @@ void GameWorld::step(float dt) {
         }
     }
 
-    // Жизненный цикл матча (свежие сканы — core-указатель мог инвалидироваться уборкой):
-    // ядро разрушено → поражение; все спавнеры отработали и врагов нет → победа.
-    float coreHpNow = 0.0f, coreMaxHp = 0.0f;
-    bool haveCore = false;
-    bool allSpawned = true, haveSpawner = false;
+    // Жизненный цикл матча — PER-TEAM. Считаем ядра по командам (maxHp>0 — иначе ядро-плейсхолдер
+    // считалось бы разрушенным сразу) и статус волн; кэшируем для phaseForTeam. Матч завершён,
+    // когда какая-то core-команда уничтожена (PvP/PvE-поражение) ИЛИ одна сторона отбила все волны.
+    for (int t = 0; t < kMaxTeams; ++t) { coreMaxByTeam_[t] = 0.0f; coreHpByTeam_[t] = 0.0f; }
+    bool haveSpawner = false, allSpawned = true;
     int enemies = 0;
     for (const Entity& e : entities_) {
-        if (e.type == EntityType::Core) { coreHpNow = e.hp; coreMaxHp = e.maxHp; haveCore = true; }
-        else if (e.type == EntityType::Spawner) {
+        if (e.type == EntityType::Core && e.team < kMaxTeams && e.maxHp > 0.0f) {
+            coreMaxByTeam_[e.team] += e.maxHp;
+            coreHpByTeam_[e.team] += (e.hp > 0.0f ? e.hp : 0.0f);
+        } else if (e.type == EntityType::Spawner) {
             haveSpawner = true;
             if (e.spawnedCount < (int)e.cap) allSpawned = false;
         } else if (e.type == EntityType::Enemy) {
             ++enemies;
         }
     }
-    // maxHp>0 — иначе ядро без заданного здоровья (плейсхолдер) считалось бы разрушенным сразу.
-    if (haveCore && coreMaxHp > 0.0f && coreHpNow <= 0.0f) {
-        phase_ = GamePhase::Lost;
-        LOGI("GameWorld: ядро разрушено — поражение");
-    } else if (haveSpawner && allSpawned && enemies == 0) {
-        phase_ = GamePhase::Won;
-        LOGI("GameWorld: все волны отбиты — победа");
+    waveCleared_ = haveSpawner && allSpawned && enemies == 0;
+
+    int coreTeams = 0, aliveCoreTeams = 0;
+    for (int t = 0; t < kMaxTeams; ++t)
+        if (coreMaxByTeam_[t] > 0.0f) { ++coreTeams; if (coreHpByTeam_[t] > 0.0f) ++aliveCoreTeams; }
+    const bool anyEliminated = coreTeams > aliveCoreTeams;   // хотя бы одно ядро-команда пало
+    const bool pveWin = coreTeams <= 1 && waveCleared_;      // одна сторона отбила все волны
+    if ((anyEliminated || pveWin) && !decided_) {
+        decided_ = true;
+        LOGI("GameWorld: матч завершён (ядро-команд %d, живых %d, волны %s)", coreTeams,
+             aliveCoreTeams, waveCleared_ ? "отбиты" : "нет");
     }
+}
+
+GamePhase GameWorld::phaseForTeam(uint8_t t) const {
+    if (t >= kMaxTeams) return GamePhase::Playing;
+    if (coreMaxByTeam_[t] > 0.0f && coreHpByTeam_[t] <= 0.0f) return GamePhase::Lost;  // моё ядро пало
+    int otherCore = 0, otherAlive = 0;
+    for (int k = 0; k < kMaxTeams; ++k) {
+        if (k == (int)t || coreMaxByTeam_[k] <= 0.0f) continue;
+        ++otherCore;
+        if (coreHpByTeam_[k] > 0.0f) ++otherAlive;
+    }
+    if (otherCore > 0 && otherAlive == 0) return GamePhase::Won;  // все чужие ядра пали (PvP)
+    if (otherCore == 0 && waveCleared_) return GamePhase::Won;    // PvE: волны отбиты
+    return GamePhase::Playing;
+}
+
+uint8_t GameWorld::teamOf(uint32_t id) const {
+    const Entity* e = entityById(id);
+    return e != nullptr ? e->team : 0;
 }
 
 void GameWorld::writeStates(std::vector<EntityState>& out) const {

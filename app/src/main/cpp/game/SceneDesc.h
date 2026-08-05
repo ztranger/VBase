@@ -76,6 +76,13 @@ struct BuildingSpec {
     uint8_t team = 0;     // сторона (0 = соло/кооп; 1/2 — PvP)
 };
 
+// Точка спавна героя стороны (PvP: у каждой команды своя; сервер сажает подключившегося
+// игрока сюда). Если в сцене нет ни одной — команда 0 спавнит в player.pos (соло/кооп).
+struct SpawnSpec {
+    uint8_t team = 0;
+    Vec3 pos{0.0f, 0.0f, 0.0f};
+};
+
 // Боевые параметры врага (враги не в сцене — их плодит спавнер; статы из конфига).
 struct EnemySpec {
     float hp = 10.0f;             // здоровье
@@ -126,6 +133,7 @@ struct SceneDesc {
     std::vector<ObjectSpec> objects;  // включая кольцевые (ring=true)
     std::vector<ColliderSpec> colliders;  // статичная геометрия для физики
     std::vector<BuildingSpec> buildings;  // здания базы (генераторы/хранилища/башни/ядро)
+    std::vector<SpawnSpec> spawns;        // точки спавна героев по командам (PvP)
     EnemySpec enemy;                      // боевые статы врага (из конфига)
     BuildTemplate build[8];               // шаблоны построек героя по EntityType (из конфига)
     Grid grid;                            // строительная сетка (директива `grid` в сцене)

@@ -218,6 +218,18 @@ bool loadSceneDesc(AssetSource& assets, const char* path, SceneDesc& out) {
                 else { LOGE("scene: строка %d: неизвестный ключ player '%s'", line, k.c_str()); return false; }
             }
 
+        } else if (cmd == "spawn") {
+            // spawn team <n> pos <x y z> — точка спавна стороны (PvP; сервер сажает игрока сюда)
+            SpawnSpec sp;
+            size_t i = 1;
+            while (i < t.size()) {
+                std::string k = t[i++];
+                if (k == "team") { int tm = 0; if (!readI(t, i, line, tm)) return false; sp.team = (uint8_t)tm; }
+                else if (k == "pos") { if (!readVec3(t, i, line, sp.pos)) return false; }
+                else { LOGE("scene: строка %d: неизвестный ключ spawn '%s'", line, k.c_str()); return false; }
+            }
+            out.spawns.push_back(sp);
+
         } else if (cmd == "light") {
             // light dir <x> <y> <z>
             size_t i = 1;
