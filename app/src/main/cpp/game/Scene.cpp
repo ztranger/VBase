@@ -1,6 +1,7 @@
 #include "game/Scene.h"
 
 #include <cmath>
+#include <cstdio>
 #include <string>
 #include <unordered_map>
 
@@ -24,10 +25,13 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
         return;  // пустая сцена — ошибки уже в логе
     }
     sceneDesc_ = desc;  // сохраняем: host-режим отдаст ту же геометрию своему серверу
+    grid_ = desc.grid;  // строительная сетка из сцены (та же, что применит сервер)
     // Конфиг зданий (параметры + тексты панели). Параметры применяем к зданиям сцены —
     // единый источник настроек: сцена размещает, конфиг задаёт rate/cap/…
     loadBuildingConfig(assets, "config/buildings.cfg", config_);
     applyBuildingConfig(sceneDesc_, config_);
+    localMaxHp_ = config_.get(EntityType::Hero).hp;  // для HUD-бара героя
+    if (localMaxHp_ <= 0.0f) localMaxHp_ = 100.0f;
 
     // Свет и камера — прямо из описания.
     lightDir_ = desc.lightDir;
@@ -276,6 +280,12 @@ void Scene::fixedUpdate(float dt) {
     cmd.jump = jumpQueued_;                          // одноразовый прыжок
     jumpQueued_ = false;
 
+    if (heroDead()) {  // повержен — ввод в ноль (сервер держит героя на месте до респауна)
+        cmd.moveX = cmd.moveZ = 0.0f;
+        cmd.magnitude = 0.0f;
+        cmd.jump = false;
+    }
+
     tickDt_ = dt;
 
     // Отправляем ввод серверу и запоминаем его как неподтверждённый (для реплея).
@@ -316,6 +326,8 @@ void Scene::applySnapshot() {
             // Reconciliation: ставим авторитетное состояние сервера и ПЕРЕИГРЫВАЕМ
             // все вводы, которые сервер ещё не обработал (seq > ack).
             localTeam_ = s.team;  // своя команда — для ресурса/стройки per-team
+            localHp_ = s.hp;      // ставки: hp своего героя (<=0 = повержен)
+            localRespawn_ = s.aux;  // отсчёт респауна (сервер шлёт в aux при поверженном)
             player_.position = {s.x, s.y, s.z};
             player_.facingYaw = s.yaw;
             player_.speed01 = s.speed01;
@@ -400,6 +412,9 @@ void Scene::leaveGame() {
     host_ = false;
     remoteEntities_.clear();
     pending_.clear();
+    localTeam_ = 0;
+    localHp_ = 1.0f;      // вне сессии герой «жив» (иначе своя лиса не рисовалась бы)
+    localRespawn_ = 0.0f;
 }
 
 void Scene::onPointer(float x, float y, bool pressed) {
@@ -449,7 +464,7 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
         t.rotation.y = obj.prevRotY + (obj.transform.rotation.y - obj.prevRotY) * alpha;
         frame.items.push_back({obj.mesh, obj.material, t.matrix()});
     }
-    if (foxMesh_ != 0) {
+    if (foxMesh_ != 0 && !heroDead()) {  // повержённого героя не рисуем (появится на респауне)
         // Свой аватар: интерполяция prev -> current по alpha.
         Vec3 p = player_.prevPosition + (player_.position - player_.prevPosition) * alpha;
         float yaw = lerpAngle(player_.prevFacingYaw, player_.facingYaw, alpha);
@@ -539,6 +554,19 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
         else if (buildType_ == EntityType::Storage) { gm = storMesh_; yoff = 0.7f; }
         frame.items.push_back({gm, valid ? ghostOkMat_ : ghostBadMat_,
                                Mat4::translation(center + Vec3{0.0f, yoff, 0.0f})});
+    }
+
+    // HUD ставок героя (bitmap-шрифт — только ASCII; кириллический баннер — в ImGui-слое
+    // через геттеры heroDead()/heroRespawnLeft()). Верхний левый угол, под FPS.
+    if (client_.connected()) {
+        char buf[48];
+        if (heroDead()) {
+            std::snprintf(buf, sizeof(buf), "DOWN - respawn %.0f", (double)std::ceil(localRespawn_));
+            frame.hud.push_back({buf, 24.0f, 110.0f, 44.0f, {0.95f, 0.35f, 0.30f}});
+        } else {
+            std::snprintf(buf, sizeof(buf), "HP %.0f/%.0f", (double)localHp_, (double)localMaxHp_);
+            frame.hud.push_back({buf, 24.0f, 74.0f, 28.0f, {0.70f, 0.95f, 0.70f}});
+        }
     }
     return frame;
 }
@@ -655,19 +683,19 @@ bool Scene::computeGhost(int& cx, int& cz, Vec3& center) const {
     // Клетка перед героем (по facing, ~1.5 клетки вперёд), снап на сетку.
     float yaw = player_.facingYaw;
     Vec3 fwd{std::sin(yaw), 0.0f, std::cos(yaw)};
-    Vec3 p = player_.position + fwd * (grid::kCell * 1.5f);
-    cx = grid::cellOf(p.x);
-    cz = grid::cellOf(p.z);
-    center = grid::cellCenter(cx, cz);
+    Vec3 p = player_.position + fwd * (grid_.cell * 1.5f);
+    cx = grid_.cellOf(p.x);
+    cz = grid_.cellOf(p.z);
+    center = grid_.cellCenter(cx, cz);
 
-    if (!grid::inArena(cx, cz)) return false;             // вне зоны строительства
+    if (!grid_.inArena(cx, cz)) return false;             // вне зоны строительства
     for (const RemoteEntity& r : remoteEntities_) {       // клетка занята зданием?
         EntityType t = (EntityType)r.type;
         bool building = (t == EntityType::Generator || t == EntityType::Storage ||
                          t == EntityType::Spawner || t == EntityType::Tower ||
                          t == EntityType::Core);
         if (!building) continue;
-        if (grid::cellOf(r.ch.position.x) == cx && grid::cellOf(r.ch.position.z) == cz)
+        if (grid_.cellOf(r.ch.position.x) == cx && grid_.cellOf(r.ch.position.z) == cz)
             return false;
     }
     if (resourceCurrent() < config_.get(buildType_).cost) return false;  // не хватает ресурса

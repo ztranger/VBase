@@ -71,6 +71,8 @@ public:
     }
     int enemyCount() const;
     float coreHp() const;  // здоровье первого ядра (для CombatTest)
+    float heroHp(uint32_t id) const;   // здоровье героя по id (для HeroStakesTest); -1 если нет
+    Vec3 heroPos(uint32_t id) const;   // позиция героя по id (для проверки респауна)
 
 private:
     std::vector<Entity> entities_;            // ВСЕ сущности мира (герои + здания + враги)
@@ -82,6 +84,9 @@ private:
     float resourcePerTeam_[kMaxTeams] = {0.0f};  // пул ресурса на каждую команду
     EnemySpec enemyStats_;                    // hp/урон/интервал врага (из конфига через сцену)
     BuildTemplate buildTemplates_[8];         // шаблоны построек героя по EntityType (из сцены)
+    float heroHp_ = 100.0f;                   // здоровье героя при спавне/респауне (из конфига)
+    float heroRespawn_ = 5.0f;                // задержка респауна героя, сек (из конфига)
+    Grid grid_;                               // строительная сетка (из описания сцены)
     GamePhase phase_ = GamePhase::Playing;    // жизненный цикл матча
 
     Entity* entityById(uint32_t id);

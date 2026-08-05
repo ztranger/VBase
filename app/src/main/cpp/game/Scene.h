@@ -142,6 +142,11 @@ public:
     int matchPhase() const;    // GamePhase (0 Playing / 1 Won / 2 Lost)
     float coreHp() const;      // текущее здоровье ядра (из снапшотов; -1 если ядра нет)
     float coreMaxHp() const;   // максимум ядра (из конфига)
+    // Ставки своего героя.
+    float heroHp() const { return localHp_; }
+    float heroMaxHp() const { return localMaxHp_; }
+    bool heroDead() const { return client_.connected() && localHp_ <= 0.0f; }
+    float heroRespawnLeft() const { return localRespawn_; }  // секунд до респауна
 
     float modelScale() const { return foxScale_; }
     void setModelScale(float s) { foxScale_ = s; }
@@ -188,8 +193,12 @@ private:
     NetServer server_;
     SceneDesc sceneDesc_;      // сохранённое описание (host-режим отдаёт его серверу)
     BuildingConfig config_;    // параметры/тексты типов зданий (из конфига)
+    Grid grid_;                // строительная сетка (из описания сцены; та же, что у сервера)
     uint32_t selectedId_ = 0;  // id выделенной кликом сущности (0 = нет)
     uint8_t localTeam_ = 0;    // команда своего героя (из снапшота) — для ресурса per-team
+    float localHp_ = 1.0f;      // hp своего героя (>0 = жив); из снапшота (вне сессии — «жив»)
+    float localMaxHp_ = 100.0f; // макс. hp героя (из конфига)
+    float localRespawn_ = 0.0f; // отсчёт респауна при поверженном (из aux сущности)
 
     // Стройка: активный режим + выбранный тип + материалы призрака (валид/невалид).
     bool buildActive_ = false;

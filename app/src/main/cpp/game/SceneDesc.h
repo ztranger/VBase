@@ -6,6 +6,7 @@
 
 #include "engine/core/MathUtil.h"
 #include "engine/core/Texture.h"  // ShaderType
+#include "game/Grid.h"            // строительная сетка (параметры из сцены)
 
 // Декларативное описание сцены (чистые данные, без рендера и платформы).
 // Загружается из текстового файла (см. SceneLoader), затем Scene::build
@@ -103,6 +104,9 @@ struct PlayerSpec {
     // Капсула контроллера (кинематическая физика). cylHalf — половина высоты цилиндра.
     float colliderRadius = 0.3f;
     float colliderCylHalf = 0.3f;
+    // Ставки героя (из конфига `building hero`): здоровье и задержка респауна.
+    float hp = 100.0f;
+    float respawnDelay = 5.0f;
 };
 
 struct CameraSpec {
@@ -124,6 +128,7 @@ struct SceneDesc {
     std::vector<BuildingSpec> buildings;  // здания базы (генераторы/хранилища/башни/ядро)
     EnemySpec enemy;                      // боевые статы врага (из конфига)
     BuildTemplate build[8];               // шаблоны построек героя по EntityType (из конфига)
+    Grid grid;                            // строительная сетка (директива `grid` в сцене)
     PlayerSpec player;
     CameraSpec camera;
     Vec3 lightDir{0.4f, 1.0f, 0.6f};  // направление НА источник света

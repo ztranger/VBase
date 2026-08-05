@@ -430,6 +430,43 @@ int runTeamEconomyTest() {
     return ok ? 0 : 1;
 }
 
+// Тест ставок героя: герой стоит на пути потока врагов, получает урон, повержен (hp<=0),
+// затем возрождается в точке спавна с полным hp. Гоняем GameWorld напрямую.
+int runHeroStakesTest() {
+    GameWorld world;
+    SceneDesc desc;
+    ColliderSpec floor; floor.center = Vec3{0,-0.5f,0}; floor.half = Vec3{50,0.5f,50}; desc.colliders.push_back(floor);
+    BuildingSpec core; core.kind = BuildingSpec::Core; core.pos = Vec3{0,0,0}; core.hp = 100000.0f; desc.buildings.push_back(core);
+    BuildingSpec sp; sp.kind = BuildingSpec::Spawner; sp.pos = Vec3{6,0,0}; sp.rate = 0.3f; sp.cap = 20.0f; desc.buildings.push_back(sp);
+    desc.enemy.hp = 100000.0f;   // враги не умирают (нет защиты) — стабильный поток мимо героя
+    desc.enemy.damage = 20.0f;
+    desc.enemy.attackInterval = 0.25f;
+    desc.player.pos = Vec3{3,0,0};  // прямо на пути врагов (spawner 6 -> core 0)
+    desc.player.hp = 40.0f;
+    desc.player.respawnDelay = 1.0f;
+    world.configure(desc);
+    uint32_t hero = world.addHero(0);
+
+    const float dt = kTickDt;
+    float minHp = 999.0f;
+    bool died = false, respawned = false;
+    for (int i = 0; i < 700; ++i) {  // ~23 c: волна проходит, герой гибнет и возрождается
+        world.step(dt);
+        float hp = world.heroHp(hero);
+        if (hp < minHp) minHp = hp;
+        if (hp <= 0.0f) died = true;
+        if (died && hp >= 39.0f) respawned = true;  // вернулся к полному hp
+    }
+    Vec3 pos = world.heroPos(hero);
+    bool posOk = std::fabs(pos.x - 3.0f) < 0.7f && std::fabs(pos.z) < 0.7f;  // респаун у точки спавна
+
+    std::printf("[HeroStakes] min hp героя=%.0f (ждём <=0 — повержен), возродился=%s, у спавна=%s\n",
+                (double)minHp, respawned ? "да" : "нет", posOk ? "да" : "нет");
+    bool ok = died && respawned && posOk;
+    std::printf("[HeroStakes] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
 // Кооп-тест (G4): два клиента на одной команде (team 0) делят базу. Оба видят друг друга
 // (по 2 героя в снапшоте), оба строят из ОБЩЕГО пула на разных клетках; после дисконнекта
 // одного база и второй герой остаются.
@@ -552,7 +589,8 @@ int main(int argc, char** argv) {
         int f = runBuildTest();         // стройка: MSG_BUILD -> валидация на сетке -> сущность
         int g = runTeamEconomyTest();   // ресурс per-team: независимые пулы + трата пула команды
         int h = runCoopTest();          // кооп: 2 клиента на одной базе + дисконнект
-        return (a == 0 && b == 0 && c == 0 && d == 0 && e == 0 && f == 0 && g == 0 && h == 0) ? 0 : 1;
+        int k = runHeroStakesTest();    // ставки героя: урон от врагов -> повержен -> респаун
+        return (a == 0 && b == 0 && c == 0 && d == 0 && e == 0 && f == 0 && g == 0 && h == 0 && k == 0) ? 0 : 1;
     }
 
     uint16_t port = kNetPort;

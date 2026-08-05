@@ -231,8 +231,12 @@ OBJ-загрузчика). Директивы:
 - `ring <mesh> mat <mat> count <n> radius <r> [y <y>] [scale s] [spin s]` — инстансинг по кольцу
 - `collider box center <x y z> half <hx hy hz>` — статичный коллайдер физики (Jolt);
   независим от визуальных мешей (коллизия ≠ отрисовка).
-- `generator|storage|spawner|core pos <x y z>` — сущность базы (сервер спавнит из неё).
-  Только РАЗМЕЩЕНИЕ; параметры (rate/cap/interval/max) и тексты — в `config/buildings.cfg`.
+- `generator|storage|spawner|core|tower pos <x y z> [team <n>]` — сущность базы (сервер
+  спавнит из неё). В основном РАЗМЕЩЕНИЕ; параметры (rate/cap/hp/damage/range) и тексты —
+  в `config/buildings.cfg` (`team` — сторона: 0 соло/кооп, 1/2 PvP).
+- `grid cell <размер> arena <полуразмер>` — строительная сетка (клетка + зона стройки).
+  Сервер и клиент берут её отсюда (одна геометрия — иначе клиент показал бы валидной клетку,
+  которую сервер отвергнет). По умолчанию `cell 2 arena 11`.
 - `player model <path> [pos x y z] [scale s] [yaw o] [capsule <radius> <cylHalf>]` —
   glTF-персонаж (скиннинг) + капсула кинематического контроллера (по умолчанию 0.3 0.3)
 
@@ -243,7 +247,8 @@ OBJ-загрузчика). Директивы:
 переносит параметры в здания сцены. Клик/тап по зданию (`Scene::onClick`, raycast) →
 панель в `GameUi` с содержимым по типу.
 - `light dir <x> <y> <z>` — направление на свет (правится слайдером в `GameUi`)
-- `camera [distance d] [height h] [lookHeight l] [fov f] [near n] [far f]`
+- `camera [distance d] [pitch p] [lookHeight l] [fov f] [near n] [far f]` — ¾-камера
+  (`pitch` — фиксированный наклон, рад; yaw/зум управляются игроком)
 
 Путь к сцене — параметр `Scene::build` (по умолчанию `scenes/default.scene`); на
 десктопе задаётся 3-м аргументом: `vbase_desktop.exe [serverIp] [assetsDir] [scenePath]`.

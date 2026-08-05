@@ -239,6 +239,16 @@ bool loadSceneDesc(AssetSource& assets, const char* path, SceneDesc& out) {
                 else { LOGE("scene: строка %d: неизвестный ключ camera '%s'", line, k.c_str()); return false; }
             }
 
+        } else if (cmd == "grid") {
+            // grid cell <размер клетки> arena <полуразмер зоны строительства>
+            size_t i = 1;
+            while (i < t.size()) {
+                std::string k = t[i++];
+                if (k == "cell") { if (!readF(t, i, line, out.grid.cell)) return false; }
+                else if (k == "arena") { if (!readF(t, i, line, out.grid.arenaHalf)) return false; }
+                else { LOGE("scene: строка %d: неизвестный ключ grid '%s'", line, k.c_str()); return false; }
+            }
+
         } else {
             LOGE("scene: строка %d: неизвестная директива '%s'", line, cmd.c_str());
             return false;
@@ -343,6 +353,13 @@ void applyBuildingConfig(SceneDesc& desc, const BuildingConfig& cfg) {
         if (en.hp > 0.0f) desc.enemy.hp = en.hp;
         if (en.damage > 0.0f) desc.enemy.damage = en.damage;
         if (en.rate > 0.0f) desc.enemy.attackInterval = en.rate;
+    }
+
+    // Ставки героя (блок `building hero`): hp = здоровье, rate = задержка респауна, сек.
+    const BuildingInfo& hr = cfg.get(EntityType::Hero);
+    if (hr.defined) {
+        if (hr.hp > 0.0f) desc.player.hp = hr.hp;
+        if (hr.rate > 0.0f) desc.player.respawnDelay = hr.rate;
     }
 
     // Шаблоны построек героя: любой тип с cost>0 в конфиге становится доступным к возведению.
