@@ -15,6 +15,12 @@ constexpr float kEnemyCylHalf = 0.3f;
 constexpr float kCoreStopDist = 1.0f;
 constexpr float kHeroHitRange = 1.3f;  // враг бьёт героя, если тот ближе этого
 
+// Очередь ввода героя (см. HeroInputBuf). Целевая глубина буфера сглаживает джиттер;
+// при бэклоге выше неё догоняем на +1 ввод/тик, чтобы буфер не превращался в постоянную
+// задержку. Жёсткий предел — защита от флуда / долгой смерти (иначе очередь растёт).
+constexpr size_t kInputBufferTarget = 2;
+constexpr size_t kInputQueueCap = 16;
+
 // Занимает ли тип клетку сетки (для проверки коллизии размещения).
 bool isBuildingType(EntityType t) {
     return t == EntityType::Generator || t == EntityType::Storage ||
@@ -36,6 +42,7 @@ const Entity* GameWorld::entityById(uint32_t id) const {
 
 void GameWorld::reset() {
     entities_.clear();
+    heroInputs_.clear();
     world_.reset();  // контроллеры уйдут вместе с миром
     nextEntityId_ = 1;
     for (float& r : resourcePerTeam_) r = 0.0f;
@@ -111,6 +118,7 @@ void GameWorld::removeEntity(uint32_t id) {
     if (e != nullptr && world_ && e->move.collider != 0) {
         world_->removeCharacter(e->move.collider);
     }
+    heroInputs_.erase(id);  // очередь ввода уходит вместе с героем
     for (size_t i = 0; i < entities_.size(); ++i)
         if (entities_[i].id == id) {
             entities_.erase(entities_.begin() + (long)i);
@@ -119,8 +127,15 @@ void GameWorld::removeEntity(uint32_t id) {
 }
 
 void GameWorld::setHeroInput(uint32_t heroId, const InputCommand& in) {
-    Entity* hero = entityById(heroId);
-    if (hero != nullptr) hero->input = in;
+    if (entityById(heroId) == nullptr) return;  // неизвестный герой — игнор
+    HeroInputBuf& b = heroInputs_[heroId];
+    b.queue.push_back(in);
+    // Переполнение (флуд / долгая смерть): старые считаем «обработанными» — двигаем ack
+    // вперёд и дропаем, иначе очередь растёт, а клиентский pending не сходится.
+    while (b.queue.size() > kInputQueueCap) {
+        b.lastSeq = b.queue.front().seq;
+        b.queue.pop_front();
+    }
 }
 
 bool GameWorld::tryBuild(uint32_t builderId, EntityType type, int cellX, int cellZ) {
@@ -163,12 +178,41 @@ bool GameWorld::tryBuild(uint32_t builderId, EntityType type, int cellX, int cel
 
 void GameWorld::step(float dt) {
     // Герои движутся всегда (в т.ч. после конца матча — по базе можно ходить): тот же код
-    // симуляции, что предсказывает клиент.
+    // симуляции, что предсказывает клиент. Ввод берём из FIFO-очереди — по одному за тик,
+    // чтобы пачка вводов за один poll не коалесилась (иначе терялся прыжок и был rubber-band).
     for (Entity& e : entities_) {
-        if (e.type == EntityType::Hero && e.hp > 0.0f) {  // повержённый герой не двигается
-            e.move.snapshot();
-            e.move.simulate(dt, e.input, world_.get());
-            e.input.jump = false;  // прыжок одноразовый
+        if (e.type != EntityType::Hero) continue;
+        HeroInputBuf& b = heroInputs_[e.id];
+        if (e.hp <= 0.0f) {
+            // Повержён: не двигаем. Очередь осушаем, ack двигаем на последний присланный seq
+            // (клиент во время смерти шлёт нули) — иначе за секунды смерти копится бэклог.
+            if (!b.queue.empty()) {
+                b.lastSeq = b.queue.back().seq;
+                b.queue.clear();
+            }
+            continue;
+        }
+        e.move.snapshot();
+        // Обычно 1 ввод/тик. При накопившемся бэклоге (хитч/джиттер клиента) догоняем на +1,
+        // применяя вводы как отдельные суб-шаги — тем же multi-call simulate, что и реплей на
+        // клиенте (безопасно: реконсилируемое состояние сбрасывается снапшотом перед реплеем).
+        size_t take = b.queue.empty() ? 0 : (b.queue.size() > kInputBufferTarget ? 2u : 1u);
+        if (take == 0) {
+            // Очередь пуста (пакет опоздал/потерян): удерживаем последний ввод без повторного
+            // прыжка — движение продолжается, как раньше делал «залипший» hero->input.
+            InputCommand hold = b.hasLast ? b.last : InputCommand{};
+            hold.jump = false;
+            e.move.simulate(dt, hold, world_.get());
+        } else {
+            for (size_t k = 0; k < take; ++k) {
+                InputCommand in = b.queue.front();
+                b.queue.pop_front();
+                b.last = in;
+                b.lastSeq = in.seq;
+                b.hasLast = true;
+                e.input = in;  // отражаем применённый ввод (диагностика)
+                e.move.simulate(dt, in, world_.get());  // прыжок потреблён вместе с этим вводом
+            }
         }
     }
 
@@ -377,8 +421,10 @@ void GameWorld::writeStates(std::vector<EntityState>& out) const {
 }
 
 uint32_t GameWorld::inputSeq(uint32_t heroId) const {
-    const Entity* h = entityById(heroId);
-    return h != nullptr ? h->input.seq : 0;
+    // ackSeq = последний ПОТРЕБЛЁННЫЙ ввод (не последний присланный) — иначе клиент выкинет
+    // из pending вводы, которые сервер ещё не симулировал, и своего аватара откинет назад.
+    auto it = heroInputs_.find(heroId);
+    return it != heroInputs_.end() ? it->second.lastSeq : 0;
 }
 
 int GameWorld::enemyCount() const {

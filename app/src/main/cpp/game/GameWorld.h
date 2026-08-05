@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include "engine/core/Input.h"
@@ -32,6 +34,17 @@ struct Entity {
     float range = 0.0f;   // tower: радиус поражения
     float timer = 0.0f;   // spawner: до след. спавна; tower: до след. выстрела; enemy: до след. удара
     int spawnedCount = 0; // spawner: сколько врагов уже породил (потолок = cap)
+};
+
+// Буфер ввода героя. Клиент шлёт по одному InputCommand за тик; сервер НЕ перезаписывает
+// «последний ввод» (иначе пачка вводов за один poll коалесится — терялся прыжок и возникал
+// rubber-band), а КОПИТ их в FIFO и потребляет по одному за тик (см. GameWorld::step).
+// `lastSeq` (seq последнего потреблённого) — это ackSeq клиенту для реконсиляции.
+struct HeroInputBuf {
+    std::deque<InputCommand> queue;  // непотреблённые вводы (в порядке прихода)
+    InputCommand last;               // последний потреблённый — «удерживаем» при пустой очереди
+    uint32_t lastSeq = 0;            // seq последнего потреблённого (ackSeq)
+    bool hasLast = false;
 };
 
 /**
@@ -76,6 +89,7 @@ public:
 
 private:
     std::vector<Entity> entities_;            // ВСЕ сущности мира (герои + здания + враги)
+    std::unordered_map<uint32_t, HeroInputBuf> heroInputs_;  // ввод по героям (heroId -> буфер)
     uint32_t nextEntityId_ = 1;
     std::unique_ptr<CollisionWorld> world_;   // та же геометрия, что у клиента (может быть пуст)
     Vec3 spawnPos_{0.0f, 0.0f, 0.0f};         // точка спавна героев (из сцены)
