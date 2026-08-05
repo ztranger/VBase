@@ -248,7 +248,10 @@ OBJ-загрузчика). Директивы:
 `rate`/`cap`/`interval`/`max`. Единый источник параметров И текстов: и сервер (для
 симуляции), и клиент (для инфо-панели по клику) читают его; `applyBuildingConfig`
 переносит параметры в здания сцены. Клик/тап по зданию (`Scene::onClick`, raycast) →
-панель в `GameUi` с содержимым по типу.
+панель в `GameUi` с содержимым по типу. Из того же блока клиент читает **визуал**:
+`shape cube <s>` / `shape sphere <r> [stacks slices]`, `material <lit/phong/unlit> <r g b>`,
+`yoffset`, `pickradius` → таблица `Scene::EntityVisual` (рендер/пикинг/призрак); сервер эти
+ключи парсит, но игнорит.
 - `light dir <x> <y> <z>` — направление на свет (правится слайдером в `GameUi`)
 - `camera [distance d] [pitch p] [lookHeight l] [fov f] [near n] [far f]` — ¾-камера
   (`pitch` — фиксированный наклон, рад; yaw/зум управляются игроком)

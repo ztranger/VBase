@@ -321,6 +321,30 @@ bool loadBuildingConfig(AssetSource& assets, const char* path, BuildingConfig& o
             else if (key == "damage") bi.damage = toF(val);
             else if (key == "range") bi.range = toF(val);
             else if (key == "cost") bi.cost = toF(val);
+            // --- Визуал (клиент) ---
+            else if (key == "shape") {
+                Tokens a = tokenize(val);
+                if (a.empty()) { LOGE("config: строка %d: shape без формы", line); return false; }
+                if (a[0] == "cube") {
+                    bi.shape = MeshShape::Cube;
+                    if (a.size() > 1) bi.shapeSize = toF(a[1]);
+                } else if (a[0] == "sphere") {
+                    bi.shape = MeshShape::Sphere;
+                    if (a.size() > 1) bi.shapeSize = toF(a[1]);
+                    if (a.size() > 2) bi.shapeStacks = toI(a[2]);
+                    if (a.size() > 3) bi.shapeSlices = toI(a[3]);
+                } else {
+                    LOGE("config: строка %d: неизвестная форма '%s'", line, a[0].c_str());
+                    return false;
+                }
+            } else if (key == "material") {
+                Tokens a = tokenize(val);
+                if (a.empty() || !parseShader(a[0], line, bi.shader)) return false;
+                if (a.size() > 1) bi.color.x = toF(a[1]);
+                if (a.size() > 2) bi.color.y = toF(a[2]);
+                if (a.size() > 3) bi.color.z = toF(a[3]);
+            } else if (key == "yoffset") bi.yOffset = toF(val);
+            else if (key == "pickradius") bi.pickRadius = toF(val);
             else { LOGE("config: строка %d: неизвестный ключ '%s'", line, key.c_str()); return false; }
         }
     }

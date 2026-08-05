@@ -130,49 +130,24 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
         }
     }
 
-    // --- Визуалы зданий базы (клиентский рендер по типу сущности) ---
-    // Здания приходят с сервера в снапшотах; клиент рисует их этими мешами по EntityType.
-    genMesh_ = renderer.createMesh(makeCube(1.0f));
-    storMesh_ = renderer.createMesh(makeCube(1.4f));
-    {
+    // --- Визуалы сущностей по типу: ОДНА таблица, заполняется ИЗ КОНФИГА (config/buildings.cfg:
+    // shape/material/yOffset/pickRadius). Рендер/пикинг/призрак читают её через visual(); yOffset
+    // не дублируется. Hero и типы без shape в таблицу не попадают (Hero — скиннинг-лиса).
+    for (int t = 0; t < kEntityVisualCount; ++t) {
+        const BuildingInfo& bi = config_.byType[t];
+        if (bi.shape == MeshShape::None) continue;  // визуал в конфиге не задан
+        EntityVisual& v = visuals_[t];
+        v.mesh = (bi.shape == MeshShape::Sphere)
+                     ? renderer.createMesh(makeSphere(bi.shapeSize, bi.shapeStacks, bi.shapeSlices))
+                     : renderer.createMesh(makeCube(bi.shapeSize));
         MaterialDesc md;
-        md.shader = ShaderType::Lit;
-        md.baseColor = {0.35f, 0.80f, 0.40f};  // генератор — зелёный
-        genMat_ = renderer.createMaterial(md);
-    }
-    {
-        MaterialDesc md;
-        md.shader = ShaderType::Lit;
-        md.baseColor = {0.35f, 0.55f, 0.95f};  // хранилище — синее
-        storMat_ = renderer.createMaterial(md);
-    }
-    spawnMesh_ = renderer.createMesh(makeCube(1.2f));
-    coreMesh_ = renderer.createMesh(makeSphere(1.0f, 16, 24));
-    enemyMesh_ = renderer.createMesh(makeSphere(0.35f, 12, 16));
-    {
-        MaterialDesc md;
-        md.shader = ShaderType::Lit;
-        md.baseColor = {0.55f, 0.35f, 0.75f};  // спавнер — фиолетовый
-        spawnMat_ = renderer.createMaterial(md);
-    }
-    {
-        MaterialDesc md;
-        md.shader = ShaderType::Phong;
-        md.baseColor = {0.95f, 0.85f, 0.35f};  // ядро — золотое (с бликом)
-        coreMat_ = renderer.createMaterial(md);
-    }
-    {
-        MaterialDesc md;
-        md.shader = ShaderType::Lit;
-        md.baseColor = {0.85f, 0.25f, 0.25f};  // враг — красный
-        enemyMat_ = renderer.createMaterial(md);
-    }
-    towerMesh_ = renderer.createMesh(makeCube(0.9f));
-    {
-        MaterialDesc md;
-        md.shader = ShaderType::Phong;
-        md.baseColor = {0.70f, 0.72f, 0.78f};  // башня — стальная (с бликом)
-        towerMat_ = renderer.createMaterial(md);
+        md.shader = bi.shader;
+        md.baseColor = bi.color;
+        v.material = renderer.createMaterial(md);
+        v.yOffset = bi.yOffset;
+        v.pickRadius = bi.pickRadius;
+        v.pickable = true;                                // всё с визуалом пикается (Hero — нет)
+        v.building = (EntityType)t != EntityType::Enemy;  // враг не занимает клетку сетки
     }
     // Материалы призрака размещения (Unlit): зелёный = можно, красный = нельзя.
     {
@@ -502,44 +477,21 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
         }
         r.ch.animTime += renderDt;  // фаза анимации крутится локально
 
-        // Рендер по типу сущности (задел под остальные типы — враги/башни/ядро).
-        switch ((EntityType)r.type) {
-            case EntityType::Hero: {
-                // Чужой герой: союзник (та же команда) — синеватый, противник (PvP) — красный.
-                // Свой герой рисуется отдельно (player_) обычным цветом — так их не спутать.
-                SkinnedItem it =
-                    makeFoxItem(r.ch.position, r.ch.facingYaw, r.ch.animParam, r.ch.animTime);
-                it.color = (r.team == localTeam_) ? Vec3{0.55f, 0.75f, 1.0f}   // союзник
-                                                  : Vec3{1.0f, 0.45f, 0.45f};  // враг
-                frame.skinned.push_back(it);
-                break;
-            }
-            case EntityType::Generator:
-                frame.items.push_back(
-                    {genMesh_, genMat_, Mat4::translation(r.ch.position + Vec3{0.0f, 0.5f, 0.0f})});
-                break;
-            case EntityType::Storage:
-                frame.items.push_back(
-                    {storMesh_, storMat_, Mat4::translation(r.ch.position + Vec3{0.0f, 0.7f, 0.0f})});
-                break;
-            case EntityType::Spawner:
-                frame.items.push_back(
-                    {spawnMesh_, spawnMat_, Mat4::translation(r.ch.position + Vec3{0.0f, 0.6f, 0.0f})});
-                break;
-            case EntityType::Core:
-                frame.items.push_back(
-                    {coreMesh_, coreMat_, Mat4::translation(r.ch.position + Vec3{0.0f, 1.0f, 0.0f})});
-                break;
-            case EntityType::Tower:
-                frame.items.push_back(
-                    {towerMesh_, towerMat_, Mat4::translation(r.ch.position + Vec3{0.0f, 0.9f, 0.0f})});
-                break;
-            case EntityType::Enemy:
-                frame.items.push_back(
-                    {enemyMesh_, enemyMat_, Mat4::translation(r.ch.position + Vec3{0.0f, 0.35f, 0.0f})});
-                break;
-            default:
-                break;
+        // Рендер по типу: Hero — скиннинг-лиса (спец), остальные — generic-меш из таблицы визуалов.
+        EntityType et = (EntityType)r.type;
+        if (et == EntityType::Hero) {
+            // Чужой герой: союзник (та же команда) — синеватый, противник (PvP) — красный.
+            // Свой герой рисуется отдельно (player_) обычным цветом — так их не спутать.
+            SkinnedItem it =
+                makeFoxItem(r.ch.position, r.ch.facingYaw, r.ch.animParam, r.ch.animTime);
+            it.color = (r.team == localTeam_) ? Vec3{0.55f, 0.75f, 1.0f}   // союзник
+                                              : Vec3{1.0f, 0.45f, 0.45f};  // враг
+            frame.skinned.push_back(it);
+        } else {
+            const EntityVisual& v = visual(et);
+            if (v.mesh != 0)
+                frame.items.push_back({v.mesh, v.material,
+                    Mat4::translation(r.ch.position + Vec3{0.0f, v.yOffset, 0.0f})});
         }
     }
 
@@ -548,12 +500,9 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
         int cx, cz;
         Vec3 center;
         bool valid = computeGhost(cx, cz, center);
-        MeshHandle gm = towerMesh_;
-        float yoff = 0.9f;
-        if (buildType_ == EntityType::Generator) { gm = genMesh_; yoff = 0.5f; }
-        else if (buildType_ == EntityType::Storage) { gm = storMesh_; yoff = 0.7f; }
-        frame.items.push_back({gm, valid ? ghostOkMat_ : ghostBadMat_,
-                               Mat4::translation(center + Vec3{0.0f, yoff, 0.0f})});
+        const EntityVisual& v = visual(buildType_);
+        frame.items.push_back({v.mesh, valid ? ghostOkMat_ : ghostBadMat_,
+                               Mat4::translation(center + Vec3{0.0f, v.yOffset, 0.0f})});
     }
 
     // HUD ставок героя (bitmap-шрифт — только ASCII; кириллический баннер — в ImGui-слое
@@ -606,21 +555,11 @@ float Scene::coreHp() const {
 
 float Scene::coreMaxHp() const { return config_.get(EntityType::Core).hp; }
 
-namespace {
-// Сфера для пикинга по типу: смещение центра вверх (как в рендере) + радиус.
-// Возвращает false для не выбираемых типов (герой и пр.).
-bool pickBounds(EntityType t, float& yoff, float& rad) {
-    switch (t) {
-        case EntityType::Generator: yoff = 0.5f;  rad = 1.0f; return true;
-        case EntityType::Storage:   yoff = 0.7f;  rad = 1.2f; return true;
-        case EntityType::Spawner:   yoff = 0.6f;  rad = 1.1f; return true;
-        case EntityType::Core:      yoff = 1.0f;  rad = 1.3f; return true;
-        case EntityType::Tower:     yoff = 0.9f;  rad = 1.0f; return true;
-        case EntityType::Enemy:     yoff = 0.35f; rad = 0.6f; return true;
-        default: return false;
-    }
+const Scene::EntityVisual& Scene::visual(EntityType t) const {
+    static const EntityVisual kNone;  // неизвестный/вне-диапазона тип -> пусто (не рисуется/не пикается)
+    int i = (int)t;
+    return (i >= 0 && i < kEntityVisualCount) ? visuals_[i] : kNone;
 }
-}  // namespace
 
 void Scene::onClick(float x, float y, float vw, float vh) {
     if (vw <= 0.0f || vh <= 0.0f) return;
@@ -646,12 +585,12 @@ void Scene::onClick(float x, float y, float vw, float vh) {
     uint32_t best = 0;
     float bestT = 1e30f;
     for (const RemoteEntity& r : remoteEntities_) {
-        float yoff, rad;
-        if (!pickBounds((EntityType)r.type, yoff, rad)) continue;
-        Vec3 c = r.ch.position + Vec3{0.0f, yoff, 0.0f};
+        const EntityVisual& v = visual((EntityType)r.type);
+        if (!v.pickable) continue;
+        Vec3 c = r.ch.position + Vec3{0.0f, v.yOffset, 0.0f};
         Vec3 oc = origin - c;
         float b = dot(oc, dir);
-        float cc = dot(oc, oc) - rad * rad;
+        float cc = dot(oc, oc) - v.pickRadius * v.pickRadius;
         float disc = b * b - cc;
         if (disc < 0.0f) continue;
         float sq = std::sqrt(disc);
@@ -694,11 +633,7 @@ bool Scene::computeGhost(int& cx, int& cz, Vec3& center) const {
 
     if (!grid_.inArena(cx, cz)) return false;             // вне зоны строительства
     for (const RemoteEntity& r : remoteEntities_) {       // клетка занята зданием?
-        EntityType t = (EntityType)r.type;
-        bool building = (t == EntityType::Generator || t == EntityType::Storage ||
-                         t == EntityType::Spawner || t == EntityType::Tower ||
-                         t == EntityType::Core);
-        if (!building) continue;
+        if (!visual((EntityType)r.type).building) continue;
         if (grid_.cellOf(r.ch.position.x) == cx && grid_.cellOf(r.ch.position.z) == cz)
             return false;
     }

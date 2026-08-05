@@ -170,9 +170,20 @@ private:
     float foxScale_ = 0.03f;
     float foxYawOffset_ = 0.0f;
 
-    // Визуалы сущностей базы/врагов (клиентский рендер по типу; создаются в build).
-    MeshHandle genMesh_ = 0, storMesh_ = 0, spawnMesh_ = 0, coreMesh_ = 0, enemyMesh_ = 0, towerMesh_ = 0;
-    MaterialHandle genMat_ = 0, storMat_ = 0, spawnMat_ = 0, coreMat_ = 0, enemyMat_ = 0, towerMat_ = 0;
+    // Клиентский визуал/пикинг по типу сущности — ОДНА таблица вместо разбросанных switch
+    // (рендер, пикинг, призрак стройки читают её; yOffset больше НЕ дублируется). Заполняется
+    // в build(); Hero остаётся default (mesh=0 — рисуется отдельно, скиннинг-лиса).
+    struct EntityVisual {
+        MeshHandle mesh = 0;         // 0 = не рисуется generic-путём
+        MaterialHandle material = 0;
+        float yOffset = 0.0f;        // подъём центра над позицией (рендер И пикинг)
+        float pickRadius = 0.0f;     // радиус сферы пикинга
+        bool pickable = false;       // выбирается кликом (Hero — нет)
+        bool building = false;       // занимает клетку сетки (для стройки)
+    };
+    static constexpr int kEntityVisualCount = (int)EntityType::Core + 1;  // Core — последний тип
+    EntityVisual visuals_[kEntityVisualCount];
+    const EntityVisual& visual(EntityType t) const;  // доступ по типу (вне диапазона -> пусто)
     Character player_;        // управляемый актор (симуляция)
     std::unique_ptr<CollisionWorld> collision_;  // кинематическая физика (Jolt)
     VirtualJoystick joystick_;         // левый стик — движение героя
