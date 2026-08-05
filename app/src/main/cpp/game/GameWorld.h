@@ -79,6 +79,7 @@ public:
     GamePhase phaseForTeam(uint8_t team) const;
     GamePhase gamePhase() const { return phaseForTeam(0); }  // совместимость: перспектива team 0
     uint8_t teamOf(uint32_t id) const;        // команда сущности по id (0, если нет)
+    bool decided() const { return decided_; } // матч завершён (для самотеста рестарта)
 
     // Максимум команд (0 = соло/кооп; для PvP 2v2 хватает; запас на free-for-all).
     static constexpr int kMaxTeams = 4;
@@ -95,6 +96,7 @@ public:
 private:
     std::vector<Entity> entities_;            // ВСЕ сущности мира (герои + здания + враги)
     std::unordered_map<uint32_t, HeroInputBuf> heroInputs_;  // ввод по героям (heroId -> буфер)
+    std::vector<BuildingSpec> buildingSpecs_; // здания базы из сцены (для матч-рестарта)
     uint32_t nextEntityId_ = 1;
     std::unique_ptr<CollisionWorld> world_;   // та же геометрия, что у клиента (может быть пуст)
     Vec3 spawnPos_{0.0f, 0.0f, 0.0f};         // спавн по умолчанию (player.pos; fallback без spawn-точек)
@@ -115,8 +117,12 @@ private:
     float coreMaxByTeam_[kMaxTeams] = {0.0f};  // суммарный maxHp ядер команды (0 = нет ядра)
     float coreHpByTeam_[kMaxTeams] = {0.0f};   // суммарный текущий hp ядер команды
     bool waveCleared_ = false;                 // PvE: все спавнеры отработали и врагов нет
+    float matchRestartDelay_ = 0.0f;           // задержка авто-рестарта из сцены (0 = выкл)
+    float restartTimer_ = 0.0f;                // обратный отсчёт до авто-рестарта (после исхода)
 
     Vec3 spawnFor(uint8_t team) const;         // spawn-точка команды или spawnPos_ (fallback)
+    void spawnBuildings();                     // заспавнить базы из buildingSpecs_ (configure + рестарт)
+    void restartMatch();                       // пересобрать матч (базы/герои/экономика), не трогая геометрию
     Entity* entityById(uint32_t id);
     const Entity* entityById(uint32_t id) const;
 };

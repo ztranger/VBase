@@ -230,6 +230,11 @@ bool loadSceneDesc(AssetSource& assets, const char* path, SceneDesc& out) {
             }
             out.spawns.push_back(sp);
 
+        } else if (cmd == "matchrestart") {
+            // matchrestart <сек> — авто-рестарт матча после исхода (0/нет директивы = выкл)
+            size_t i = 1;
+            if (!readF(t, i, line, out.matchRestartDelay)) return false;
+
         } else if (cmd == "light") {
             // light dir <x> <y> <z>
             size_t i = 1;

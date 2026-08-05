@@ -42,7 +42,10 @@
 - **Контракт рендера**: `RenderFrame` (`RenderFrame.h`) — камера, свет, список
   `RenderItem` (меш+материал+матрица), список `SkinnedItem` (скиннинг+кости),
   `HudText`, ui-callback (ImGui). Единственное, что игра отдаёт рендеру.
-- **Рендер** (`Renderer` интерфейс, `Renderer.h`): `init(window, glGetProc)` +
+- **Рендер** (`Renderer` интерфейс, `Renderer.h`): `init(void* nativeWindow, assets)` —
+  окно как НЕПРОЗРАЧНЫЙ хэндл (Android `ANativeWindow*` / десктоп `GLFWwindow*`, бэкенд
+  трактует сам; Android-тип в интерфейс не течёт). GL-загрузчик функций — не в интерфейсе,
+  а в конструкторе `GlRenderer` (десктоп-специфика; на Android GLES слинкованы). Плюс
   `setSurfaceSize` + `createMesh/createSkinnedMesh/createTexture/createMaterial/
   renderFrame/aspectRatio` + **`getImGuiTexture` / `releaseImGuiTexture`** (ImTextureID
   для пользовательских текстур ImGui). `createTexture(data, clampEdges=false)` —
@@ -240,6 +243,9 @@ OBJ-загрузчика). Директивы:
 - `spawn team <n> pos <x y z>` — точка спавна стороны (PvP). Сервер сажает подключившегося
   игрока в наименее населённую команду С такой точкой (`GameWorld::addPlayer`); респаун — туда же.
   Нет ни одной директивы → команда 0 спавнит в `player.pos` (соло/кооп-совместимость).
+- `matchrestart <сек>` — авто-рестарт матча через N сек после исхода (`GameWorld::restartMatch`:
+  пересоздать базы/героев/экономику, игроки остаются). Нет директивы / 0 → мир стоит до
+  перезапуска сервера (поведение по умолчанию; программные самотесты его не включают).
 - `grid cell <размер> arena <полуразмер>` — строительная сетка (клетка + зона стройки).
   Сервер и клиент берут её отсюда (одна геометрия — иначе клиент показал бы валидной клетку,
   которую сервер отвергнет). По умолчанию `cell 2 arena 11`.

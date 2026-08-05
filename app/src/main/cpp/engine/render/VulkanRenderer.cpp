@@ -109,11 +109,9 @@ Mat4 vulkanClipFix() {
 
 VulkanRenderer::~VulkanRenderer() { cleanup(); }
 
-bool VulkanRenderer::init(ANativeWindow* window, void* (*glGetProc)(const char*),
-                          AssetSource& assets) {
-    (void)glGetProc;
+bool VulkanRenderer::init(void* nativeWindow, AssetSource& assets) {
     assets_ = &assets;  // источник SPIR-V шейдеров
-    window_ = window;  // на десктопе это GLFWwindow*, переданный из main
+    window_ = nativeWindow;  // непрозрачный хэндл: десктоп — GLFWwindow*, Android — ANativeWindow*
 
     // Bootstrap загрузчика: получаем vkGetInstanceProcAddr. Десктоп — у GLFW,
     // Android — dlsym из libvulkan.so.

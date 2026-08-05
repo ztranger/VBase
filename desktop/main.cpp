@@ -65,7 +65,7 @@ int runClient(int backend, GameUiState& ui, const std::string& assetsDir,
     std::unique_ptr<Renderer> renderer;
     if (useVk) {
         auto r = std::make_unique<VulkanRenderer>();
-        if (!r->init((ANativeWindow*)window, nullptr, assets)) {
+        if (!r->init(window, assets)) {  // GLFWwindow* -> void* (без reinterpret_cast)
             std::fprintf(stderr, "VulkanRenderer.init failed — откат на OpenGL\n");
             glfwDestroyWindow(window);
             return 0;  // graceful fallback на GL
@@ -75,8 +75,9 @@ int runClient(int backend, GameUiState& ui, const std::string& assetsDir,
     } else {
         glfwMakeContextCurrent(window);
         glfwSwapInterval(1);
-        auto r = std::make_unique<GlRenderer>();
-        if (!r->init(nullptr, [](const char* n) { return (void*)glfwGetProcAddress(n); }, assets)) {
+        // GL-загрузчик — в конструктор (десктоп-специфика); окно GL не нужно (контекст уже текущий).
+        auto r = std::make_unique<GlRenderer>([](const char* n) { return (void*)glfwGetProcAddress(n); });
+        if (!r->init(nullptr, assets)) {
             std::fprintf(stderr, "GlRenderer.init failed\n");
             glfwDestroyWindow(window);
             return -1;

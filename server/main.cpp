@@ -557,6 +557,40 @@ int runPvpTest() {
     return ok ? 0 : 1;
 }
 
+// Тест матч-рестарта: после исхода мир заморожен, по таймеру (kMatchRestartDelay) авто-
+// пересобирается (базы/герои/экономика), исход сбрасывается в Playing — и матч отыгрывается
+// снова. Проверяем цикл decided → рестарт → decided. GameWorld напрямую.
+int runMatchRestartTest() {
+    GameWorld world;
+    SceneDesc desc;
+    ColliderSpec floor; floor.center = Vec3{0, -0.5f, 0}; floor.half = Vec3{50, 0.5f, 50}; desc.colliders.push_back(floor);
+    SpawnSpec sp1; sp1.team = 1; sp1.pos = Vec3{-12, 0, 0}; desc.spawns.push_back(sp1);
+    SpawnSpec sp2; sp2.team = 2; sp2.pos = Vec3{12, 0, 0};  desc.spawns.push_back(sp2);
+    BuildingSpec c1; c1.kind = BuildingSpec::Core; c1.pos = Vec3{-10, 0, 0}; c1.hp = 100000.0f; c1.team = 1; desc.buildings.push_back(c1);  // team1 неубиваемо
+    BuildingSpec c2; c2.kind = BuildingSpec::Core; c2.pos = Vec3{10, 0, 0};  c2.hp = 100.0f;    c2.team = 2; desc.buildings.push_back(c2);
+    BuildingSpec s1; s1.kind = BuildingSpec::Spawner; s1.pos = Vec3{6, 0, 0}; s1.rate = 0.3f; s1.cap = 100.0f; s1.team = 1; desc.buildings.push_back(s1);
+    desc.enemy.hp = 50.0f; desc.enemy.damage = 20.0f; desc.enemy.attackInterval = 0.3f;
+    desc.matchRestartDelay = 8.0f;  // включаем авто-рестарт (в PvE-тестах он выкл по умолчанию)
+    world.configure(desc);
+    world.addPlayer(); world.addPlayer();
+
+    bool sawDecision = false, phase2LostAtDecision = false, sawRestart = false, sawSecondDecision = false;
+    for (int i = 0; i < 1200; ++i) {  // ~40 c: матч1 → исход → рестарт (8 c) → матч2 → исход
+        world.step(kTickDt);
+        if (world.decided()) {
+            if (!sawDecision) { sawDecision = true; phase2LostAtDecision = (world.phaseForTeam(2) == GamePhase::Lost); }
+            else if (sawRestart) sawSecondDecision = true;  // снова decided ПОСЛЕ рестарта = отыгран матч2
+        } else if (sawDecision) {
+            sawRestart = true;  // после первого исхода decided вернулось в false = рестарт сработал
+        }
+    }
+    std::printf("[MatchRestart] исход1 (team2 Lost)=%s, рестарт (decided->false)=%s, исход2=%s\n",
+                phase2LostAtDecision ? "да" : "нет", sawRestart ? "да" : "нет", sawSecondDecision ? "да" : "нет");
+    bool ok = phase2LostAtDecision && sawRestart && sawSecondDecision;
+    std::printf("[MatchRestart] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
 // Кооп-тест (G4): два клиента на одной команде (team 0) делят базу. Оба видят друг друга
 // (по 2 героя в снапшоте), оба строят из ОБЩЕГО пула на разных клетках; после дисконнекта
 // одного база и второй герой остаются.
@@ -682,8 +716,9 @@ int main(int argc, char** argv) {
         int k = runHeroStakesTest();    // ставки героя: урон от врагов -> повержен -> респаун
         int m = runTeamCombatTest();    // team-aware бой: свои не бьют своих, чужих бьют (PvP)
         int n = runPvpTest();           // PvP: назначение стороны + спавн-точки + per-team исход
+        int o = runMatchRestartTest();  // матч-рестарт: decided -> авто-пересбор -> новый матч
         return (a == 0 && b == 0 && c == 0 && d == 0 && e == 0 && f == 0 && g == 0 && h == 0 &&
-                k == 0 && m == 0 && n == 0) ? 0 : 1;
+                k == 0 && m == 0 && n == 0 && o == 0) ? 0 : 1;
     }
 
     uint16_t port = kNetPort;

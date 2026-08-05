@@ -13,6 +13,7 @@ mesh ground plane 24 12
 light  dir 0.4 1 0.6
 camera distance 20 pitch 0.95
 grid   cell 2 arena 11
+matchrestart 8              # после исхода — баннер, затем авто-рестарт матча через 8 с
 
 # --- Пол ---
 object ground mat floor
@@ -29,16 +30,16 @@ core      pos  0 0 -9  team 1        # ядро — цель врагов team 2
 generator pos -3 0 -9  team 1
 storage   pos  3 0 -9  team 1
 spawner   pos  0 0 -7  team 1        # враги team 1 бегут на север к ядру team 2
-tower     pos -3 0 -5  team 1        # оборона от входящих врагов team 2
-tower     pos  3 0 -5  team 1
 
 # --- База team 2 (север, +Z) ---
 core      pos  0 0 9   team 2
 generator pos -3 0 9   team 2
 storage   pos  3 0 9   team 2
 spawner   pos  0 0 7   team 2        # враги team 2 бегут на юг к ядру team 1
-tower     pos -3 0 5   team 2
-tower     pos  3 0 5   team 2
+
+# NB: башен нет намеренно — с волнами из конфига (max 6) любая оборона стейлмейтит матч (ядра
+# не падают → нет исхода). Здесь враги доходят до ядер, матч завершается, срабатывает рестарт.
+# Настоящий баланс PvP (оборона + непрерывные волны / офенс героев) — отдельная настройка.
 
 # --- Спавн-точки сторон (сервер сажает игрока сюда по назначенной команде) ---
 spawn team 1 pos 0 0 -10

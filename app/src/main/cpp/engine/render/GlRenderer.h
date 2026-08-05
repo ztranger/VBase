@@ -7,6 +7,7 @@
 #include "engine/core/Renderer.h"
 
 struct AssetSource;
+struct ANativeWindow;  // Android-тип живёт в бэкенд-заголовке (в initEgl), не в нейтральном Renderer.h
 
 #ifdef __ANDROID__
 #include <EGL/egl.h>  // контекст/поверхность на Android
@@ -20,10 +21,13 @@ struct AssetSource;
  */
 class GlRenderer final : public Renderer {
 public:
+    using GlGetProcFn = void* (*)(const char*);
+    // glGetProc — загрузчик адресов GL-функций (десктоп: обёртка glfwGetProcAddress).
+    // На Android null: GLES слинкованы напрямую. GL-специфика бэкенда, не в интерфейсе.
+    explicit GlRenderer(GlGetProcFn glGetProc = nullptr);
     ~GlRenderer() override;
 
-    bool init(ANativeWindow* window, void* (*glGetProc)(const char*),
-              AssetSource& assets) override;
+    bool init(void* nativeWindow, AssetSource& assets) override;
     void setSurfaceSize(int width, int height) override;
     MeshHandle createMesh(const MeshData& data) override;
     SkinnedHandle createSkinnedMesh(const SkinnedModel& model) override;
@@ -71,6 +75,8 @@ private:
     void drawHud(const std::vector<HudText>& texts, int screenW, int screenH);
     void surfaceSize(int& w, int& h) const;  // размер поверхности (EGL/сохранённый)
     void shutdown();
+
+    GlGetProcFn glGetProc_ = nullptr;  // загрузчик GL-функций (десктоп; на Android не нужен)
 
 #ifdef __ANDROID__
     bool initEgl(ANativeWindow* window);

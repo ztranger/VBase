@@ -79,11 +79,11 @@ bool createRenderer(Engine* engine, android_app* app) {
     AndroidAssetSource assets(app->activity->assetManager);
     if (engine->backend == 1) {
         auto r = std::make_unique<VulkanRenderer>();
-        if (!r->init(app->window, nullptr, assets)) { LOGE("VulkanRenderer init failed"); return false; }
+        if (!r->init(app->window, assets)) { LOGE("VulkanRenderer init failed"); return false; }
         engine->renderer = std::move(r);
     } else {
-        auto r = std::make_unique<GlRenderer>();
-        if (!r->init(app->window, nullptr, assets)) { LOGE("GlRenderer init failed"); return false; }
+        auto r = std::make_unique<GlRenderer>();  // glGetProc не нужен: GLES слинкованы на Android
+        if (!r->init(app->window, assets)) { LOGE("GlRenderer init failed"); return false; }
         engine->renderer = std::move(r);
     }
     // Мир строится после init рендера: нужны живой GPU-контекст и AAssetManager.

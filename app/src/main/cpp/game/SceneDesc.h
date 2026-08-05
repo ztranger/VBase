@@ -140,4 +140,5 @@ struct SceneDesc {
     PlayerSpec player;
     CameraSpec camera;
     Vec3 lightDir{0.4f, 1.0f, 0.6f};  // направление НА источник света
+    float matchRestartDelay = 0.0f;   // авто-рестарт матча через N сек после исхода (0 = выкл)
 };

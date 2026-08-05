@@ -19,8 +19,7 @@ class VulkanRenderer final : public Renderer {
 public:
     ~VulkanRenderer() override;
 
-    bool init(ANativeWindow* window, void* (*glGetProc)(const char*),
-              AssetSource& assets) override;
+    bool init(void* nativeWindow, AssetSource& assets) override;
     void setSurfaceSize(int width, int height) override;
     MeshHandle createMesh(const MeshData& data) override;
     SkinnedHandle createSkinnedMesh(const SkinnedModel& model) override;

@@ -78,18 +78,18 @@ GlRenderer::~GlRenderer() {
     shutdown();
 }
 
-bool GlRenderer::init(ANativeWindow* window, void* (*glGetProc)(const char*),
-                      AssetSource& assets) {
+GlRenderer::GlRenderer(GlGetProcFn glGetProc) : glGetProc_(glGetProc) {}
+
+bool GlRenderer::init(void* nativeWindow, AssetSource& assets) {
     assets_ = &assets;  // источник шейдер-файлов на время инициализации ресурсов
 #ifdef __ANDROID__
-    (void)glGetProc;
-    if (!initEgl(window)) {  // EGL создаёт контекст из окна и делает его текущим
+    if (!initEgl((ANativeWindow*)nativeWindow)) {  // EGL создаёт контекст из окна и делает текущим
         shutdown();
         return false;
     }
 #else
-    (void)window;  // на десктопе контекст уже создан GLFW и сделан текущим
-    if (!glApiLoad(glGetProc)) {
+    (void)nativeWindow;  // на десктопе контекст уже создан GLFW и сделан текущим
+    if (!glApiLoad(glGetProc_)) {
         LOGE("Не удалось загрузить функции OpenGL");
         return false;
     }

@@ -70,6 +70,9 @@ void GameWorld::reset() {
     }
     decided_ = false;
     waveCleared_ = false;
+    buildingSpecs_.clear();
+    matchRestartDelay_ = 0.0f;
+    restartTimer_ = 0.0f;
 }
 
 void GameWorld::configure(const SceneDesc& desc) {
@@ -87,6 +90,7 @@ void GameWorld::configure(const SceneDesc& desc) {
     heroHp_ = desc.player.hp;
     heroRespawn_ = desc.player.respawnDelay > 0.0f ? desc.player.respawnDelay : 5.0f;
     grid_ = desc.grid;  // строительная сетка из сцены (та же, что у клиента)
+    matchRestartDelay_ = desc.matchRestartDelay;  // 0 = после исхода мир стоит до перезапуска сервера
 
     // Точки спавна сторон (PvP). Играбельны только команды с заданной точкой. Нет ни одной —
     // fallback: команда 0 спавнит в player.pos (соло/кооп ведут себя как раньше).
@@ -96,8 +100,16 @@ void GameWorld::configure(const SceneDesc& desc) {
     for (bool v : spawnValid_) anySpawn = anySpawn || v;
     if (!anySpawn) { spawnByTeam_[0] = spawnPos_; spawnValid_[0] = true; }
 
-    // Спавним статичные сущности базы из описания (генератор/хранилище/спавнер/башня/ядро).
-    for (const BuildingSpec& b : desc.buildings) {
+    // Здания базы: сохраняем спеки (для матч-рестарта — пересоздать базы) и спавним.
+    buildingSpecs_ = desc.buildings;
+    spawnBuildings();
+    LOGI("GameWorld: мир — %d коллайдеров, %d сущностей базы", (int)desc.colliders.size(),
+         (int)desc.buildings.size());
+}
+
+void GameWorld::spawnBuildings() {
+    // Инстанцирует сущности базы из buildingSpecs_ (генератор/хранилище/спавнер/башня/ядро).
+    for (const BuildingSpec& b : buildingSpecs_) {
         Entity e;
         e.id = nextEntityId_++;
         switch (b.kind) {
@@ -117,8 +129,36 @@ void GameWorld::configure(const SceneDesc& desc) {
         e.range = b.range;      // tower: радиус
         entities_.push_back(e);
     }
-    LOGI("GameWorld: мир — %d коллайдеров, %d сущностей базы", (int)desc.colliders.size(),
-         (int)desc.buildings.size());
+}
+
+void GameWorld::restartMatch() {
+    // Пересобрать матч, НЕ трогая геометрию/конфиг/подключения: убрать здания и врагов, заново
+    // заспавнить базы, воскресить героев в их точках, обнулить экономику и исход. Игроки остаются.
+    for (size_t i = 0; i < entities_.size();) {
+        Entity& e = entities_[i];
+        if (e.type == EntityType::Hero) { ++i; continue; }  // герои остаются (игроки подключены)
+        if (world_ && e.move.collider != 0) world_->removeCharacter(e.move.collider);  // враг
+        entities_.erase(entities_.begin() + (long)i);
+    }
+    spawnBuildings();  // свежие базы (новые id — клиент увидит их как новые сущности)
+
+    for (float& r : resourcePerTeam_) r = 0.0f;
+    for (Entity& e : entities_) {
+        if (e.type != EntityType::Hero) continue;
+        const Vec3 sp = spawnFor(e.team);
+        e.hp = e.maxHp = heroHp_;
+        e.aux = 0.0f;
+        e.move.position = sp;
+        e.move.velocityY = 0.0f;
+        e.move.snapshot();
+        if (world_ && e.move.collider != 0) world_->setCharacterPosition(e.move.collider, sp);
+    }
+
+    decided_ = false;
+    waveCleared_ = false;
+    restartTimer_ = 0.0f;
+    for (int t = 0; t < kMaxTeams; ++t) { coreMaxByTeam_[t] = 0.0f; coreHpByTeam_[t] = 0.0f; }
+    LOGI("GameWorld: матч перезапущен");
 }
 
 Vec3 GameWorld::spawnFor(uint8_t team) const {
@@ -258,7 +298,13 @@ void GameWorld::step(float dt) {
         }
     }
 
-    if (decided_) return;  // матч завершён — экономика/бой стоят (герои двигаются выше)
+    if (decided_) {  // матч завершён — экономика/бой стоят (герои двигаются выше)
+        if (matchRestartDelay_ > 0.0f) {  // авто-рестарт включён сценой
+            restartTimer_ -= dt;
+            if (restartTimer_ <= 0.0f) restartMatch();
+        }
+        return;
+    }
 
     // Экономика ПО КОМАНДАМ: у каждой стороны свой пул, питаемый её генераторами и
     // ограниченный суммой ёмкостей её хранилищ (лишнее теряется — потолок накоплений).
@@ -313,22 +359,32 @@ void GameWorld::step(float dt) {
         for (Entity& n : spawned) entities_.push_back(std::move(n));
     }
 
+    // Типизированные списки одним O(N)-проходом — чтобы боевые системы НЕ сканировали весь
+    // вектор на каждой сущности (было O(N²): каждый враг искал ядра/героев по всем entities_,
+    // каждая башня — врагов). entities_ стабилен от спавна выше до уборки трупов ниже —
+    // указатели живут. Ядер/героев/башен немного, врагов может быть много: теперь бой ~O(N).
+    std::vector<Entity*> cores, heroes, enemies;
+    for (Entity& e : entities_) {
+        if (e.type == EntityType::Core) cores.push_back(&e);
+        else if (e.type == EntityType::Hero) heroes.push_back(&e);
+        else if (e.type == EntityType::Enemy) enemies.push_back(&e);
+    }
+
     // Враги бегут к ближайшему ВРАЖДЕБНОМУ ядру (в PvP у каждой стороны своё — враг бежит на
     // чужое; в PvE всё team 0 и hostile(0,0)=true, поведение как раньше), а по кулдауну бьют
     // БЛИЖАЙШУЮ цель в радиусе: враждебное ядро (kCoreStopDist) ИЛИ живого враждебного героя
     // (kHeroHitRange). Цель зависит от команды врага — считаем пер-врага.
-    for (Entity& e : entities_) {
-        if (e.type != EntityType::Enemy) continue;
-        // Ближайшее враждебное ядро — цель движения (указатель валиден: entities_ не меняется
-        // до уборки трупов ниже).
+    for (Entity* ep : enemies) {
+        Entity& e = *ep;
+        // Ближайшее враждебное ядро — цель движения.
         Entity* core = nullptr;
         float coreDist = 1e30f;
-        for (Entity& c : entities_) {
-            if (c.type != EntityType::Core || !hostile(e.team, c.team)) continue;
-            Vec3 to = c.move.position - e.move.position;
+        for (Entity* cp : cores) {
+            if (!hostile(e.team, cp->team)) continue;
+            Vec3 to = cp->move.position - e.move.position;
             to.y = 0.0f;
             float d = std::sqrt(to.x * to.x + to.z * to.z);
-            if (d < coreDist) { coreDist = d; core = &c; }
+            if (d < coreDist) { coreDist = d; core = cp; }
         }
         Vec3 vel{0.0f, 0.0f, 0.0f};
         if (core != nullptr && coreDist > kCoreStopDist) {
@@ -343,12 +399,12 @@ void GameWorld::step(float dt) {
         Entity* atk = nullptr;
         float atkDist = 1e30f;
         if (core != nullptr && coreDist <= kCoreStopDist) { atk = core; atkDist = coreDist; }
-        for (Entity& h : entities_) {
-            if (h.type != EntityType::Hero || h.hp <= 0.0f || !hostile(e.team, h.team)) continue;
-            Vec3 d = h.move.position - e.move.position;
+        for (Entity* hero : heroes) {
+            if (hero->hp <= 0.0f || !hostile(e.team, hero->team)) continue;
+            Vec3 d = hero->move.position - e.move.position;
             d.y = 0.0f;
             float hd = std::sqrt(d.x * d.x + d.z * d.z);
-            if (hd <= kHeroHitRange && hd < atkDist) { atk = &h; atkDist = hd; }
+            if (hd <= kHeroHitRange && hd < atkDist) { atk = hero; atkDist = hd; }
         }
         if (atk != nullptr) {
             e.timer += dt;
@@ -374,11 +430,11 @@ void GameWorld::step(float dt) {
         if (tw.rate <= 0.0f || tw.timer < tw.rate) continue;
         Entity* target = nullptr;
         float bestD2 = tw.range * tw.range;
-        for (Entity& en : entities_) {
-            if (en.type != EntityType::Enemy || en.hp <= 0.0f || !hostile(tw.team, en.team)) continue;
-            Vec3 d = en.move.position - tw.move.position;
+        for (Entity* enp : enemies) {  // список из прохода выше (без скана всего вектора на башню)
+            if (enp->hp <= 0.0f || !hostile(tw.team, enp->team)) continue;
+            Vec3 d = enp->move.position - tw.move.position;
             float d2 = d.x * d.x + d.y * d.y + d.z * d.z;
-            if (d2 <= bestD2) { bestD2 = d2; target = &en; }
+            if (d2 <= bestD2) { bestD2 = d2; target = enp; }
         }
         if (target != nullptr) {
             tw.timer -= tw.rate;
@@ -426,7 +482,7 @@ void GameWorld::step(float dt) {
     // когда какая-то core-команда уничтожена (PvP/PvE-поражение) ИЛИ одна сторона отбила все волны.
     for (int t = 0; t < kMaxTeams; ++t) { coreMaxByTeam_[t] = 0.0f; coreHpByTeam_[t] = 0.0f; }
     bool haveSpawner = false, allSpawned = true;
-    int enemies = 0;
+    int enemyCount = 0;
     for (const Entity& e : entities_) {
         if (e.type == EntityType::Core && e.team < kMaxTeams && e.maxHp > 0.0f) {
             coreMaxByTeam_[e.team] += e.maxHp;
@@ -435,10 +491,10 @@ void GameWorld::step(float dt) {
             haveSpawner = true;
             if (e.spawnedCount < (int)e.cap) allSpawned = false;
         } else if (e.type == EntityType::Enemy) {
-            ++enemies;
+            ++enemyCount;
         }
     }
-    waveCleared_ = haveSpawner && allSpawned && enemies == 0;
+    waveCleared_ = haveSpawner && allSpawned && enemyCount == 0;
 
     int coreTeams = 0, aliveCoreTeams = 0;
     for (int t = 0; t < kMaxTeams; ++t)
@@ -447,8 +503,10 @@ void GameWorld::step(float dt) {
     const bool pveWin = coreTeams <= 1 && waveCleared_;      // одна сторона отбила все волны
     if ((anyEliminated || pveWin) && !decided_) {
         decided_ = true;
-        LOGI("GameWorld: матч завершён (ядро-команд %d, живых %d, волны %s)", coreTeams,
-             aliveCoreTeams, waveCleared_ ? "отбиты" : "нет");
+        restartTimer_ = matchRestartDelay_;  // >0 → авто-рестарт по таймеру; 0 → мир стоит
+        LOGI("GameWorld: матч завершён (ядро-команд %d, живых %d, волны %s)%s", coreTeams,
+             aliveCoreTeams, waveCleared_ ? "отбиты" : "нет",
+             matchRestartDelay_ > 0.0f ? " — будет авто-рестарт" : "");
     }
 }
 
