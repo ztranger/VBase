@@ -2,19 +2,19 @@
 REM Build the desktop client via MSVC (VS Build Tools/Community) with the Ninja generator.
 REM Ninja compiles in parallel across all cores (NMake is single-threaded), so a full Jolt
 REM build is ~3x faster and incremental builds are precise: editing CMakeLists no longer
-REM forces a full Jolt rebuild. The VS install is auto-detected via vswhere, so this survives
-REM moving to a new PC or a different VS edition/path (was hard-coded to BuildTools before).
+REM forces a full Jolt rebuild. The VS install root is resolved dynamically (NOT a
+REM hard-coded path): first from the VBASE_VS_DIR env var if you set one, otherwise
+REM auto-detected via vswhere. Set VBASE_VS_DIR to the VS install root (the folder that
+REM holds VC\Auxiliary\Build\vcvars64.bat) to pin a specific edition/location.
 REM (ASCII comments only: cmd reads .bat in the OEM codepage, so Cyrillic here would be
 REM mojibake and break parsing.)
-set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
-if not exist "%VSWHERE%" (
-    echo ERROR: vswhere.exe not found - is Visual Studio / Build Tools installed?
-    exit /b 1
-)
 set "VSDIR="
-for /f "usebackq delims=" %%i in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSDIR=%%i"
+if defined VBASE_VS_DIR if exist "%VBASE_VS_DIR%\VC\Auxiliary\Build\vcvars64.bat" set "VSDIR=%VBASE_VS_DIR%"
+set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+if not defined VSDIR if exist "%VSWHERE%" for /f "usebackq delims=" %%i in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSDIR=%%i"
 if not defined VSDIR (
-    echo ERROR: no Visual Studio install with C++ tools found - install the "Desktop development with C++" workload.
+    echo ERROR: Visual Studio with C++ tools not found.
+    echo Set VBASE_VS_DIR to your VS install root, or install the "Desktop development with C++" workload.
     exit /b 1
 )
 
