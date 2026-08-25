@@ -129,6 +129,10 @@ public:
     void leaveGame();
     bool netConnected() const { return client_.connected(); }
     bool netHost() const { return host_; }
+    // Диагностика соединения (для HUD/панели): пинг + производные от статуса флаги.
+    int netPingMs() const { return client_.pingMs(); }        // RTT до сервера, мс (-1 нет)
+    bool netConnecting() const { return client_.status() == NetStatus::Connecting; }
+    bool netConnectionLost() const { return client_.status() == NetStatus::Lost; }
     int remoteCount() const;  // число ДРУГИХ героев (без зданий/врагов)
 
     // Для ImGui/HUD.
@@ -218,6 +222,11 @@ private:
     // Призрак: клетка перед героем + мировой центр + валидность. Возвращает валидность.
     bool computeGhost(int& cx, int& cz, Vec3& center) const;
     bool host_ = false;
+    // Авто-реконнект для join-сессии (host к 127.0.0.1 не переподключаем). serverIp_
+    // запоминается в joinGame; при статусе Lost повторяем connect раз в kReconnectPeriod.
+    char serverIp_[64] = {0};
+    bool wantReconnect_ = false;
+    float reconnectTimer_ = 0.0f;
     uint32_t inputSeq_ = 0;
     std::vector<RemoteEntity> remoteEntities_;  // все чужие сущности (герои/здания/…)
     std::vector<PendingInput> pending_;  // неподтверждённые вводы (для реплея)

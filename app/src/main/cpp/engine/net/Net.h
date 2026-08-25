@@ -44,6 +44,14 @@ enum class GamePhase : uint8_t {
     Lost = 2,     // ядро разрушено
 };
 
+// Состояние транспортного соединения клиента (для HUD/переподключения). ENet сам шлёт
+// keep-alive пинги и детектит таймаут; здесь мы лишь отражаем его для UI.
+//  Offline    — нет активного peer (не подключались или сознательно отключились);
+//  Connecting — connect() вызван, ждём CONNECT (или упрёмся в таймаут -> Lost);
+//  Connected  — рукопожатие прошло, идут снапшоты;
+//  Lost       — соединение оборвалось (таймаут/сервер закрылся), НЕ по нашей воле.
+enum class NetStatus : uint8_t { Offline = 0, Connecting, Connected, Lost };
+
 // Состояние одной сущности в снапшоте (то, что сервер шлёт клиентам). Обобщено под
 // систему сущностей: тип + команда + generic-слоты (hp / aux — ресурс/прогресс/…).
 struct EntityState {
@@ -79,7 +87,9 @@ public:
 
     bool connect(const char* host, uint16_t port);
     void disconnect();
-    bool connected() const;
+    bool connected() const;             // == (status() == NetStatus::Connected)
+    NetStatus status() const;           // полное состояние транспорта (для HUD/реконнекта)
+    int pingMs() const;                 // RTT до сервera, мс (-1 если не подключены)
     uint32_t myId() const;              // 0, пока не пришёл Welcome
 
     void sendInput(const InputCommand& cmd);

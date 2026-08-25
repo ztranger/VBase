@@ -97,7 +97,7 @@ struct NetClient::Impl {
     ENetHost* host = nullptr;
     ENetPeer* peer = nullptr;
     uint32_t myId = 0;
-    bool connected = false;
+    NetStatus status = NetStatus::Offline;
     bool newSnapshot = false;
     uint32_t ackSeq = 0;
     uint8_t gamePhase = 0;  // GamePhase из последнего снапшота
@@ -130,6 +130,11 @@ bool NetClient::connect(const char* host, uint16_t port) {
         LOGE("enet_host_connect failed");
         return false;
     }
+    // Ускоряем детект разрыва: по умолчанию ENet держит peer до 5-30 с без ответа.
+    // (limit=0 -> дефолт 32; минимум 4 с, максимум 8 с) — обрыв ловится за ~4-8 с,
+    // при этом кратковременный лаг-спайк не рвёт соединение. Пинги ENet шлёт сам.
+    enet_peer_timeout(impl_->peer, 0, 4000, 8000);
+    impl_->status = NetStatus::Connecting;
     LOGI("NetClient: подключение к %s:%u", host, port);
     return true;
 }
@@ -143,7 +148,7 @@ void NetClient::disconnect() {
         enet_host_destroy(impl_->host);
         impl_->host = nullptr;
     }
-    impl_->connected = false;
+    impl_->status = NetStatus::Offline;
     impl_->myId = 0;
     impl_->gamePhase = 0;
     impl_->states.clear();
@@ -151,7 +156,13 @@ void NetClient::disconnect() {
     for (SnapshotRecord& r : impl_->recvHistory) { r.tick = 0; r.states.clear(); }
 }
 
-bool NetClient::connected() const { return impl_->connected; }
+bool NetClient::connected() const { return impl_->status == NetStatus::Connected; }
+NetStatus NetClient::status() const { return impl_->status; }
+int NetClient::pingMs() const {
+    // roundTripTime осмыслен только на живом соединении (до CONNECT там дефолт 500 мс).
+    if (impl_->status != NetStatus::Connected || impl_->peer == nullptr) return -1;
+    return (int)impl_->peer->roundTripTime;
+}
 uint32_t NetClient::myId() const { return impl_->myId; }
 uint32_t NetClient::ackSeq() const { return impl_->ackSeq; }
 uint8_t NetClient::gamePhase() const { return impl_->gamePhase; }
@@ -164,7 +175,7 @@ bool NetClient::consumeSnapshot() {
 }
 
 void NetClient::sendInput(const InputCommand& cmd) {
-    if (impl_->peer == nullptr || !impl_->connected) return;
+    if (impl_->peer == nullptr || impl_->status != NetStatus::Connected) return;
     InputMsg msg{};
     msg.type = MSG_INPUT;
     msg.seq = cmd.seq;
@@ -182,7 +193,7 @@ void NetClient::sendInput(const InputCommand& cmd) {
 }
 
 void NetClient::sendBuild(uint8_t buildType, int cellX, int cellZ) {
-    if (impl_->peer == nullptr || !impl_->connected) return;
+    if (impl_->peer == nullptr || impl_->status != NetStatus::Connected) return;
     BuildMsg msg{MSG_BUILD, buildType, (int32_t)cellX, (int32_t)cellZ};
     // Надёжно: постройка — одноразовое событие, терять нельзя.
     ENetPacket* pkt = enet_packet_create(&msg, sizeof(msg), ENET_PACKET_FLAG_RELIABLE);
@@ -195,7 +206,7 @@ void NetClient::poll() {
     while (enet_host_service(impl_->host, &ev, 0) > 0) {
         switch (ev.type) {
             case ENET_EVENT_TYPE_CONNECT:
-                impl_->connected = true;
+                impl_->status = NetStatus::Connected;
                 LOGI("NetClient: подключён");
                 break;
             case ENET_EVENT_TYPE_RECEIVE: {
@@ -271,8 +282,13 @@ void NetClient::poll() {
                 break;
             }
             case ENET_EVENT_TYPE_DISCONNECT:
-                impl_->connected = false;
-                LOGI("NetClient: отключён");
+                // Событие приходит только при НЕПРОШЕННОМ обрыве (наш disconnect() рвёт
+                // peer через _now и обнуляет его ДО poll, так что сюда не попадает): это
+                // таймаут либо закрытие сервера. Помечаем Lost — верхний слой покажет на
+                // экране и запустит переподключение. Peer уже сброшен ENet — обнуляем.
+                impl_->status = NetStatus::Lost;
+                impl_->peer = nullptr;
+                LOGI("NetClient: соединение потеряно");
                 break;
             default:
                 break;

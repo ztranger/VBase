@@ -40,8 +40,8 @@ void draw(UiShell::Ctx& ctx) {
 
     ImGui::SeparatorText("Сеть");
     if (ctx.scene.netConnected()) {
-        ImGui::Text("%s | remotes: %d", ctx.scene.netHost() ? "HOST" : "CLIENT",
-                    ctx.scene.remoteCount());
+        ImGui::Text("%s | remotes: %d | ping: %d ms", ctx.scene.netHost() ? "HOST" : "CLIENT",
+                    ctx.scene.remoteCount(), ctx.scene.netPingMs());
         if (ctx.btn("В бой (сессия)")) UiShell::setMode(UiMode::Battle);
         ImGui::SameLine();
         if (ctx.btn("Отключиться")) {
@@ -50,6 +50,14 @@ void draw(UiShell::Ctx& ctx) {
                 if (r == DialogResult::Yes) scene->leaveGame();
             });
         }
+    } else if (ctx.scene.netConnecting() || ctx.scene.netConnectionLost()) {
+        // Идёт (пере)подключение: не показываем клавиатуру ввода IP, чтобы обрыв с
+        // авто-реконнектом не выглядел как «отвалились в меню». Даём только отмену.
+        if (ctx.scene.netConnectionLost())
+            ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.0f), "Соединение потеряно — переподключение...");
+        else
+            ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.2f, 1.0f), "Подключение...");
+        if (ctx.btn("Отмена")) ctx.scene.leaveGame();
     } else {
         ImGui::InputText("IP", ctx.state.joinIp, sizeof(ctx.state.joinIp),
                          ImGuiInputTextFlags_CharsDecimal);

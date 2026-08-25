@@ -168,11 +168,20 @@ int runClient(int backend, GameUiState& ui, const std::string& assetsDir,
         RenderFrame frame = scene.render(alpha, aspect, dt);
         frame.deltaTime = dt;
 
-        // FPS в HUD.
+        // FPS + латенси/статус сети в одну строку HUD (пинг «вместе с FPS»).
         if (dt > 0.0f) ui.fps = ui.fps * 0.92f + (1.0f / dt) * 0.08f;
-        char hud[32];
-        std::snprintf(hud, sizeof(hud), "FPS: %.0f", (double)ui.fps);
-        frame.hud.push_back({hud, 24.0f, 24.0f, 40.0f, {1.0f, 0.85f, 0.2f}});
+        char hud[64];
+        int off = std::snprintf(hud, sizeof(hud), "FPS: %.0f", (double)ui.fps);
+        if (off < 0 || off >= (int)sizeof(hud)) off = 0;
+        if (scene.netConnected())
+            std::snprintf(hud + off, sizeof(hud) - off, "   PING: %d ms", scene.netPingMs());
+        else if (scene.netConnecting())
+            std::snprintf(hud + off, sizeof(hud) - off, "   NET: connecting");
+        else if (scene.netConnectionLost())
+            std::snprintf(hud + off, sizeof(hud) - off, "   NET: reconnect...");
+        Vec3 hudCol = scene.netConnectionLost() ? Vec3{0.95f, 0.35f, 0.30f}   // обрыв — красным
+                                                : Vec3{1.0f, 0.85f, 0.2f};
+        frame.hud.push_back({hud, 24.0f, 24.0f, 40.0f, hudCol});
 
         // Панель — общий модуль GameUi (тот же, что на Android). Тут же кнопки
         // переключения бэкенда пишут ui.requestBackend.

@@ -263,14 +263,28 @@ extern "C" void android_main(android_app* app) {
 
             // Свет задаёт сцена (из файла), правится слайдером в GameUi.
 
-            // FPS — забота приложения (тайминг здесь), а не игровой логики.
+            // FPS — забота приложения (тайминг здесь), а не игровой логики. Рядом —
+            // латенси/статус сети (пинг «вместе с FPS»), красным при обрыве.
             if (dt > 0.0f) {
                 engine.ui.fps = engine.ui.fps * 0.92f + (1.0f / dt) * 0.08f;
             }
-            char hud[32];
-            std::snprintf(hud, sizeof(hud), "FPS: %.0f", (double)engine.ui.fps);
+            char hud[64];
+            int off = std::snprintf(hud, sizeof(hud), "FPS: %.0f", (double)engine.ui.fps);
+            if (off < 0 || off >= (int)sizeof(hud)) off = 0;
+            Vec3 hudCol{1.0f, 0.85f, 0.2f};
+            if (engine.scene != nullptr) {
+                Scene* sc = engine.scene.get();
+                if (sc->netConnected())
+                    std::snprintf(hud + off, sizeof(hud) - off, "   PING: %d ms", sc->netPingMs());
+                else if (sc->netConnecting())
+                    std::snprintf(hud + off, sizeof(hud) - off, "   NET: connecting");
+                else if (sc->netConnectionLost()) {
+                    std::snprintf(hud + off, sizeof(hud) - off, "   NET: reconnect...");
+                    hudCol = Vec3{0.95f, 0.35f, 0.30f};
+                }
+            }
             const float s = engine.uiScale;  // HUD тоже масштабируем по DPI
-            frame.hud.push_back({hud, 24.0f * s, 24.0f * s, 40.0f * s, {1.0f, 0.85f, 0.2f}});
+            frame.hud.push_back({hud, 24.0f * s, 24.0f * s, 40.0f * s, hudCol});
 
             // UI строит общий модуль GameUi (тот же на десктопе). Рендер вызовет
             // это между ImGui NewFrame и Render.

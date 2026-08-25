@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <unordered_map>
 
@@ -286,6 +287,24 @@ void Scene::fixedUpdate(float dt) {
         applySnapshot();
     }
 
+    // Реакция на обрыв. Чужие сущности застыли бы на последнем снапшоте — чистим их
+    // (и неподтверждённые вводы), чтобы на экране не висели «призраки». Для join-сессии
+    // раз в kReconnectPeriod пробуем переподключиться; host к 127.0.0.1 не трогаем.
+    if (client_.status() == NetStatus::Lost) {
+        if (!remoteEntities_.empty()) remoteEntities_.clear();
+        if (!pending_.empty()) pending_.clear();
+        if (wantReconnect_) {
+            constexpr float kReconnectPeriod = 2.0f;  // сек между попытками
+            reconnectTimer_ -= dt;
+            if (reconnectTimer_ <= 0.0f) {
+                reconnectTimer_ = kReconnectPeriod;
+                LOGI("Scene: переподключение к %s", serverIp_);
+                client_.connect(serverIp_, kNetPort);  // connect() сам сбросит клиент
+                inputSeq_ = 0;
+            }
+        }
+    }
+
     simClock_ += dt;
 }
 
@@ -376,8 +395,12 @@ void Scene::hostGame() {
 
 void Scene::joinGame(const char* ip) {
     leaveGame();
-    client_.connect(ip, kNetPort);
+    std::strncpy(serverIp_, ip, sizeof(serverIp_) - 1);
+    serverIp_[sizeof(serverIp_) - 1] = '\0';
+    client_.connect(serverIp_, kNetPort);
     host_ = false;
+    wantReconnect_ = true;  // при обрыве пытаемся вернуться на тот же сервер
+    reconnectTimer_ = 0.0f;
     inputSeq_ = 0;
 }
 
@@ -385,6 +408,8 @@ void Scene::leaveGame() {
     client_.disconnect();
     server_.stop();
     host_ = false;
+    wantReconnect_ = false;  // сознательный выход — не переподключаемся
+    reconnectTimer_ = 0.0f;
     remoteEntities_.clear();
     pending_.clear();
     localTeam_ = 0;

@@ -24,6 +24,12 @@ void draw(UiShell::Ctx& ctx) {
     }
 
     ImGui::Text("FPS: %.1f", (double)ctx.state.fps);
+    if (ctx.scene.netConnected())
+        ImGui::Text("Ping: %d ms", ctx.scene.netPingMs());
+    else if (ctx.scene.netConnecting())
+        ImGui::TextDisabled("Ping: -- (подключение)");
+    else if (ctx.scene.netConnectionLost())
+        ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.0f), "Ping: -- (обрыв)");
 
     ImGui::SeparatorText("Light");
     Vec3 ld = ctx.scene.lightDir();
