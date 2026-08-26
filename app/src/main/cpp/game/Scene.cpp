@@ -174,7 +174,7 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
 
     // --- Управляемый персонаж: ростер выбираемых моделей (выбор персонажа) ---
     if (desc.player.present) {
-        // Данные ростера. Если конфиг не прочитан — один вход из player-директивы сцены
+        // Данные ростера героев. Если конфиг не прочитан — один вход из player-директивы сцены
         // (обратная совместимость: играбельно и без characters.cfg).
         std::vector<CharacterDesc> roster;
         if (!loadCharacterRoster(assets, "config/characters.cfg", roster)) {
@@ -186,36 +186,7 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
             c.hide = desc.player.hideNodes;
             roster.push_back(std::move(c));
         }
-
-        // Грузим ВСЕ модели один раз. Слот заводим ВСЕГДА (даже при ошибке загрузки — mesh=0),
-        // чтобы индекс в chars_ строго совпадал с сетевым charType на всех клиентах.
-        for (const CharacterDesc& c : roster) {
-            PlayerModel pm;
-            pm.id = c.id;
-            pm.name = c.name;
-            pm.scale = c.scale;
-            pm.yawOffset = c.yawOffset;
-            const std::vector<std::string>* hide = c.hide.empty() ? nullptr : &c.hide;
-            if (loadGltfModel(assets, c.model.c_str(), pm.model, hide)) {
-                pm.mesh = renderer.createSkinnedMesh(pm.model);
-                if (pm.model.hasTexture) pm.tex = renderer.createTexture(pm.model.baseColor);
-                int an = (int)pm.model.animations.size();
-                pm.idleClip = pm.model.findAnimation({"idle", "survey"}, 0);
-                pm.walkClip = pm.model.findAnimation({"walk"}, an > 1 ? 1 : pm.idleClip);
-                pm.runClip  = pm.model.findAnimation({"run", "sprint"}, an > 2 ? 2 : pm.walkClip);
-                // Клип атаки: сперва имя из ростера, затем keyword-поиск (маг: Spellcast_Shoot).
-                pm.attackClip = pm.model.findAnimation(
-                    {c.attackClip, "spellcast_shoot", "spellcasting", "spellcast", "attack"}, -1);
-                pm.attackClipDur = (pm.attackClip >= 0 && pm.attackClip < an)
-                                       ? pm.model.animations[pm.attackClip].duration : 0.0f;
-                LOGI("Персонаж '%s': idle=%d walk=%d run=%d attack=%d (%d анимаций)",
-                     c.id.c_str(), pm.idleClip, pm.walkClip, pm.runClip, pm.attackClip, an);
-            } else {
-                LOGW("Персонаж '%s' (%s) не загрузился — слот останется пустым",
-                     c.id.c_str(), c.model.c_str());
-            }
-            chars_.push_back(std::move(pm));  // всегда — индексы держим синхронно с charType
-        }
+        loadRosterModels(renderer, assets, roster, chars_);
 
         // Персонаж по умолчанию — совпавший с player.model из сцены, иначе первый.
         int def = 0;
@@ -223,6 +194,13 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
             if (roster[i].model == desc.player.model) { def = (int)i; break; }
         }
         selectCharacter(def);
+
+        // Ростер мобов (враги спавнеров). Нет файла -> mobs_ пуст -> враги рисуются
+        // generic-мешем из visuals_ (обратная совместимость).
+        std::vector<CharacterDesc> mobRoster;
+        if (loadCharacterRoster(assets, "config/enemies.cfg", mobRoster)) {
+            loadRosterModels(renderer, assets, mobRoster, mobs_);
+        }
 
         // Позиция и кинематический контроллер — независимо от загрузки модели (это игра).
         player_.position = desc.player.pos;
@@ -233,11 +211,46 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
     }
 }
 
-SkinnedItem Scene::makeCharItem(int index, Vec3 pos, float yaw, float animParam, float animTime,
-                                float attackTime) const {
+// Загрузить модели ростера в GPU-реестр (герои/мобы). Слот заводим ВСЕГДА (даже при ошибке —
+// mesh=0), чтобы индекс совпадал с сетевым charType на всех клиентах. Клипы — по имени.
+void Scene::loadRosterModels(Renderer& renderer, AssetSource& assets,
+                             const std::vector<CharacterDesc>& roster,
+                             std::vector<PlayerModel>& out) {
+    for (const CharacterDesc& c : roster) {
+        PlayerModel pm;
+        pm.id = c.id;
+        pm.name = c.name;
+        pm.scale = c.scale;
+        pm.yawOffset = c.yawOffset;
+        const std::vector<std::string>* hide = c.hide.empty() ? nullptr : &c.hide;
+        if (loadGltfModel(assets, c.model.c_str(), pm.model, hide)) {
+            pm.mesh = renderer.createSkinnedMesh(pm.model);
+            if (pm.model.hasTexture) pm.tex = renderer.createTexture(pm.model.baseColor);
+            int an = (int)pm.model.animations.size();
+            pm.idleClip = pm.model.findAnimation({"idle", "survey"}, 0);
+            pm.walkClip = pm.model.findAnimation({"walk"}, an > 1 ? 1 : pm.idleClip);
+            pm.runClip  = pm.model.findAnimation({"run", "sprint"}, an > 2 ? 2 : pm.walkClip);
+            // Клип атаки: сперва имя из ростера, затем keyword-поиск (маг: Spellcast_Shoot).
+            pm.attackClip = pm.model.findAnimation(
+                {c.attackClip, "spellcast_shoot", "spellcasting", "spellcast", "attack"}, -1);
+            pm.attackClipDur = (pm.attackClip >= 0 && pm.attackClip < an)
+                                   ? pm.model.animations[pm.attackClip].duration : 0.0f;
+            LOGI("Модель '%s': idle=%d walk=%d run=%d attack=%d (%d анимаций)",
+                 c.id.c_str(), pm.idleClip, pm.walkClip, pm.runClip, pm.attackClip, an);
+        } else {
+            LOGW("Модель '%s' (%s) не загрузилась — слот останется пустым",
+                 c.id.c_str(), c.model.c_str());
+        }
+        out.push_back(std::move(pm));  // всегда — индексы держим синхронно с charType
+    }
+}
+
+SkinnedItem Scene::makeSkinnedItem(const std::vector<PlayerModel>& reg, int index, Vec3 pos,
+                                   float yaw, float animParam, float animTime,
+                                   float attackTime) const {
     SkinnedItem item;
-    if (index < 0 || index >= (int)chars_.size()) return item;  // нет такого персонажа
-    const PlayerModel& pm = chars_[index];
+    if (index < 0 || index >= (int)reg.size()) return item;  // нет такой модели
+    const PlayerModel& pm = reg[index];
     if (pm.mesh == 0) return item;  // слот пуст (модель не загрузилась) — не рисуем
 
     item.mesh = pm.mesh;
@@ -289,7 +302,7 @@ RenderFrame Scene::renderCharacterPreview(float alpha, float aspect, float rende
 
     float yaw = previewSpin_ * 0.6f;                    // медленный оборот
     frame.skinned.push_back(
-        makeCharItem(localCharIndex_, Vec3{0.0f, 0.0f, 0.0f}, yaw, 0.0f, previewSpin_, 0.0f));
+        makeSkinnedItem(chars_, localCharIndex_, Vec3{0.0f, 0.0f, 0.0f}, yaw, 0.0f, previewSpin_, 0.0f));
     return frame;
 }
 
@@ -569,7 +582,7 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
         float ap = player_.prevAnimParam + (player_.animParam - player_.prevAnimParam) * alpha;
         float at = player_.prevAnimTime + (player_.animTime - player_.prevAnimTime) * alpha;
         float atk = player_.prevAttackTime + (player_.attackTime - player_.prevAttackTime) * alpha;
-        frame.skinned.push_back(makeCharItem(localCharIndex_, p, yaw, ap, at, atk));
+        frame.skinned.push_back(makeSkinnedItem(chars_, localCharIndex_, p, yaw, ap, at, atk));
     }
 
     // Удалённые игроки: рендерим «прошлое» на kInterpDelay назад, интерполируя
@@ -603,16 +616,23 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
         }
         r.ch.animTime += renderDt;  // фаза анимации крутится локально
 
-        // Рендер по типу: Hero — скиннинг-лиса (спец), остальные — generic-меш из таблицы визуалов.
+        // Рендер по типу: Hero/Enemy — скиннинг-модель из реестра, остальные — generic-меш.
         EntityType et = (EntityType)r.type;
         if (et == EntityType::Hero) {
             // Чужой герой: союзник (та же команда) — синеватый, противник (PvP) — красный.
             // Свой герой рисуется отдельно (player_) обычным цветом — так их не спутать.
             SkinnedItem it =
-                makeCharItem(r.charType, r.ch.position, r.ch.facingYaw, r.ch.animParam,
-                             r.ch.animTime, r.ch.attackTime);
+                makeSkinnedItem(chars_, r.charType, r.ch.position, r.ch.facingYaw, r.ch.animParam,
+                                r.ch.animTime, r.ch.attackTime);
             it.color = (r.team == localTeam_) ? Vec3{0.55f, 0.75f, 1.0f}   // союзник
                                               : Vec3{1.0f, 0.45f, 0.45f};  // враг
+            frame.skinned.push_back(it);
+        } else if (et == EntityType::Enemy && !mobs_.empty()) {
+            // Моб-скелет: тип по charType (сервер выставляет), всегда идёт (walk). Смерть/удар
+            // по ядру анимациями — задел на будущее (сейчас проигрываем локомоцию).
+            int mi = (int)((uint32_t)r.charType % (uint32_t)mobs_.size());
+            SkinnedItem it = makeSkinnedItem(mobs_, mi, r.ch.position, r.ch.facingYaw,
+                                             1.0f /*walk*/, r.ch.animTime, 0.0f);
             frame.skinned.push_back(it);
         } else {
             const EntityVisual& v = visual(et);

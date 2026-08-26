@@ -1,6 +1,13 @@
 # Gradle files
 .gradle/
-build/
+
+# Native/Android build trees. A bare `build/` also matches third_party/jolt/Build
+# on Windows (case-insensitive ignore) and drops Jolt's CMake from git: local
+# Docker still works (files on disk), a cloud clone does not.
+/build/
+/app/build/
+/server/build/
+/desktop/build/
 
 # Local configuration file (sdk path, etc)
 local.properties

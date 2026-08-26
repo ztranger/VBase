@@ -19,6 +19,11 @@ COPY app/src/main/cpp /src/app/src/main/cpp
 RUN cmake -S /src/server -B /src/server/build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DGENERATE_DEBUG_SYMBOLS=OFF \
+    || (echo "==== cmake failed; jolt/Build (must be in git) ====" \
+        && ls -la /src/third_party/jolt /src/third_party/jolt/Build \
+        && echo "==== CMakeError.log ====" \
+        && cat /src/server/build/CMakeFiles/CMakeError.log \
+        && exit 1) \
     && cmake --build /src/server/build \
     && /src/server/build/vbase_server --selftest \
     && strip /src/server/build/vbase_server

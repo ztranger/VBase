@@ -150,25 +150,20 @@ int SkinnedModel::findAnimation(const std::vector<std::string>& keywords, int fa
         for (char& c : s) c = (char)std::tolower((unsigned char)c);
         return s;
     };
-    // Ключевые слова приводим к нижнему регистру заранее — можно передавать имя клипа
-    // в любом регистре (напр. "Spellcast_Shoot" из ростера).
-    std::vector<std::string> kws;
-    kws.reserve(keywords.size());
-    for (const std::string& kw : keywords) kws.push_back(lower(kw));
+    // Имена анимаций — в нижний регистр один раз (можно передавать ключи в любом регистре).
+    std::vector<std::string> names(animations.size());
+    for (size_t i = 0; i < animations.size(); ++i) names[i] = lower(animations[i].name);
 
-    // Проход 1: точное совпадение имени (без регистра) с любым ключевым словом.
-    for (size_t i = 0; i < animations.size(); ++i) {
-        std::string nm = lower(animations[i].name);
-        for (const std::string& kw : kws) {
-            if (nm == kw) return (int)i;
-        }
-    }
-    // Проход 2: имя содержит ключевое слово как подстроку (Walking_A -> "walk" и т.п.).
-    for (size_t i = 0; i < animations.size(); ++i) {
-        std::string nm = lower(animations[i].name);
-        for (const std::string& kw : kws) {
-            if (!kw.empty() && nm.find(kw) != std::string::npos) return (int)i;
-        }
+    // Ключевые слова — по ПРИОРИТЕТУ (порядок в списке): первое разрешаем полностью
+    // (точное совпадение, затем подстрока), лишь потом переходим к следующему. Так явный
+    // клип из ростера (keywords[0]) не перебивается более общим fallback с меньшим индексом.
+    for (const std::string& kwRaw : keywords) {
+        std::string kw = lower(kwRaw);
+        if (kw.empty()) continue;
+        for (size_t i = 0; i < names.size(); ++i)
+            if (names[i] == kw) return (int)i;                 // точное — приоритетно
+        for (size_t i = 0; i < names.size(); ++i)
+            if (names[i].find(kw) != std::string::npos) return (int)i;  // затем подстрока
     }
     return fallback;
 }

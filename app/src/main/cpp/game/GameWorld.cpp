@@ -357,6 +357,9 @@ void GameWorld::step(float dt) {
                 enemy.id = nextEntityId_++;
                 enemy.type = EntityType::Enemy;
                 enemy.team = e.team;
+                // Тип модели моба (клиентский ростер config/enemies.cfg): чередуем по спавну.
+                // Клиент берёт mobs_[charType % mobs_.size()] — устойчиво к числу моделей.
+                enemy.charType = (uint8_t)(e.spawnedCount % 4);
                 enemy.move.position = e.move.position;
                 enemy.move.snapshot();
                 enemy.hp = enemy.maxHp = enemyStats_.hp;  // боевые статы врага

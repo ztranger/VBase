@@ -197,7 +197,8 @@ private:
         int idleClip = 0, walkClip = 1, runClip = 2, attackClip = -1;
         float attackClipDur = 0.0f;  // длительность клипа атаки, сек (масштаб под kAttackDuration)
     };
-    std::vector<PlayerModel> chars_;   // ростер; индекс = charType в снапшоте (сетевой контракт)
+    std::vector<PlayerModel> chars_;   // ростер героев; индекс = charType в снапшоте (сетевой контракт)
+    std::vector<PlayerModel> mobs_;    // ростер мобов (config/enemies.cfg); индекс = enemy.charType
     int localCharIndex_ = 0;           // выбранный локальным игроком
     float previewSpin_ = 0.0f;         // накопленный угол вращения модели на экране выбора
 
@@ -228,9 +229,13 @@ private:
     float uiScale_ = 1.0f;
     Vec3 lightDir_{0.4f, 1.0f, 0.6f};  // направление НА свет (из файла сцены)
 
-    // Построить отрисовочный предмет персонажа chars_[index] по состоянию (клиентский рендер).
-    SkinnedItem makeCharItem(int index, Vec3 pos, float yaw, float animParam, float animTime,
-                             float attackTime = 0.0f) const;
+    // Построить отрисовочный предмет модели reg[index] по состоянию (клиентский рендер).
+    // reg — chars_ (герои) или mobs_ (враги).
+    SkinnedItem makeSkinnedItem(const std::vector<PlayerModel>& reg, int index, Vec3 pos, float yaw,
+                                float animParam, float animTime, float attackTime = 0.0f) const;
+    // Загрузить модели ростера в GPU-реестр (клипы по имени). Используется для героев и мобов.
+    void loadRosterModels(Renderer& renderer, AssetSource& assets,
+                          const std::vector<CharacterDesc>& roster, std::vector<PlayerModel>& out);
 
     // Сеть.
     NetClient client_;
