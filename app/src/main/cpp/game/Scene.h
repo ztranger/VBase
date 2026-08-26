@@ -18,6 +18,7 @@
 
 class Renderer;
 class CollisionWorld;
+struct CharacterDesc;  // game/CharacterRoster.h (ростер персонажей/мобов)
 
 // Снапшот состояния во времени (для буфера интерполяции чужих игроков).
 struct TimedState {
@@ -25,6 +26,7 @@ struct TimedState {
     Vec3 pos{0.0f, 0.0f, 0.0f};
     float yaw = 0.0f;
     float anim = 0.0f;
+    float attack = 0.0f;  // остаток времени атаки (для рендера каста чужих)
 };
 
 // Чужая сущность (не свой герой): любой тип из снапшота — герой, генератор,
@@ -33,6 +35,7 @@ struct RemoteEntity {
     uint32_t id = 0;
     uint8_t type = 0;   // EntityType
     uint8_t team = 0;
+    uint8_t charType = 0;  // индекс персонажа в ростере (какой моделью рисовать чужого героя)
     Character ch;       // трансформ для рендера/интерполяции
     std::vector<TimedState> buffer;
     float aux = 0.0f;   // ресурс в хранилище и т.п. (последнее значение, без интерполяции)
@@ -96,6 +99,7 @@ public:
         extCamZoom_ = zoomAxis;
     }
     void requestJump() { jumpQueued_ = true; }  // прыжок на следующем тике (клавиша/кнопка)
+    void requestAttack() { attackQueued_ = true; }  // атака (каст) на следующем тике
 
     // Мультитач (Android twin-stick): левая половина экрана — левый стик (герой),
     // правая — правый стик (камера). Каждый стик держит палец по его id.
@@ -152,10 +156,23 @@ public:
     bool heroDead() const { return client_.connected() && localHp_ <= 0.0f; }
     float heroRespawnLeft() const { return localRespawn_; }  // секунд до респауна
 
-    float modelScale() const { return foxScale_; }
-    void setModelScale(float s) { foxScale_ = s; }
-    float modelYawOffset() const { return foxYawOffset_; }
-    void setModelYawOffset(float y) { foxYawOffset_ = y; }
+    float modelScale() const { return chars_.empty() ? 1.0f : chars_[localCharIndex_].scale; }
+    void setModelScale(float s) { if (!chars_.empty()) chars_[localCharIndex_].scale = s; }
+    float modelYawOffset() const { return chars_.empty() ? 0.0f : chars_[localCharIndex_].yawOffset; }
+    void setModelYawOffset(float y) { if (!chars_.empty()) chars_[localCharIndex_].yawOffset = y; }
+
+    // Выбор персонажа (экран CharacterSelect).
+    int rosterCount() const { return (int)chars_.size(); }
+    const char* rosterName(int i) const {
+        return (i >= 0 && i < (int)chars_.size()) ? chars_[i].name.c_str() : "";
+    }
+    int selectedCharacter() const { return localCharIndex_; }
+    void selectCharacter(int i);  // локальный персонаж + уведомить сервер (для рендера чужими)
+
+    // Рендер вне боя (главный цикл выбирает путь по UiMode): 3D-превью выбранного
+    // персонажа (экран выбора) и пустой фон меню (мир не показываем).
+    RenderFrame renderCharacterPreview(float alpha, float aspect, float renderDt);
+    RenderFrame renderMenuBackdrop(float aspect);
     float cameraDistance() const { return camera_.distance; }
     void setCameraDistance(float d) { camera_.distance = d; }
     float cameraPitch() const { return camera_.pitch; }
@@ -168,11 +185,21 @@ private:
     FollowCamera camera_;
     std::vector<GameObject> objects_;
 
-    SkinnedModel foxModel_;   // данные модели (общие для всех аватаров-лис)
-    SkinnedHandle foxMesh_ = 0;   // GPU-меш (клиентский ресурс)
-    TextureHandle foxTex_ = 0;
-    float foxScale_ = 0.03f;
-    float foxYawOffset_ = 0.0f;
+    // Реестр выбираемых персонажей (грузится в build из config/characters.cfg). ВСЕ модели
+    // грузятся один раз -> мгновенное переключение и рендер чужих их моделями без утечек GPU
+    // (у Renderer нет удаления мешей/текстур). Индексы клипов резолвятся ПО ИМЕНИ (findAnimation).
+    struct PlayerModel {
+        std::string id, name;
+        SkinnedModel model;          // данные скелета/анимаций
+        SkinnedHandle mesh = 0;      // GPU-меш (клиентский ресурс)
+        TextureHandle tex = 0;
+        float scale = 1.0f, yawOffset = 0.0f;
+        int idleClip = 0, walkClip = 1, runClip = 2, attackClip = -1;
+        float attackClipDur = 0.0f;  // длительность клипа атаки, сек (масштаб под kAttackDuration)
+    };
+    std::vector<PlayerModel> chars_;   // ростер; индекс = charType в снапшоте (сетевой контракт)
+    int localCharIndex_ = 0;           // выбранный локальным игроком
+    float previewSpin_ = 0.0f;         // накопленный угол вращения модели на экране выбора
 
     // Клиентский визуал/пикинг по типу сущности — ОДНА таблица вместо разбросанных switch
     // (рендер, пикинг, призрак стройки читают её; yOffset больше НЕ дублируется). Заполняется
@@ -197,11 +224,13 @@ private:
     float extX_ = 0.0f, extY_ = 0.0f;  // внешняя ось движения героя (WASD на десктопе)
     float extCamYaw_ = 0.0f, extCamZoom_ = 0.0f;  // внешняя ось камеры (стрелки на десктопе)
     bool jumpQueued_ = false;          // запрошен прыжок (сбрасывается в fixedUpdate)
+    bool attackQueued_ = false;        // запрошена атака/каст (сбрасывается в fixedUpdate)
     float uiScale_ = 1.0f;
     Vec3 lightDir_{0.4f, 1.0f, 0.6f};  // направление НА свет (из файла сцены)
 
-    // Построить отрисовочный предмет лисы по состоянию (клиентский рендер).
-    SkinnedItem makeFoxItem(Vec3 pos, float yaw, float animParam, float animTime) const;
+    // Построить отрисовочный предмет персонажа chars_[index] по состоянию (клиентский рендер).
+    SkinnedItem makeCharItem(int index, Vec3 pos, float yaw, float animParam, float animTime,
+                             float attackTime = 0.0f) const;
 
     // Сеть.
     NetClient client_;

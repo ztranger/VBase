@@ -61,4 +61,4 @@ tower     pos  4 0 -10            # вторая башня — фланкиру
 
 # --- Управляемый персонаж (glTF + скиннинг) ---
 # capsule <radius> <cylHalf> — кинематический контроллер (по умолчанию 0.3 0.3)
-player model models/Fox.glb pos 0 0 0 scale 0.03
+player model models/Mage.glb pos 0 0 0 scale 1.0 hide wand,spellbook

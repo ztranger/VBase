@@ -8,6 +8,7 @@
 enum class UiMode {
     Loading,
     MainMenu,
+    CharacterSelect,
     Battle,
 };
 

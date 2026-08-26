@@ -57,6 +57,8 @@ void build(GameUiState& state, Scene& scene) { UiShell::build(state, scene, g_sk
 
 bool gameplayActive() { return UiShell::gameplayActive(); }
 
+UiMode mode() { return UiShell::mode(); }
+
 void requestLoadingScreen() { UiShell::setMode(UiMode::Loading); }
 
 }  // namespace GameUi

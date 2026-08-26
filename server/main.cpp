@@ -2,9 +2,12 @@
 // что и клиент (Net.cpp / Character.cpp), но без Android/GL. Хост-режим в
 // приложении больше не обязателен — можно поднять сервер отдельно.
 
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <csignal>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <thread>
@@ -696,6 +699,23 @@ void printLocalAddresses(uint16_t port) {
     freeaddrinfo(res);
 }
 
+// docker stop шлёт SIGTERM; Ctrl+C — SIGINT. Без обработчика контейнер ждёт timeout и SIGKILL.
+std::atomic<bool> gRunning{true};
+
+void onStopSignal(int) {
+    gRunning = false;
+}
+
+bool runningInDocker() {
+#ifndef _WIN32
+    if (std::FILE* f = std::fopen("/.dockerenv", "r")) {
+        std::fclose(f);
+        return true;
+    }
+#endif
+    return false;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -703,6 +723,11 @@ int main(int argc, char** argv) {
     SetConsoleOutputCP(CP_UTF8);  // консоль читает наш UTF-8, иначе кириллица — каша
 #endif
     std::setvbuf(stdout, nullptr, _IONBF, 0);  // логи сервера — сразу, без буфера
+    std::signal(SIGINT, onStopSignal);
+    std::signal(SIGTERM, onStopSignal);
+#ifndef _WIN32
+    std::signal(SIGPIPE, SIG_IGN);
+#endif
 
     if (argc > 1 && std::strcmp(argv[1], "--selftest") == 0) {
         int a = runPhysicsSelfTest();   // примитив: collide-and-slide
@@ -733,11 +758,23 @@ int main(int argc, char** argv) {
     }
     std::printf("VBase server: слушаю UDP-порт %u (Ctrl+C для выхода)\n", port);
     printLocalAddresses(port);
+    if (runningInDocker()) {
+        std::printf("Docker: с хоста Join на 127.0.0.1:%u, с телефона — на LAN-IP машины (UDP).\n",
+                    (unsigned)port);
+        std::printf("        Адреса контейнера (172.x) клиентам не подходят.\n");
+    }
 
     // Мир коллизий: грузим ТО ЖЕ описание сцены, что и клиент (та же геометрия —
     // иначе предсказание у стены разойдётся с авторитетом). Аргументы (как у десктопа):
     // argv[2] = каталог assets, argv[3] = путь сцены.
-    std::string assetsDir = (argc > 2) ? argv[2] : "../../app/src/main/assets";
+    std::string assetsDir;
+    if (argc > 2) {
+        assetsDir = argv[2];
+    } else if (runningInDocker()) {
+        assetsDir = "/app/assets";
+    } else {
+        assetsDir = "../../app/src/main/assets";
+    }
     const char* scenePath = (argc > 3) ? argv[3] : "scenes/default.scene";
     FileAssetSource assets(assetsDir);
     SceneDesc desc;
@@ -756,7 +793,7 @@ int main(int argc, char** argv) {
     double accumulator = 0.0;
     int lastClients = -1;
 
-    for (;;) {
+    while (gRunning.load()) {
         server.poll();  // принять подключения и ввод
 
         auto now = std::chrono::steady_clock::now();
@@ -777,4 +814,8 @@ int main(int argc, char** argv) {
 
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+
+    server.stop();
+    std::printf("VBase server: остановлен\n");
+    return 0;
 }

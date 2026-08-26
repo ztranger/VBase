@@ -69,7 +69,16 @@ struct SkinnedModel {
     // (T/S линейно, R через slerp), затем считаются матрицы костей.
     void sampleBlend(int animA, float timeA, int animB, float timeB,
                      float blend, std::vector<Mat4>& out) const;
+
+    // Индекс анимации по имени (регистронезависимо): сначала точное совпадение с любым
+    // из keywords, затем — имя содержит keyword как подстроку. fallback, если не нашли.
+    // Нужно, чтобы клипы (idle/walk/run/...) выбирались по имени, а не по порядку в файле.
+    int findAnimation(const std::vector<std::string>& keywords, int fallback = -1) const;
 };
 
 // Загрузка .glb/.gltf через cgltf (данные читаются из AssetSource). Первый скин + анимации.
-bool loadGltfModel(AssetSource& src, const char* path, SkinnedModel& out);
+// hideNodes (опц.) — список подстрок имён узлов, чьи меши пропускаются при загрузке (напр.
+// лишний реквизит KayKit: "wand"/"spellbook"). Незаскиненные меши-аксессуары (шляпа, плащ,
+// посох) привязываются к ближайшей кости-предку, чтобы двигаться вместе со скелетом.
+bool loadGltfModel(AssetSource& src, const char* path, SkinnedModel& out,
+                   const std::vector<std::string>* hideNodes = nullptr);

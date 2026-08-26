@@ -19,4 +19,4 @@ object ball mat cool pos  3 0.8 0
 # Кольцо сфер по краю арены
 ring ball mat cool count 32 radius 14 y 0.8 scale 0.6 spin 0.4
 
-player model models/Fox.glb pos 0 0 0 scale 0.04
+player model models/Mage.glb pos 0 0 0 scale 1.0 hide wand,spellbook

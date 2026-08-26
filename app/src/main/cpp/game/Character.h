@@ -23,16 +23,23 @@ struct Character {
     float animParam = 0.0f;
     float animTime = 0.0f;
     float velocityY = 0.0f;  // вертикальная скорость (гравитация/прыжок) — реконсилируется
+    float attackTime = 0.0f; // остаток времени текущей атаки, сек (>0 = идёт каст) — реконсилируется
 
     // Предыдущее состояние (для интерполяции при рендере на клиенте).
     Vec3 prevPosition{0.0f, 0.0f, 0.0f};
     float prevFacingYaw = 0.0f;
     float prevAnimParam = 0.0f;
     float prevAnimTime = 0.0f;
+    float prevAttackTime = 0.0f;
 
     // Конфиг движения.
     float maxSpeed = 6.0f;
     float turnRate = 10.0f;
+
+    // Длительность атаки (каста), сек. ЕДИНАЯ для клиента и сервера (сервер headless и не
+    // знает длину анимационного клипа — рендер масштабирует клип под это окно). Во время
+    // атаки персонаж «рутится» (стоит на месте). Реконсилируется через EntityState.attackT.
+    static constexpr float kAttackDuration = 0.8f;
 
     // Хэндл кинематического контроллера в CollisionWorld (0 — нет физики, fallback).
     uint32_t collider = 0;

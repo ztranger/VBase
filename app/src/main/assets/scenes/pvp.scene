@@ -45,5 +45,5 @@ spawner   pos  0 0 7   team 2        # враги team 2 бегут на юг к
 spawn team 1 pos 0 0 -10
 spawn team 2 pos 0 0 10
 
-# --- Управляемый персонаж (fox). player.pos — fallback-спавн (не используется при наличии spawn). ---
-player model models/Fox.glb pos 0 0 -10 scale 0.03
+# --- Управляемый персонаж (маг). player.pos — fallback-спавн (не используется при наличии spawn). ---
+player model models/Mage.glb pos 0 0 -10 scale 1.0 hide wand,spellbook

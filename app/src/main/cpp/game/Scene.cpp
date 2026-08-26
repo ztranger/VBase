@@ -8,6 +8,7 @@
 
 #include "engine/assets/Assets.h"
 #include "engine/physics/CollisionWorld.h"
+#include "game/CharacterRoster.h"
 #include "game/Grid.h"
 #include "engine/core/Log.h"
 #include "engine/core/Renderer.h"
@@ -171,18 +172,58 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
     collision_->finalize();  // оптимизация broad-phase после всей статики
     LOGI("Физика: %d статичных коллайдеров", (int)desc.colliders.size());
 
-    // --- Управляемый персонаж (glTF + скиннинг) ---
+    // --- Управляемый персонаж: ростер выбираемых моделей (выбор персонажа) ---
     if (desc.player.present) {
-        if (loadGltfModel(assets, desc.player.model.c_str(), foxModel_)) {
-            foxMesh_ = renderer.createSkinnedMesh(foxModel_);
-            if (foxModel_.hasTexture) {
-                foxTex_ = renderer.createTexture(foxModel_.baseColor);
-            }
-            foxScale_ = desc.player.scale;
-            foxYawOffset_ = desc.player.yawOffset;
-        } else {
-            LOGW("Не удалось загрузить модель игрока: %s", desc.player.model.c_str());
+        // Данные ростера. Если конфиг не прочитан — один вход из player-директивы сцены
+        // (обратная совместимость: играбельно и без characters.cfg).
+        std::vector<CharacterDesc> roster;
+        if (!loadCharacterRoster(assets, "config/characters.cfg", roster)) {
+            CharacterDesc c;
+            c.id = c.name = "player";
+            c.model = desc.player.model;
+            c.scale = desc.player.scale;
+            c.yawOffset = desc.player.yawOffset;
+            c.hide = desc.player.hideNodes;
+            roster.push_back(std::move(c));
         }
+
+        // Грузим ВСЕ модели один раз. Слот заводим ВСЕГДА (даже при ошибке загрузки — mesh=0),
+        // чтобы индекс в chars_ строго совпадал с сетевым charType на всех клиентах.
+        for (const CharacterDesc& c : roster) {
+            PlayerModel pm;
+            pm.id = c.id;
+            pm.name = c.name;
+            pm.scale = c.scale;
+            pm.yawOffset = c.yawOffset;
+            const std::vector<std::string>* hide = c.hide.empty() ? nullptr : &c.hide;
+            if (loadGltfModel(assets, c.model.c_str(), pm.model, hide)) {
+                pm.mesh = renderer.createSkinnedMesh(pm.model);
+                if (pm.model.hasTexture) pm.tex = renderer.createTexture(pm.model.baseColor);
+                int an = (int)pm.model.animations.size();
+                pm.idleClip = pm.model.findAnimation({"idle", "survey"}, 0);
+                pm.walkClip = pm.model.findAnimation({"walk"}, an > 1 ? 1 : pm.idleClip);
+                pm.runClip  = pm.model.findAnimation({"run", "sprint"}, an > 2 ? 2 : pm.walkClip);
+                // Клип атаки: сперва имя из ростера, затем keyword-поиск (маг: Spellcast_Shoot).
+                pm.attackClip = pm.model.findAnimation(
+                    {c.attackClip, "spellcast_shoot", "spellcasting", "spellcast", "attack"}, -1);
+                pm.attackClipDur = (pm.attackClip >= 0 && pm.attackClip < an)
+                                       ? pm.model.animations[pm.attackClip].duration : 0.0f;
+                LOGI("Персонаж '%s': idle=%d walk=%d run=%d attack=%d (%d анимаций)",
+                     c.id.c_str(), pm.idleClip, pm.walkClip, pm.runClip, pm.attackClip, an);
+            } else {
+                LOGW("Персонаж '%s' (%s) не загрузился — слот останется пустым",
+                     c.id.c_str(), c.model.c_str());
+            }
+            chars_.push_back(std::move(pm));  // всегда — индексы держим синхронно с charType
+        }
+
+        // Персонаж по умолчанию — совпавший с player.model из сцены, иначе первый.
+        int def = 0;
+        for (size_t i = 0; i < roster.size(); ++i) {
+            if (roster[i].model == desc.player.model) { def = (int)i; break; }
+        }
+        selectCharacter(def);
+
         // Позиция и кинематический контроллер — независимо от загрузки модели (это игра).
         player_.position = desc.player.pos;
         player_.collider = collision_->addCharacter(desc.player.pos,
@@ -192,27 +233,75 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
     }
 }
 
-SkinnedItem Scene::makeFoxItem(Vec3 pos, float yaw, float animParam, float animTime) const {
+SkinnedItem Scene::makeCharItem(int index, Vec3 pos, float yaw, float animParam, float animTime,
+                                float attackTime) const {
     SkinnedItem item;
-    item.mesh = foxMesh_;
-    item.texture = foxTex_;
-    item.color = (foxTex_ != 0) ? Vec3{1.0f, 1.0f, 1.0f} : Vec3{0.85f, 0.5f, 0.25f};
-    item.model = Mat4::translation(pos)
-               * Mat4::rotationY(yaw + foxYawOffset_)
-               * Mat4::scale({foxScale_, foxScale_, foxScale_});
+    if (index < 0 || index >= (int)chars_.size()) return item;  // нет такого персонажа
+    const PlayerModel& pm = chars_[index];
+    if (pm.mesh == 0) return item;  // слот пуст (модель не загрузилась) — не рисуем
 
-    if (!foxModel_.animations.empty()) {
-        int n = (int)foxModel_.animations.size();
-        auto id = [n](int i) { return i < n ? i : n - 1; };
-        if (animParam <= 0.01f) {
-            foxModel_.sampleAnimation(id(0), animTime, item.joints);
+    item.mesh = pm.mesh;
+    item.texture = pm.tex;
+    item.color = (pm.tex != 0) ? Vec3{1.0f, 1.0f, 1.0f} : Vec3{0.85f, 0.5f, 0.25f};
+    item.model = Mat4::translation(pos)
+               * Mat4::rotationY(yaw + pm.yawOffset)
+               * Mat4::scale({pm.scale, pm.scale, pm.scale});
+
+    if (!pm.model.animations.empty()) {
+        // Атака перекрывает локомоцию: проигрываем клип каста ОДИН раз до конца, растянув
+        // его ровно на окно kAttackDuration (сервер не знает длину клипа — масштаб здесь).
+        if (attackTime > 0.0f && pm.attackClip >= 0 && pm.attackClipDur > 0.0f) {
+            float frac = 1.0f - attackTime / Character::kAttackDuration;  // 0..1 прогресс каста
+            frac = frac < 0.0f ? 0.0f : (frac > 0.999f ? 0.999f : frac);  // без зацикливания
+            pm.model.sampleAnimation(pm.attackClip, frac * pm.attackClipDur, item.joints);
+        } else if (animParam <= 0.01f) {  // Клипы выбраны по имени при загрузке.
+            pm.model.sampleAnimation(pm.idleClip, animTime, item.joints);
         } else if (animParam <= 1.0f) {
-            foxModel_.sampleBlend(id(0), animTime, id(1), animTime, animParam, item.joints);
+            pm.model.sampleBlend(pm.idleClip, animTime, pm.walkClip, animTime, animParam, item.joints);
         } else {
-            foxModel_.sampleBlend(id(1), animTime, id(2), animTime, animParam - 1.0f, item.joints);
+            pm.model.sampleBlend(pm.walkClip, animTime, pm.runClip, animTime, animParam - 1.0f, item.joints);
         }
     }
     return item;
+}
+
+void Scene::selectCharacter(int i) {
+    if (chars_.empty()) { localCharIndex_ = 0; return; }
+    if (i < 0) i = 0;
+    if (i >= (int)chars_.size()) i = (int)chars_.size() - 1;
+    localCharIndex_ = i;
+    client_.setCharType((uint8_t)i);  // сервер положит в снапшот -> чужие нарисуют нашей моделью
+}
+
+// Экран выбора: выбранный персонаж в origin, idle-анимация, медленное вращение. Мир НЕ рисуем —
+// фон = чистый цвет очистки. Главный цикл зовёт это вместо render() в режиме CharacterSelect.
+RenderFrame Scene::renderCharacterPreview(float alpha, float aspect, float renderDt) {
+    (void)alpha;
+    previewSpin_ += renderDt;  // накопленное время: и фаза idle, и угол вращения
+
+    RenderFrame frame;
+    Vec3 target{0.0f, 1.2f, 0.0f};   // ~середина роста гуманоида
+    Vec3 eye{0.0f, 1.5f, 4.6f};      // камера спереди, чуть сверху
+    frame.view = Mat4::lookAt(eye, target, Vec3{0.0f, 1.0f, 0.0f});
+    frame.proj = Mat4::perspective(0.9f, aspect, 0.1f, 100.0f);
+    frame.cameraPos = eye;
+    frame.lightDir = normalize(lightDir_);
+
+    float yaw = previewSpin_ * 0.6f;                    // медленный оборот
+    frame.skinned.push_back(
+        makeCharItem(localCharIndex_, Vec3{0.0f, 0.0f, 0.0f}, yaw, 0.0f, previewSpin_, 0.0f));
+    return frame;
+}
+
+// Фон меню (MainMenu/Loading): пустой кадр — мир не показываем, только цвет очистки.
+RenderFrame Scene::renderMenuBackdrop(float aspect) {
+    RenderFrame frame;
+    Vec3 eye{0.0f, 2.0f, 6.0f}, target{0.0f, 1.0f, 0.0f};
+    frame.view = Mat4::lookAt(eye, target, Vec3{0.0f, 1.0f, 0.0f});
+    frame.proj = Mat4::perspective(0.9f, aspect, 0.1f, 100.0f);
+    frame.cameraPos = eye;
+    frame.lightDir = normalize(lightDir_);
+    return frame;
 }
 
 void Scene::setUiScale(float s) {
@@ -255,11 +344,14 @@ void Scene::fixedUpdate(float dt) {
     cmd.magnitude = (iy < 0.0f) ? mag * 0.5f : mag;  // назад медленнее
     cmd.jump = jumpQueued_;                          // одноразовый прыжок
     jumpQueued_ = false;
+    cmd.attack = attackQueued_;                      // одноразовая атака (каст)
+    attackQueued_ = false;
 
     if (heroDead()) {  // повержен — ввод в ноль (сервер держит героя на месте до респауна)
         cmd.moveX = cmd.moveZ = 0.0f;
         cmd.magnitude = 0.0f;
         cmd.jump = false;
+        cmd.attack = false;
     }
 
     tickDt_ = dt;
@@ -275,6 +367,10 @@ void Scene::fixedUpdate(float dt) {
     player_.simulate(dt, cmd, collision_.get());  // локальное предсказание (с коллизиями)
     player_.animTime += dt;  // фаза анимации — ровно 1 раз за тик (не в simulate: реплей
                              // реконсиляции зовёт simulate многократно и ускорял бы её)
+    if (player_.attackTime > 0.0f) {  // отсчёт каста — тоже 1 раз/тик (триггер — в simulate)
+        player_.attackTime -= dt;
+        if (player_.attackTime < 0.0f) player_.attackTime = 0.0f;
+    }
 
     // Сервер (если хостим) — тем же кодом симуляции, затем рассылка снапшотов.
     if (host_) {
@@ -328,6 +424,7 @@ void Scene::applySnapshot() {
             player_.animParam = s.animParam;
             player_.velocityY = s.velY;  // вертикаль тоже сбрасываем на серверную —
             // иначе реплей считает прыжок от чужой скорости и он дёргается.
+            player_.attackTime = s.attackT;  // авторитетный остаток каста (реплей переиграет триггер)
             // Синхронизируем контроллер с авторитетной позицией перед реплеем,
             // иначе collide-and-slide стартует от устаревшей внутренней позиции.
             if (collision_ && player_.collider != 0) {
@@ -360,9 +457,10 @@ void Scene::applySnapshot() {
         }
         r->type = s.type;
         r->team = s.team;
+        r->charType = s.charType;  // какой моделью рисовать чужого героя (индекс ростера)
         r->aux = s.aux;  // ресурс в хранилище и т.п. (последнее значение)
         r->hp = s.hp;    // здоровье (ядро/враг)
-        r->buffer.push_back({simClock_, {s.x, s.y, s.z}, s.yaw, s.animParam});
+        r->buffer.push_back({simClock_, {s.x, s.y, s.z}, s.yaw, s.animParam, s.attackT});
         // Ограничиваем историю (~1 сек), чтобы буфер не рос.
         while (r->buffer.size() > 2 && r->buffer[1].t < simClock_ - 1.0) {
             r->buffer.erase(r->buffer.begin());
@@ -464,13 +562,14 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
         t.rotation.y = obj.prevRotY + (obj.transform.rotation.y - obj.prevRotY) * alpha;
         frame.items.push_back({obj.mesh, obj.material, t.matrix()});
     }
-    if (foxMesh_ != 0 && !heroDead()) {  // повержённого героя не рисуем (появится на респауне)
+    if (!chars_.empty() && !heroDead()) {  // повержённого героя не рисуем (появится на респауне)
         // Свой аватар: интерполяция prev -> current по alpha.
         Vec3 p = player_.prevPosition + (player_.position - player_.prevPosition) * alpha;
         float yaw = lerpAngle(player_.prevFacingYaw, player_.facingYaw, alpha);
         float ap = player_.prevAnimParam + (player_.animParam - player_.prevAnimParam) * alpha;
         float at = player_.prevAnimTime + (player_.animTime - player_.prevAnimTime) * alpha;
-        frame.skinned.push_back(makeFoxItem(p, yaw, ap, at));
+        float atk = player_.prevAttackTime + (player_.attackTime - player_.prevAttackTime) * alpha;
+        frame.skinned.push_back(makeCharItem(localCharIndex_, p, yaw, ap, at, atk));
     }
 
     // Удалённые игроки: рендерим «прошлое» на kInterpDelay назад, интерполируя
@@ -492,6 +591,7 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
                         st.pos = a.pos + (b.pos - a.pos) * f;
                         st.yaw = lerpAngle(a.yaw, b.yaw, f);
                         st.anim = a.anim + (b.anim - a.anim) * f;
+                        st.attack = a.attack + (b.attack - a.attack) * f;
                         break;
                     }
                 }
@@ -499,6 +599,7 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
             r.ch.position = st.pos;
             r.ch.facingYaw = st.yaw;
             r.ch.animParam = st.anim;
+            r.ch.attackTime = st.attack;  // остаток каста (интерполированный) для рендера
         }
         r.ch.animTime += renderDt;  // фаза анимации крутится локально
 
@@ -508,7 +609,8 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
             // Чужой герой: союзник (та же команда) — синеватый, противник (PvP) — красный.
             // Свой герой рисуется отдельно (player_) обычным цветом — так их не спутать.
             SkinnedItem it =
-                makeFoxItem(r.ch.position, r.ch.facingYaw, r.ch.animParam, r.ch.animTime);
+                makeCharItem(r.charType, r.ch.position, r.ch.facingYaw, r.ch.animParam,
+                             r.ch.animTime, r.ch.attackTime);
             it.color = (r.team == localTeam_) ? Vec3{0.55f, 0.75f, 1.0f}   // союзник
                                               : Vec3{1.0f, 0.45f, 0.45f};  // враг
             frame.skinned.push_back(it);

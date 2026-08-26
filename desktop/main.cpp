@@ -44,7 +44,7 @@ int keyAxis(GLFWwindow* w, int pos, int neg) {
 // и рендер. Возвращает следующий бэкенд для перезапуска (по кнопке в GameUi) либо
 // -1, если окно закрыто/ESC (выход). ui переживает переключения (свет/камера/FPS).
 int runClient(int backend, GameUiState& ui, const std::string& assetsDir,
-              const char* serverIp, const char* scenePath) {
+              const char* serverIp, const char* scenePath, bool autoJoin) {
     const bool useVk = (backend == 1);
 
     glfwDefaultWindowHints();
@@ -88,7 +88,10 @@ int runClient(int backend, GameUiState& ui, const std::string& assetsDir,
 
     Scene scene;
     scene.build(*renderer, assets, scenePath);
-    scene.joinGame(serverIp);
+    // Авто-подключение при старте убрано: заход в бой теперь через меню
+    // (Home -> выбор персонажа -> В бой / Host / Join). serverIp префиллит поле Join (см. main).
+    // Флаг --join (для разработки/тестов) подключается сразу, оставаясь в меню.
+    if (autoJoin) scene.joinGame(serverIp);
 
     ui.backend = backend;
     ui.requestBackend = -1;  // сбросить возможный запрос предыдущего бэкенда
@@ -98,6 +101,7 @@ int runClient(int backend, GameUiState& ui, const std::string& assetsDir,
     auto last = std::chrono::steady_clock::now();
     float accumulator = 0.0f;
     bool prevSpace = false;  // фронт нажатия пробела -> прыжок
+    bool prevAttack = false; // фронт нажатия F -> атака (каст)
     bool prevMouse = false;  // фронт клика ЛКМ -> пикинг здания
     bool prevEnter = false;  // фронт Enter -> подтвердить постройку
     int next = -1;  // -1 = выход
@@ -137,6 +141,12 @@ int runClient(int backend, GameUiState& ui, const std::string& assetsDir,
         if (space && !prevSpace) scene.requestJump();
         prevSpace = space;
 
+        // F (по фронту) -> атака (каст).
+        bool attack = play && !ImGui::GetIO().WantCaptureKeyboard &&
+                      glfwGetKey(window, GLFW_KEY_F) == GLFW_PRESS;
+        if (attack && !prevAttack) scene.requestAttack();
+        prevAttack = attack;
+
         // Enter (по фронту) -> подтвердить постройку (в режиме стройки).
         bool enter = play && !ImGui::GetIO().WantCaptureKeyboard &&
                      glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS;
@@ -165,7 +175,12 @@ int runClient(int backend, GameUiState& ui, const std::string& assetsDir,
         glfwGetFramebufferSize(window, &fbw, &fbh);
         float aspect = fbh > 0 ? (float)fbw / (float)fbh : 1.0f;
 
-        RenderFrame frame = scene.render(alpha, aspect, dt);
+        // Рендер-путь по экрану: бой -> мир; выбор персонажа -> 3D-превью; меню -> чистый фон.
+        UiMode uiMode = GameUi::mode();
+        RenderFrame frame =
+            (uiMode == UiMode::Battle)          ? scene.render(alpha, aspect, dt)
+          : (uiMode == UiMode::CharacterSelect) ? scene.renderCharacterPreview(alpha, aspect, dt)
+                                                : scene.renderMenuBackdrop(aspect);
         frame.deltaTime = dt;
 
         // FPS + латенси/статус сети в одну строку HUD (пинг «вместе с FPS»).
@@ -226,6 +241,7 @@ int main(int argc, char** argv) {
     const char* scenePath = "scenes/default.scene";
     int backend = 0;  // GL по умолчанию, --vk -> Vulkan; дальше — кнопки в GameUi
     bool startLoadingPreview = false;
+    bool autoJoin = false;  // --join: сразу подключиться к serverIp (для разработки/тестов)
 
     int positional = 0;
     for (int i = 1; i < argc; ++i) {
@@ -233,6 +249,8 @@ int main(int argc, char** argv) {
             backend = 1;
         } else if (std::strcmp(argv[i], "--loading") == 0) {
             startLoadingPreview = true;
+        } else if (std::strcmp(argv[i], "--join") == 0) {
+            autoJoin = true;
         } else {
             switch (positional++) {
                 case 0: serverIp = argv[i]; break;
@@ -253,11 +271,12 @@ int main(int argc, char** argv) {
 
     GameUiState ui;
     ui.vulkanAvailable = vulkanAvailable;
+    std::snprintf(ui.joinIp, sizeof(ui.joinIp), "%s", serverIp);  // CLI serverIp -> префилл поля Join
     if (startLoadingPreview) GameUi::requestLoadingScreen();  // --loading: стартуем на лоадинге
 
     // Цикл перезапуска: runClient возвращает следующий бэкенд или -1 (выход).
     while (backend >= 0) {
-        backend = runClient(backend, ui, assetsDir, serverIp, scenePath);
+        backend = runClient(backend, ui, assetsDir, serverIp, scenePath, autoJoin);
     }
 
     glfwTerminate();

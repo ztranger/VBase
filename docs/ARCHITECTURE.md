@@ -32,8 +32,9 @@
   - `Scene` — мир: окружение (`GameObject`), игрок (`Character`), камера
     (`FollowCamera`), джойстик (`VirtualJoystick`), сеть. `fixedUpdate(dt)` (тик),
     `render(alpha, aspect, dt)` → `RenderFrame` (интерполяция). Строит визуальные
-    предметы лисы (`makeFoxItem`). Содержимое сцены не захардкожено: `build()`
-    грузит **файл сцены** через `SceneLoader` (см. §5.1) и инстанцирует его.
+    предметы персонажа (`makeCharItem` — индекс в реестре моделей `chars_`, выбор персонажа).
+    Содержимое сцены не захардкожено: `build()` грузит **файл сцены** через `SceneLoader`
+    (см. §5.1) и **ростер персонажей** через `CharacterRoster` (`config/characters.cfg`).
   - `FollowCamera` — камера ¾-вида: фиксированный наклon (`pitch`), орбитальный `yaw` и зум
     управляются игроком (правый стик / стрелки), следит только за позицией цели. Движение
     героя — camera-relative. (Твин-стик на Android: левый стик — герой, правый — камера.)
@@ -217,7 +218,7 @@ app/src/main/cpp/
 - **desktop**: то же + `engine/render/*`, `engine/assets/*`, `game/Scene` + imgui/glfw.
 - **Android**: всё + `platform/main.cpp`.
 
-`server/`: `main.cpp`, `CMakeLists.txt`, `build.bat`.
+`server/`: `main.cpp`, `CMakeLists.txt`, `build.bat`, `Dockerfile` (Linux-образ; сборка из корня: `build-server-docker.cmd`).
 
 `desktop/`: `main.cpp` (GLFW-окно, WASD, цикл), `CMakeLists.txt`, `build.bat`.
 (Старые `DesktopRenderer.*`/`GlCore.h` удалены — их заменил кроссплатформенный GlRenderer.)

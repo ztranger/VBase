@@ -220,6 +220,11 @@ void GameWorld::setHeroInput(uint32_t heroId, const InputCommand& in) {
     }
 }
 
+void GameWorld::setHeroCharType(uint32_t heroId, uint8_t charType) {
+    Entity* e = entityById(heroId);
+    if (e != nullptr) e->charType = charType;  // только транслируется в снапшот (сервер не рисует)
+}
+
 bool GameWorld::tryBuild(uint32_t builderId, EntityType type, int cellX, int cellZ) {
     if ((int)type < 0 || (int)type >= 8) return false;
     const BuildTemplate& t = buildTemplates_[(int)type];
@@ -272,6 +277,7 @@ void GameWorld::step(float dt) {
                 b.lastSeq = b.queue.back().seq;
                 b.queue.clear();
             }
+            e.move.attackTime = 0.0f;  // прерываем каст (иначе застрянет мёртвым в позе)
             continue;
         }
         e.move.snapshot();
@@ -295,6 +301,12 @@ void GameWorld::step(float dt) {
                 e.input = in;  // отражаем применённый ввод (диагностика)
                 e.move.simulate(dt, in, world_.get());  // прыжок потреблён вместе с этим вводом
             }
+        }
+        // Отсчёт таймера атаки — РОВНО 1 раз за тик (не в simulate: multi-call реплей/бэклог
+        // досрочно завершал бы каст). Триггер каста ставится в simulate, отсчёт — здесь.
+        if (e.move.attackTime > 0.0f) {
+            e.move.attackTime -= dt;
+            if (e.move.attackTime < 0.0f) e.move.attackTime = 0.0f;
         }
     }
 
@@ -546,6 +558,8 @@ void GameWorld::writeStates(std::vector<EntityState>& out) const {
         s.velY = e.move.velocityY;
         s.hp = e.hp;
         s.aux = e.aux;
+        s.attackT = e.move.attackTime;
+        s.charType = e.charType;
     }
 }
 

@@ -1,4 +1,5 @@
-cmake_minimum_required(VERSION 3.15)
+# 3.20 — требование Jolt (его CMakeLists FATAL_ERROR ниже 3.20).
+cmake_minimum_required(VERSION 3.20)
 project(vbase_server C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -61,6 +62,11 @@ endif()
 
 if(WIN32)
     target_link_libraries(vbase_server ws2_32 winmm)
+else()
+    # std::thread / Jolt на Linux. Сам Jolt тоже PUBLIC -pthread, это дубль на случай
+    # линкера, который не протаскивает флаг со статической либы.
+    find_package(Threads REQUIRED)
+    target_link_libraries(vbase_server Threads::Threads)
 endif()
 
 # Jolt: линковка таргета тянет и его PUBLIC-дефайны/include (см. выше).

@@ -441,6 +441,54 @@ ARCHITECTURE §3). Осталось по желанию: своя `assets/textur
 - Настоящий текстовый IME (для чата/имён) через `GameActivity_showSoftInput` +
   подача символов в ImGui. Для IP хватает встроенной цифровой клавиатуры.
 
+## Выбор персонажа (KayKit-ростер)
+
+Главный герой переведён с лисы на гуманоидов из **KayKit Adventurers (CC0)**. В
+`app/src/main/assets/models/` лежат 5 персонажей (общий скелет **41 кость, 76 анимаций**,
+одна встроенная текстура, один материал — грузятся текущим `loadGltfModel` без правок):
+`Mage`, `Barbarian`, `Knight`, `Rogue`, `Rogue_Hooded`. Каждый .glb self-contained (меш +
+риг + весь набор анимаций + реквизит). Директива сцены `player model <..> scale <s> yaw <o>
+hide <подстроки>` уже умеет прятать лишний реквизит (см. `SceneLoader`/`Model.cpp`).
+
+Готовые параметры для каждого (scale 1.0, yaw 0 — как у мага; правится живьём в DebugPanel):
+
+| Персонаж | model | hide (спрятать) | остаётся (лук) | attack-клип |
+|---|---|---|---|---|
+| Mage | models/Mage.glb | `wand,spellbook` | шляпа, плащ, 2H-посох | Spellcast_Shoot |
+| Barbarian | models/Barbarian.glb | `offhand,2h_axe,mug` | шляпа, плащ, 1H-топор, круглый щит | 1H_Melee_Attack_Chop |
+| Knight | models/Knight.glb | `offhand,2h_sword,badge,rectangle,spike` | шлем, плащ, 1H-меч, круглый щит | 1H_Melee_Attack_Slice_Diagonal |
+| Rogue | models/Rogue.glb | `crossbow,throwable` | плащ, парные ножи | Dualwield_Melee_Attack_Slice |
+| Rogue_Hooded | models/Rogue_Hooded.glb | `crossbow,throwable` | капюшон, плащ, парные ножи | Dualwield_Melee_Attack_Slice |
+
+**✅ СДЕЛАНО (стартовое меню → выбор персонажа → бой; сетевой, protocol v5).** Ростер как данные
+(`config/characters.cfg` + `game/CharacterRoster.*`); `Scene` держит РЕЕСТР моделей (`chars_`, все 5
+грузятся в `build`, выбор индексом — без утечек GPU), `makeCharItem(index,...)`. Новый экран
+`UiMode::CharacterSelect` (`screens/CharacterSelectScreen.*`) с 3D-превью (крутится) — рендер-путь
+выбирает главный цикл по `GameUi::mode()` (`renderCharacterPreview`/`renderMenuBackdrop`; мир скрыт
+за меню). Поток: `HomePanel` (В бой/Host/Join) → CharacterSelect → Battle. Сеть: `EntityState.charType`
++ `InputMsg.charType` (аплинк без засорения `Character`: `NetClient::setCharType`), `GameWorld.Entity.charType`;
+чужие рисуются своей моделью. attack-клип per-character (mage→Spellcast_Shoot, barbarian→Chop, knight→Slice,
+rogue→Dualwield). Desktop: авто-join убран (заход через меню), для тестов флаг `--join`.
+
+**Осталось по фиче (не входило):** сохранение выбора между запусками; разные статы/способности
+персонажей; отдельная камера-подставка/фон для превью (сейчас чистый фон).
+
+**Что нужно для фичи «выбор персонажа игроком» (историческая заметка):**
+1. Каталог персонажей как ДАННЫЕ (id/имя/model/scale/yaw/hide/attackClip) — из этой таблицы
+   (напр. новый `config/characters.cfg` + парсер, по образцу существующих конфигов, ЛИБО
+   несколько директив `character ...` в сцене).
+2. **attack-клип per-character.** Сейчас `Scene::makeFoxItem`/резолв в `build` хардкодит поиск
+   `spellcast_shoot` → ВСЕ персонажи (набор анимаций общий!) кастуют Spellcast_Shoot, что верно
+   только для мага. Добавить поле attack-клипа в каталог/директиву (`player ... attack <clip>`),
+   резолвить по имени (fallback — текущий keyword-поиск).
+3. Клиент выбирает персонажа (экран/панель) → нужен runtime-перезагруз скиннинг-модели
+   (сейчас `Scene::build` грузит одну модель раз; понадобится освобождать старые
+   `SkinnedHandle`/`TextureHandle` и грузить новую — либо выбор до входа в бой).
+4. Сеть: тип персонажа per-hero в снапшоте (новое поле в `EntityState` → бамп
+   `kProtocolVersion`), чтобы чужие рисовались своей моделью. Сейчас `Scene` держит ОДНУ
+   скиннинг-модель на всех аватаров — для разных моделей одновременно нужно хранить набор
+   моделей и выбирать по типу сущности (см. коммент в `Scene.h` у `foxModel_`).
+
 ## Принцип
 
 Всё «над рендером» и «над платформой» держим платформонезависимым. Новые фичи —

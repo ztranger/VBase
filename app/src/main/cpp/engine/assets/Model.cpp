@@ -1,5 +1,6 @@
 #include "engine/assets/Model.h"
 
+#include <cctype>
 #include <cmath>
 #include <cstring>
 
@@ -30,6 +31,19 @@ void computeGlobal(const std::vector<ModelNode>& nodes, int i,
         global[i] = local[i];
     }
     done[i] = 1;
+}
+
+// Трансформ точки матрицей (column-major, v' = M*v).
+Vec3 mulPoint(const Mat4& m, Vec3 p) {
+    return {m.m[0] * p.x + m.m[4] * p.y + m.m[8] * p.z + m.m[12],
+            m.m[1] * p.x + m.m[5] * p.y + m.m[9] * p.z + m.m[13],
+            m.m[2] * p.x + m.m[6] * p.y + m.m[10] * p.z + m.m[14]};
+}
+// Трансформ направления (без переноса) — для нормалей (годится для жёстких трансформов).
+Vec3 mulDir(const Mat4& m, Vec3 d) {
+    return {m.m[0] * d.x + m.m[4] * d.y + m.m[8] * d.z,
+            m.m[1] * d.x + m.m[5] * d.y + m.m[9] * d.z,
+            m.m[2] * d.x + m.m[6] * d.y + m.m[10] * d.z};
 }
 
 // Найти интервал ключей [k, k+1] для времени t и фактор смешивания f.
@@ -131,7 +145,36 @@ void SkinnedModel::sampleBlend(int animA, float timeA, int animB, float timeB,
     poseToJoints(*this, T, R, S, out);
 }
 
-bool loadGltfModel(AssetSource& src, const char* path, SkinnedModel& out) {
+int SkinnedModel::findAnimation(const std::vector<std::string>& keywords, int fallback) const {
+    auto lower = [](std::string s) {
+        for (char& c : s) c = (char)std::tolower((unsigned char)c);
+        return s;
+    };
+    // Ключевые слова приводим к нижнему регистру заранее — можно передавать имя клипа
+    // в любом регистре (напр. "Spellcast_Shoot" из ростера).
+    std::vector<std::string> kws;
+    kws.reserve(keywords.size());
+    for (const std::string& kw : keywords) kws.push_back(lower(kw));
+
+    // Проход 1: точное совпадение имени (без регистра) с любым ключевым словом.
+    for (size_t i = 0; i < animations.size(); ++i) {
+        std::string nm = lower(animations[i].name);
+        for (const std::string& kw : kws) {
+            if (nm == kw) return (int)i;
+        }
+    }
+    // Проход 2: имя содержит ключевое слово как подстроку (Walking_A -> "walk" и т.п.).
+    for (size_t i = 0; i < animations.size(); ++i) {
+        std::string nm = lower(animations[i].name);
+        for (const std::string& kw : kws) {
+            if (!kw.empty() && nm.find(kw) != std::string::npos) return (int)i;
+        }
+    }
+    return fallback;
+}
+
+bool loadGltfModel(AssetSource& src, const char* path, SkinnedModel& out,
+                   const std::vector<std::string>* hideNodes) {
     std::vector<uint8_t> bytes;
     if (!src.read(path, bytes)) {
         LOGW("glTF-ассет не найден: %s", path);
@@ -161,9 +204,74 @@ bool loadGltfModel(AssetSource& src, const char* path, SkinnedModel& out) {
         mn.parent = nodeIndex(data, nd.parent);
     }
 
+    // Скин: кости + обратные bind-матрицы (первый скин). Читаем ДО геометрии — нужно,
+    // чтобы привязать незаскиненные меши-аксессуары к ближайшей кости.
+    if (data->skins_count > 0) {
+        const cgltf_skin& skin = data->skins[0];
+        out.jointNodes.resize(skin.joints_count);
+        out.inverseBind.resize(skin.joints_count);
+        for (size_t j = 0; j < skin.joints_count; ++j) {
+            out.jointNodes[j] = nodeIndex(data, skin.joints[j]);
+            Mat4 ib;  // glTF хранит матрицы column-major -> прямо в .m
+            if (skin.inverse_bind_matrices) {
+                cgltf_accessor_read_float(skin.inverse_bind_matrices, j, ib.m, 16);
+            }
+            out.inverseBind[j] = ib;
+        }
+        if (skin.joints_count > (size_t)SkinnedModel::kMaxJoints) {
+            LOGW("Костей %u > лимита %d — часть не влезет в uJoints[]",
+                 (uint32_t)skin.joints_count, SkinnedModel::kMaxJoints);
+        }
+    }
+
+    // Узел -> индекс кости (для поиска кости-предка у статичных мешей).
+    std::vector<int> nodeToJoint(out.nodes.size(), -1);
+    for (size_t j = 0; j < out.jointNodes.size(); ++j) {
+        if (out.jointNodes[j] >= 0) nodeToJoint[out.jointNodes[j]] = (int)j;
+    }
+    // Мировые матрицы узлов в bind-позе (по базовым TRS) — чтобы пред-трансформировать
+    // вершины статичных аксессуаров (шляпа/плащ/посох) в мировое положение скелета.
+    std::vector<Mat4> restGlobal(out.nodes.size());
+    {
+        std::vector<Mat4> local(out.nodes.size());
+        for (size_t i = 0; i < out.nodes.size(); ++i)
+            local[i] = trs(out.nodes[i].t, out.nodes[i].r, out.nodes[i].s);
+        std::vector<char> done(out.nodes.size(), 0);
+        for (size_t i = 0; i < out.nodes.size(); ++i)
+            computeGlobal(out.nodes, (int)i, local, restGlobal, done);
+    }
+    // Узел, ссылающийся на каждый меш (для трансформа и фильтра по имени).
+    std::vector<int> meshNode(data->meshes_count, -1);
+    for (size_t i = 0; i < data->nodes_count; ++i) {
+        if (data->nodes[i].mesh) {
+            size_t mi = (size_t)(data->nodes[i].mesh - data->meshes);
+            if (mi < (size_t)data->meshes_count) meshNode[mi] = (int)i;
+        }
+    }
+    // Ближайшая кость вверх по иерархии от узла (включая сам узел).
+    auto ancestorJoint = [&](int node) -> int {
+        for (int c = node; c >= 0; c = out.nodes[c].parent)
+            if (nodeToJoint[c] >= 0) return nodeToJoint[c];
+        return -1;
+    };
+    auto lower = [](std::string s) {
+        for (char& c : s) c = (char)std::tolower((unsigned char)c);
+        return s;
+    };
+
     // Геометрия: собираем все примитивы всех мешей в один буфер.
     for (size_t m = 0; m < data->meshes_count; ++m) {
         const cgltf_mesh& mesh = data->meshes[m];
+        int meshN = (m < (size_t)meshNode.size()) ? meshNode[m] : -1;
+        // Фильтр: скрыть меши по подстроке имени узла (лишний реквизит KayKit и т.п.).
+        if (hideNodes && meshN >= 0 && data->nodes[meshN].name) {
+            std::string nm = lower(data->nodes[meshN].name);
+            bool hidden = false;
+            for (const std::string& h : *hideNodes) {
+                if (!h.empty() && nm.find(lower(h)) != std::string::npos) { hidden = true; break; }
+            }
+            if (hidden) continue;
+        }
         for (size_t p = 0; p < mesh.primitives_count; ++p) {
             const cgltf_primitive& prim = mesh.primitives[p];
             const cgltf_accessor* pos = nullptr;
@@ -184,6 +292,14 @@ bool loadGltfModel(AssetSource& src, const char* path, SkinnedModel& out) {
             }
             if (pos == nullptr) continue;
 
+            // Незаскиненный меш (аксессуар: шляпа/плащ/посох) — привязываем к ближайшей
+            // кости-предку и пред-трансформируем вершины в мировое положение bind-позы.
+            // Формула точна: скиннинг даёт global(B)*inverseBind[B]*pos', где inverseBind[B]
+            // == restGlobal(B)^-1, а pos' = restGlobal(N)*pos -> итог = animGlobal(N)*pos.
+            const bool skinned = (joints != nullptr);
+            const int attachJoint = skinned ? -1 : ((meshN >= 0) ? ancestorJoint(meshN) : -1);
+            const Mat4 xform = (!skinned && meshN >= 0) ? restGlobal[meshN] : Mat4::identity();
+
             uint32_t base = (uint32_t)out.vertices.size();
             size_t count = pos->count;
             for (size_t i = 0; i < count; ++i) {
@@ -192,13 +308,20 @@ bool loadGltfModel(AssetSource& src, const char* path, SkinnedModel& out) {
                 if (nrm) cgltf_accessor_read_float(nrm, i, &v.nx, 3);
                 else { v.ny = 1.0f; }
                 if (uv) cgltf_accessor_read_float(uv, i, &v.u, 2);
-                if (joints) {
+                if (skinned) {
                     cgltf_uint j[4] = {0, 0, 0, 0};
                     cgltf_accessor_read_uint(joints, i, j, 4);
                     for (int q = 0; q < 4; ++q) v.joints[q] = (float)j[q];
+                    if (weights) cgltf_accessor_read_float(weights, i, v.weights, 4);
+                    else { v.weights[0] = 1.0f; }
+                } else {
+                    Vec3 pp = mulPoint(xform, Vec3{v.px, v.py, v.pz});
+                    Vec3 dn = mulDir(xform, Vec3{v.nx, v.ny, v.nz});
+                    v.px = pp.x; v.py = pp.y; v.pz = pp.z;
+                    v.nx = dn.x; v.ny = dn.y; v.nz = dn.z;
+                    v.joints[0] = (float)(attachJoint >= 0 ? attachJoint : 0);
+                    v.weights[0] = 1.0f;
                 }
-                if (weights) cgltf_accessor_read_float(weights, i, v.weights, 4);
-                else { v.weights[0] = 1.0f; }
                 out.vertices.push_back(v);
             }
 
@@ -209,25 +332,6 @@ bool loadGltfModel(AssetSource& src, const char* path, SkinnedModel& out) {
             } else {
                 for (size_t i = 0; i < count; ++i) out.indices.push_back(base + (uint32_t)i);
             }
-        }
-    }
-
-    // Скин: кости + обратные bind-матрицы (берём первый).
-    if (data->skins_count > 0) {
-        const cgltf_skin& skin = data->skins[0];
-        out.jointNodes.resize(skin.joints_count);
-        out.inverseBind.resize(skin.joints_count);
-        for (size_t j = 0; j < skin.joints_count; ++j) {
-            out.jointNodes[j] = nodeIndex(data, skin.joints[j]);
-            Mat4 ib;  // glTF хранит матрицы column-major -> прямо в .m
-            if (skin.inverse_bind_matrices) {
-                cgltf_accessor_read_float(skin.inverse_bind_matrices, j, ib.m, 16);
-            }
-            out.inverseBind[j] = ib;
-        }
-        if (skin.joints_count > (size_t)SkinnedModel::kMaxJoints) {
-            LOGW("Костей %u > лимита %d — часть не влезет в uJoints[]",
-                 (uint32_t)skin.joints_count, SkinnedModel::kMaxJoints);
         }
     }
 

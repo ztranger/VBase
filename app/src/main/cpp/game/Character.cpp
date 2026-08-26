@@ -13,10 +13,19 @@ void Character::snapshot() {
     prevFacingYaw = facingYaw;
     prevAnimParam = animParam;
     prevAnimTime = animTime;
+    prevAttackTime = attackTime;
 }
 
 void Character::simulate(float dt, const InputCommand& in, CollisionWorld* world) {
-    float mag = in.magnitude;
+    // Старт атаки — ДИСКРЕТНОЕ событие. Ставим таймер здесь (в simulate), чтобы триггер
+    // корректно переигрывался при реплее реконсиляции (attackTime всё равно сбрасывается
+    // снапшотом перед реплеем). Сам отсчёт таймера — вне simulate (1 раз/тик у владельца),
+    // иначе multi-call реплей досрочно завершал бы каст (как и с animTime).
+    if (in.attack && attackTime <= 0.0f) attackTime = kAttackDuration;
+    const bool attacking = attackTime > 0.0f;
+
+    // Во время каста персонаж рутится: движение и прыжок игнорируются.
+    float mag = attacking ? 0.0f : in.magnitude;
     Vec3 moveDir{in.moveX, 0.0f, in.moveZ};
 
     speed01 += (clamp01(mag) - speed01) * clamp01(dt * 10.0f);
@@ -33,7 +42,7 @@ void Character::simulate(float dt, const InputCommand& in, CollisionWorld* world
     if (world != nullptr && collider != 0) {
         // Контроллер прогоняем КАЖДЫЙ тик (гравитация/земля/прыжок), даже стоя на месте.
         // velocityY — наше состояние (реконсилируется), контроллер её только применяет.
-        position = world->moveCharacter(collider, horizVel, velocityY, in.jump, dt);
+        position = world->moveCharacter(collider, horizVel, velocityY, attacking ? false : in.jump, dt);
     } else {
         position = position + horizVel * dt;  // fallback без коллизий/гравитации
     }

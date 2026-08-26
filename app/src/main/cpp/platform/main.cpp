@@ -257,8 +257,13 @@ extern "C" void android_main(android_app* app) {
             }
             float alpha = engine.accumulator / kTick;  // доля до следующего тика
 
-            // Рендер с интерполяцией между тиками.
-            RenderFrame frame = engine.scene->render(alpha, engine.renderer->aspectRatio(), dt);
+            // Рендер-путь по экрану: бой -> мир; выбор персонажа -> 3D-превью; меню -> чистый фон.
+            float aspect = engine.renderer->aspectRatio();
+            UiMode uiMode = GameUi::mode();
+            RenderFrame frame =
+                (uiMode == UiMode::Battle)          ? engine.scene->render(alpha, aspect, dt)
+              : (uiMode == UiMode::CharacterSelect) ? engine.scene->renderCharacterPreview(alpha, aspect, dt)
+                                                    : engine.scene->renderMenuBackdrop(aspect);
             frame.deltaTime = dt;
 
             // Свет задаёт сцена (из файла), правится слайдером в GameUi.

@@ -72,6 +72,7 @@ void draw(UiShell::Ctx& ctx) {
     ImGui::SeparatorText("Character");
     ImGui::Text("Speed: %.2f", (double)ctx.scene.characterSpeed());
     if (ctx.btn("Jump (Space)")) ctx.scene.requestJump();
+    if (ctx.btn("Attack (F)")) ctx.scene.requestAttack();
     float yawOff = ctx.scene.modelYawOffset();
     if (ImGui::SliderFloat("Model yaw", &yawOff, -3.15f, 3.15f)) {
         ctx.scene.setModelYawOffset(yawOff);

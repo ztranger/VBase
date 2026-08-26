@@ -108,6 +108,7 @@ struct PlayerSpec {
     Vec3 pos{0.0f, 0.0f, 0.0f};
     float scale = 0.03f;
     float yawOffset = 0.0f;  // подгонка "морда по движению"
+    std::vector<std::string> hideNodes;  // подстроки имён узлов, чьи меши не грузим (реквизит)
     // Капсула контроллера (кинематическая физика). cylHalf — половина высоты цилиндра.
     float colliderRadius = 0.3f;
     float colliderCylHalf = 0.3f;

@@ -60,6 +60,7 @@ add_library(vbase SHARED
         game/GameWorld.cpp
         game/Scene.cpp
         game/SceneLoader.cpp
+        game/CharacterRoster.cpp
         engine/physics/CollisionWorld.cpp
         engine/render/GlRenderer.cpp
         engine/render/GameUi.cpp
@@ -69,6 +70,7 @@ add_library(vbase SHARED
         engine/render/ui/screens/LoadingScreen.cpp
         engine/render/ui/screens/MainMenuScreen.cpp
         engine/render/ui/screens/BattleScreen.cpp
+        engine/render/ui/screens/CharacterSelectScreen.cpp
         engine/render/ui/panels/HomePanel.cpp
         engine/render/ui/windows/DebugPanel.cpp
         engine/render/ui/windows/BuildingInfo.cpp

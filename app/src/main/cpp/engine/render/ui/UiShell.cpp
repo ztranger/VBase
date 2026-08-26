@@ -3,6 +3,7 @@
 #include "imgui.h"
 
 #include "engine/render/ui/screens/BattleScreen.h"
+#include "engine/render/ui/screens/CharacterSelectScreen.h"
 #include "engine/render/ui/screens/LoadingScreen.h"
 #include "engine/render/ui/screens/MainMenuScreen.h"
 
@@ -91,6 +92,9 @@ void build(GameUiState& state, Scene& scene, const UiSkin::Assets& skin) {
         }
         case UiMode::MainMenu:
             MainMenuScreen::draw(ctx);
+            break;
+        case UiMode::CharacterSelect:
+            CharacterSelectScreen::draw(ctx);
             break;
         case UiMode::Battle:
             BattleScreen::draw(ctx);

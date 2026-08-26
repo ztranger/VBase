@@ -12,12 +12,13 @@
 Цветовая палитра (TD × Orcs Must Die): **[docs/UI_PALETTE.md](docs/UI_PALETTE.md)**.
 Ниже — самое нужное для старта.
 
-## Три сборочные цели
+## Сборочные цели
 
 | Цель | Где | Как собрать | Что это |
 |---|---|---|---|
 | Android-приложение | `app/` | Android Studio (Run ▶) | клиент: рендер GLES3 + игра + сеть |
 | Выделенный сервер | `server/` | `server\build.bat` (MSVC) | авторитетный сервер, headless |
+| Сервер в Docker | `server/Dockerfile` | `build-server-docker.cmd` | тот же сервер, Linux-контейнер, UDP 7777 |
 | Десктоп-клиент | `desktop/` | `desktop\build.bat` (MSVC) | GLFW + desktop GL 3.3, переиспользует ядро |
 
 Нативный код клиента живёт в `app/src/main/cpp/`, разложен по слоям:
@@ -37,6 +38,13 @@ Include — **квалифицированные** от корня `cpp/` (на�
 двойному клику (важно: ассеты грузятся относительно рабочей папки `*/build`, поэтому
 голый симлинк на `.exe` в корне НЕ годится). Аргументы пробрасываются: у сервера
 `[port] [assetsDir] [scenePath]`, у десктопа `[serverIp] [assetsDir] [scenePath]`.
+
+**Docker (сервер):** `build-server-docker.cmd` собирает образ `vbase-server`
+(Linux, gcc; не Windows-контейнер), `run-server-docker.cmd` поднимает с
+`-p 7777:7777/udp` (или `docker compose up --build`). Клиенты на этой машине —
+`127.0.0.1`, телефон — LAN-IP Windows, **не** `172.x` контейнера. Аргументы
+пробрасываются в `vbase_server` (`--selftest`, порт, сцена). Нужен Docker Desktop
+в режиме Linux containers.
 
 ## Тулчейн (эта машина, Windows)
 

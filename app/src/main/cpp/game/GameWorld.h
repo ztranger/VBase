@@ -23,6 +23,7 @@ struct Entity {
     uint32_t id = 0;
     EntityType type = EntityType::Hero;
     uint8_t team = 0;
+    uint8_t charType = 0; // герой: выбранный персонаж (индекс ростера) — только транслируется в снапшот
     Character move;       // трансформ + (для подвижных) физика/анимация
     InputCommand input;   // герой: последний ввод (иначе не используется)
     float hp = 0.0f, maxHp = 0.0f;
@@ -67,6 +68,7 @@ public:
     uint32_t addPlayer();                     // подключившийся игрок: авто-выбор стороны + спавн
     void removeEntity(uint32_t id);           // убрать сущность и её коллайдер
     void setHeroInput(uint32_t heroId, const InputCommand& in);
+    void setHeroCharType(uint32_t heroId, uint8_t charType);  // выбранный персонаж (для снапшота)
     // Попытка возвести здание героем на клетке сетки. Валидирует (тип buildable, хватает
     // ресурса, клетка в арене и свободна), тратит ресурс, спавнит сущность. false = отказ.
     bool tryBuild(uint32_t builderId, EntityType type, int cellX, int cellZ);

@@ -39,6 +39,7 @@ add_executable(vbase_desktop
         ${APP}/engine/assets/Model.cpp
         ${APP}/game/Scene.cpp
         ${APP}/game/SceneLoader.cpp
+        ${APP}/game/CharacterRoster.cpp
         ${APP}/engine/physics/CollisionWorld.cpp
         ${APP}/engine/render/GlRenderer.cpp
         ${APP}/engine/render/VkApi.cpp
@@ -50,6 +51,7 @@ add_executable(vbase_desktop
         ${APP}/engine/render/ui/screens/LoadingScreen.cpp
         ${APP}/engine/render/ui/screens/MainMenuScreen.cpp
         ${APP}/engine/render/ui/screens/BattleScreen.cpp
+        ${APP}/engine/render/ui/screens/CharacterSelectScreen.cpp
         ${APP}/engine/render/ui/panels/HomePanel.cpp
         ${APP}/engine/render/ui/windows/DebugPanel.cpp
         ${APP}/engine/render/ui/windows/BuildingInfo.cpp

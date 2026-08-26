@@ -1,0 +1,49 @@
+.git
+.idea
+.gradle
+.kotlin
+**/.cxx
+**/.externalNativeBuild
+
+# Native build trees (NOT third_party/jolt/Build — that is Jolt's CMake).
+/build
+/server/build
+/desktop/build
+/app/build
+/captures
+
+desktop
+docs
+*.md
+local.properties
+*.apk
+*.aab
+*.log
+
+# Client-only third_party (server needs enet + jolt).
+third_party/imgui
+third_party/glfw
+third_party/vulkan
+third_party/glew
+third_party/cgltf
+third_party/stb
+
+# Jolt extras not compiled when used as add_subdirectory.
+third_party/jolt/Docs
+third_party/jolt/Assets
+third_party/jolt/Samples
+third_party/jolt/HelloWorld
+third_party/jolt/UnitTests
+third_party/jolt/JoltViewer
+third_party/jolt/TestFramework
+third_party/jolt/PerformanceTest
+
+# Client-only assets (image copies scenes/ + config/ explicitly).
+app/src/main/assets/models
+app/src/main/assets/shaders
+app/src/main/assets/ui
+app/src/main/assets/fonts
+app/src/main/assets/textures
+app/src/main/java
+app/src/main/res
+app/src/main/AndroidManifest.xml

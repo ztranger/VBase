@@ -26,6 +26,8 @@ struct InputMsg {
     float moveX, moveZ, magnitude;
     uint8_t faceMove;
     uint8_t jump;
+    uint8_t attack;    // запрос атаки (каста) на этом тике — одноразовое событие
+    uint8_t charType;  // выбранный персонаж (индекс ростера) — для рендера героя чужими
     uint32_t ackTick;  // последний применённый клиентом снапшот (база для дельты)
 };
 // Запрос постройки: тип здания + клетка сетки. Надёжно (дискретное событие).
@@ -64,7 +66,8 @@ bool stateChanged(const EntityState& a, const EntityState& b) {
            std::fabs(a.z - b.z) > e || std::fabs(a.yaw - b.yaw) > e ||
            std::fabs(a.animParam - b.animParam) > e || std::fabs(a.speed01 - b.speed01) > e ||
            std::fabs(a.velY - b.velY) > e ||
-           std::fabs(a.hp - b.hp) > e || std::fabs(a.aux - b.aux) > e;
+           std::fabs(a.hp - b.hp) > e || std::fabs(a.aux - b.aux) > e ||
+           std::fabs(a.attackT - b.attackT) > e || a.charType != b.charType;
 }
 
 const EntityState* findState(const std::vector<EntityState>& v, uint32_t id) {
@@ -99,6 +102,7 @@ struct NetClient::Impl {
     uint32_t myId = 0;
     NetStatus status = NetStatus::Offline;
     bool newSnapshot = false;
+    uint8_t charType = 0;   // выбранный персонаж — шлём в каждом InputMsg
     uint32_t ackSeq = 0;
     uint8_t gamePhase = 0;  // GamePhase из последнего снапшота
     std::vector<EntityState> states;   // текущее полное состояние (реконструированное)
@@ -184,13 +188,17 @@ void NetClient::sendInput(const InputCommand& cmd) {
     msg.magnitude = cmd.magnitude;
     msg.faceMove = cmd.faceMove ? 1 : 0;
     msg.jump = cmd.jump ? 1 : 0;
+    msg.attack = cmd.attack ? 1 : 0;
+    msg.charType = impl_->charType;
     msg.ackTick = impl_->stateTick;  // подтверждаем последний применённый снапшот
-    // Обычный ввод — ненадёжно (realtime). Прыжок — надёжно, чтобы не потерять
-    // одноразовое событие (иначе клиент подпрыгнет в предсказании, а сервер — нет).
-    uint32_t flags = cmd.jump ? ENET_PACKET_FLAG_RELIABLE : 0;
+    // Обычный ввод — ненадёжно (realtime). Прыжок/атака — надёжно, чтобы не потерять
+    // одноразовое событие (иначе клиент проиграет его в предсказании, а сервер — нет).
+    uint32_t flags = (cmd.jump || cmd.attack) ? ENET_PACKET_FLAG_RELIABLE : 0;
     ENetPacket* pkt = enet_packet_create(&msg, sizeof(msg), flags);
     sendPacket(impl_->peer, 0, pkt);
 }
+
+void NetClient::setCharType(uint8_t charType) { impl_->charType = charType; }
 
 void NetClient::sendBuild(uint8_t buildType, int cellX, int cellZ) {
     if (impl_->peer == nullptr || impl_->status != NetStatus::Connected) return;
@@ -398,7 +406,9 @@ void NetServer::poll() {
                         cmd.magnitude = m.magnitude;
                         cmd.faceMove = (m.faceMove != 0);
                         cmd.jump = (m.jump != 0);
+                        cmd.attack = (m.attack != 0);
                         impl_->game.setHeroInput(conn->heroId, cmd);
+                        impl_->game.setHeroCharType(conn->heroId, m.charType);  // выбор персонажа
                     }
                 } else if (msgType == MSG_BUILD && ev.packet->dataLength >= sizeof(BuildMsg)) {
                     BuildMsg m;

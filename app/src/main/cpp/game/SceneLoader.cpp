@@ -203,6 +203,7 @@ bool loadSceneDesc(AssetSource& assets, const char* path, SceneDesc& out) {
 
         } else if (cmd == "player") {
             // player model <path> [pos x y z] [scale s] [yaw o] [capsule <radius> <cylHalf>]
+            //               [hide sub1,sub2,...]  <- скрыть меши-узлы по подстроке имени
             out.player.present = true;
             size_t i = 1;
             while (i < t.size()) {
@@ -214,6 +215,18 @@ bool loadSceneDesc(AssetSource& assets, const char* path, SceneDesc& out) {
                 else if (k == "capsule") {
                     if (!readF(t, i, line, out.player.colliderRadius)) return false;
                     if (!readF(t, i, line, out.player.colliderCylHalf)) return false;
+                }
+                else if (k == "hide") {
+                    std::string list;
+                    if (!readStr(t, i, line, list)) return false;
+                    size_t s = 0;  // разбор списка "a,b,c" по запятым
+                    while (s < list.size()) {
+                        size_t e = list.find(',', s);
+                        if (e == std::string::npos) e = list.size();
+                        std::string item = list.substr(s, e - s);
+                        if (!item.empty()) out.player.hideNodes.push_back(item);
+                        s = e + 1;
+                    }
                 }
                 else { LOGE("scene: строка %d: неизвестный ключ player '%s'", line, k.c_str()); return false; }
             }

@@ -1,0 +1,14 @@
+# Dedicated VBase server (Linux). From repo root:
+#   docker compose up --build
+# UDP 7777. Clients on this PC: 127.0.0.1  Phone: host LAN IP, not 172.x.
+services:
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    image: vbase-server
+    init: true
+    ports:
+      - "7777:7777/udp"
+    stdin_open: true
+    tty: true

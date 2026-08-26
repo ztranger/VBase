@@ -4,6 +4,8 @@
 // Живёт рядом с платформенным слоем (не в Scene). Вызывается из RenderFrame::ui.
 // Иерархия: docs/UI_SYSTEM.md.
 
+#include "engine/render/ui/UiTypes.h"  // UiMode (платформа выбирает рендер-путь по режиму)
+
 class Scene;
 class Renderer;
 struct AssetSource;
@@ -28,6 +30,9 @@ void build(GameUiState& state, Scene& scene);
 // Активен ли игровой ввод (бой без модалки). Платформа гейтит WASD/тач-стики по нему,
 // чтобы в меню/лоадинге/под диалогом герой и камера не управлялись пустыми зонами экрана.
 bool gameplayActive();
+
+// Текущий экран (платформа выбирает рендер-путь: мир / превью персонажа / фон меню).
+UiMode mode();
 
 // Стартовать на экране лоадинга (десктопный флаг --loading). Одноразово при запуске.
 void requestLoadingScreen();

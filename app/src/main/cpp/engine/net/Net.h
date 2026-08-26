@@ -22,7 +22,9 @@ constexpr float kTickDt = 1.0f / kTickHz;
 // любом изменении раскладки сетевых структур (WelcomeMsg/InputMsg/SnapshotHeader/
 // EntityState) — иначе рассинхрон ABI между отдельно собранными билдами = порча памяти.
 // v2: SnapshotHeader получил байт GamePhase (G3-A, бой). v3: сообщение MSG_BUILD (G3-B).
-constexpr uint32_t kProtocolVersion = 3;
+// v4: атака — InputMsg.attack + EntityState.attackT (дискретная анимация каста).
+// v5: выбор персонажа — InputMsg.charType + EntityState.charType (индекс модели в ростере).
+constexpr uint32_t kProtocolVersion = 5;
 
 // Тип игровой сущности (тег в снапшоте; по нему клиент выбирает визуал/поведение).
 // Пока используется только Hero; остальные — задел под геймплей (генераторы,
@@ -65,6 +67,8 @@ struct EntityState {
     float velY = 0.0f;     // вертикальная скорость (для реконсиляции прыжка на клиенте)
     float hp = 0.0f;       // здоровье (герой/враг/здание); 0 = не используется
     float aux = 0.0f;      // generic-слот по типу: ресурс в хранилище, прогресс, …
+    float attackT = 0.0f;  // остаток времени атаки героя, сек (>0 = идёт каст; для анимации)
+    uint8_t charType = 0;  // индекс персонажа в ростере (какой моделью рисовать героя)
 };
 
 // EntityState шлётся сырым memcpy (Net.cpp) и НЕ входит в pack(1)-блок — между team (off 5)
@@ -72,7 +76,7 @@ struct EntityState {
 // но kProtocolVersion этого не ловит: страхуемся статик-проверкой. Любое поле, сместившее
 // layout, уронит сборку ЗДЕСЬ (а не породит порчу памяти в снапшотах) — напоминание бампнуть
 // версию И сверить раскладку на обеих целях.
-static_assert(sizeof(EntityState) == 44, "EntityState: размер изменился — бампни kProtocolVersion");
+static_assert(sizeof(EntityState) == 52, "EntityState: размер изменился — бампни kProtocolVersion");
 static_assert(alignof(EntityState) == 4, "EntityState: выравнивание изменилось");
 static_assert(offsetof(EntityState, x) == 8, "EntityState: паддинг после team съехал");
 
@@ -93,6 +97,7 @@ public:
     uint32_t myId() const;              // 0, пока не пришёл Welcome
 
     void sendInput(const InputCommand& cmd);
+    void setCharType(uint8_t charType);  // выбранный персонаж (шлётся в каждом InputMsg)
     void sendBuild(uint8_t buildType, int cellX, int cellZ);  // запрос постройки (надёжно)
     void poll();                        // прокачать сеть, разобрать сообщения
     bool consumeSnapshot();             // true если пришёл новый снапшот (сбрасывает флаг)
