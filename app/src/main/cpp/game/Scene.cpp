@@ -235,8 +235,12 @@ void Scene::loadRosterModels(Renderer& renderer, AssetSource& assets,
                 {c.attackClip, "spellcast_shoot", "spellcasting", "spellcast", "attack"}, -1);
             pm.attackClipDur = (pm.attackClip >= 0 && pm.attackClip < an)
                                    ? pm.model.animations[pm.attackClip].duration : 0.0f;
-            LOGI("Модель '%s': idle=%d walk=%d run=%d attack=%d (%d анимаций)",
-                 c.id.c_str(), pm.idleClip, pm.walkClip, pm.runClip, pm.attackClip, an);
+            // Клип смерти («труп» моба): у скелетов — рассыпание в кости, иначе Death_A.
+            pm.deathClip = pm.model.findAnimation({"death_c_skeletons", "death_a", "death"}, -1);
+            pm.deathClipDur = (pm.deathClip >= 0 && pm.deathClip < an)
+                                  ? pm.model.animations[pm.deathClip].duration : 0.0f;
+            LOGI("Модель '%s': idle=%d walk=%d run=%d attack=%d death=%d (%d анимаций)",
+                 c.id.c_str(), pm.idleClip, pm.walkClip, pm.runClip, pm.attackClip, pm.deathClip, an);
         } else {
             LOGW("Модель '%s' (%s) не загрузилась — слот останется пустым",
                  c.id.c_str(), c.model.c_str());
@@ -247,7 +251,7 @@ void Scene::loadRosterModels(Renderer& renderer, AssetSource& assets,
 
 SkinnedItem Scene::makeSkinnedItem(const std::vector<PlayerModel>& reg, int index, Vec3 pos,
                                    float yaw, float animParam, float animTime,
-                                   float attackTime) const {
+                                   float attackTime, int oneShotClip, float oneShotTime) const {
     SkinnedItem item;
     if (index < 0 || index >= (int)reg.size()) return item;  // нет такой модели
     const PlayerModel& pm = reg[index];
@@ -261,9 +265,12 @@ SkinnedItem Scene::makeSkinnedItem(const std::vector<PlayerModel>& reg, int inde
                * Mat4::scale({pm.scale, pm.scale, pm.scale});
 
     if (!pm.model.animations.empty()) {
+        // Разовый клип (смерть) перекрывает всё: проигрываем в oneShotTime, без зацикливания.
+        if (oneShotClip >= 0 && oneShotClip < (int)pm.model.animations.size()) {
+            pm.model.sampleAnimation(oneShotClip, oneShotTime, item.joints);
         // Атака перекрывает локомоцию: проигрываем клип каста ОДИН раз до конца, растянув
         // его ровно на окно kAttackDuration (сервер не знает длину клипа — масштаб здесь).
-        if (attackTime > 0.0f && pm.attackClip >= 0 && pm.attackClipDur > 0.0f) {
+        } else if (attackTime > 0.0f && pm.attackClip >= 0 && pm.attackClipDur > 0.0f) {
             float frac = 1.0f - attackTime / Character::kAttackDuration;  // 0..1 прогресс каста
             frac = frac < 0.0f ? 0.0f : (frac > 0.999f ? 0.999f : frac);  // без зацикливания
             pm.model.sampleAnimation(pm.attackClip, frac * pm.attackClipDur, item.joints);
@@ -401,6 +408,7 @@ void Scene::fixedUpdate(float dt) {
     // раз в kReconnectPeriod пробуем переподключиться; host к 127.0.0.1 не трогаем.
     if (client_.status() == NetStatus::Lost) {
         if (!remoteEntities_.empty()) remoteEntities_.clear();
+        if (!dyingMobs_.empty()) dyingMobs_.clear();
         if (!pending_.empty()) pending_.clear();
         if (wantReconnect_) {
             constexpr float kReconnectPeriod = 2.0f;  // сек между попытками
@@ -480,13 +488,24 @@ void Scene::applySnapshot() {
         }
     }
 
-    // Убрать исчезнувшие сущности (нет в текущем снапшоте).
+    // Убрать исчезнувшие сущности (нет в текущем снапшоте). Моб, пропавший в фазе боя, —
+    // это убитый враг: оставляем локальный «труп» с анимацией смерти на его месте.
+    const bool playing = (client_.gamePhase() == (uint8_t)GamePhase::Playing);
     for (size_t i = 0; i < remoteEntities_.size();) {
         bool found = false;
         for (const EntityState& s : states) {
             if (s.id == remoteEntities_[i].id) { found = true; break; }
         }
         if (!found) {
+            const RemoteEntity& re = remoteEntities_[i];
+            if (playing && (EntityType)re.type == EntityType::Enemy && !mobs_.empty()) {
+                int mi = (int)((uint32_t)re.charType % (uint32_t)mobs_.size());
+                if (mobs_[mi].deathClip >= 0 && mobs_[mi].deathClipDur > 0.0f) {
+                    Vec3 p = re.buffer.empty() ? re.ch.position : re.buffer.back().pos;
+                    float yaw = re.buffer.empty() ? re.ch.facingYaw : re.buffer.back().yaw;
+                    dyingMobs_.push_back({mi, p, yaw, 0.0f, mobs_[mi].deathClipDur});
+                }
+            }
             remoteEntities_.erase(remoteEntities_.begin() + (long)i);
         } else {
             ++i;
@@ -522,6 +541,7 @@ void Scene::leaveGame() {
     wantReconnect_ = false;  // сознательный выход — не переподключаемся
     reconnectTimer_ = 0.0f;
     remoteEntities_.clear();
+    dyingMobs_.clear();
     pending_.clear();
     localTeam_ = 0;
     localHp_ = 1.0f;      // вне сессии герой «жив» (иначе своя лиса не рисовалась бы)
@@ -628,11 +648,19 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
                                               : Vec3{1.0f, 0.45f, 0.45f};  // враг
             frame.skinned.push_back(it);
         } else if (et == EntityType::Enemy && !mobs_.empty()) {
-            // Моб-скелет: тип по charType (сервер выставляет), всегда идёт (walk). Смерть/удар
-            // по ядру анимациями — задел на будущее (сейчас проигрываем локомоцию).
+            // Моб-скелет: тип по charType (сервер выставляет). attackTime>0 (флаг с сервера) —
+            // бьёт ядро/героя: лупим attack-клип; иначе идёт -> walk. Смерть — локальный
+            // «труп» после исчезновения из снапшота (см. ниже + applySnapshot).
             int mi = (int)((uint32_t)r.charType % (uint32_t)mobs_.size());
-            SkinnedItem it = makeSkinnedItem(mobs_, mi, r.ch.position, r.ch.facingYaw,
-                                             1.0f /*walk*/, r.ch.animTime, 0.0f);
+            SkinnedItem it;
+            if (r.ch.attackTime > 0.0f && mobs_[mi].attackClip >= 0) {
+                // oneShotClip с растущим animTime -> fmod-цикл: удар повторяется, пока в упоре.
+                it = makeSkinnedItem(mobs_, mi, r.ch.position, r.ch.facingYaw, 0.0f, 0.0f, 0.0f,
+                                     mobs_[mi].attackClip, r.ch.animTime);
+            } else {
+                it = makeSkinnedItem(mobs_, mi, r.ch.position, r.ch.facingYaw, 1.0f /*walk*/,
+                                     r.ch.animTime, 0.0f);
+            }
             frame.skinned.push_back(it);
         } else {
             const EntityVisual& v = visual(et);
@@ -640,6 +668,18 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
                 frame.items.push_back({v.mesh, v.material,
                     Mat4::translation(r.ch.position + Vec3{0.0f, v.yOffset, 0.0f})});
         }
+    }
+
+    // «Трупы» убитых мобов: клип смерти на месте гибели, затем убираем. Чисто клиентская
+    // косметика (сервер сущность уже удалил) — заводится в applySnapshot.
+    for (size_t i = 0; i < dyingMobs_.size();) {
+        DyingMob& d = dyingMobs_[i];
+        d.t += renderDt;
+        if (d.t >= d.dur) { dyingMobs_.erase(dyingMobs_.begin() + (long)i); continue; }
+        float ct = (d.t < d.dur * 0.999f) ? d.t : d.dur * 0.999f;  // не зацикливать
+        frame.skinned.push_back(makeSkinnedItem(mobs_, d.charType, d.pos, d.yaw, 0.0f, 0.0f,
+                                                0.0f, mobs_[d.charType].deathClip, ct));
+        ++i;
     }
 
     // Призрак размещения (режим стройки): куб типа на клетке перед героем, зелёный/красный.

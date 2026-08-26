@@ -430,6 +430,9 @@ void GameWorld::step(float dt) {
         } else {
             e.timer = 0.0f;  // никого в радиусе — таймер удара сброшен (подход не бьёт мгновенно)
         }
+        // Флаг «в упоре и бьёт цель» -> клиент лупит attack-клип моба (иначе walk). Пишется в
+        // EntityState.attackT (то же поле, что каст героя) — без бампа протокола.
+        e.move.attackTime = (atk != nullptr) ? 1.0f : 0.0f;
         if (world_ && e.move.collider != 0)
             e.move.position =
                 world_->moveCharacter(e.move.collider, vel, e.move.velocityY, false, dt);

@@ -194,13 +194,25 @@ private:
         SkinnedHandle mesh = 0;      // GPU-меш (клиентский ресурс)
         TextureHandle tex = 0;
         float scale = 1.0f, yawOffset = 0.0f;
-        int idleClip = 0, walkClip = 1, runClip = 2, attackClip = -1;
+        int idleClip = 0, walkClip = 1, runClip = 2, attackClip = -1, deathClip = -1;
         float attackClipDur = 0.0f;  // длительность клипа атаки, сек (масштаб под kAttackDuration)
+        float deathClipDur = 0.0f;   // длительность клипа смерти, сек (для «трупа» моба)
     };
     std::vector<PlayerModel> chars_;   // ростер героев; индекс = charType в снапшоте (сетевой контракт)
     std::vector<PlayerModel> mobs_;    // ростер мобов (config/enemies.cfg); индекс = enemy.charType
     int localCharIndex_ = 0;           // выбранный локальным игроком
     float previewSpin_ = 0.0f;         // накопленный угол вращения модели на экране выбора
+
+    // «Труп» убитого моба: локальная косметика — проигрывает клип смерти на месте гибели и
+    // убирается. Заводится, когда враг исчез из снапшота в фазе боя (см. applySnapshot).
+    struct DyingMob {
+        int charType = 0;
+        Vec3 pos{0.0f, 0.0f, 0.0f};
+        float yaw = 0.0f;
+        float t = 0.0f;    // время с начала смерти
+        float dur = 1.0f;  // длительность клипа смерти
+    };
+    std::vector<DyingMob> dyingMobs_;
 
     // Клиентский визуал/пикинг по типу сущности — ОДНА таблица вместо разбросанных switch
     // (рендер, пикинг, призрак стройки читают её; yOffset больше НЕ дублируется). Заполняется
@@ -230,9 +242,11 @@ private:
     Vec3 lightDir_{0.4f, 1.0f, 0.6f};  // направление НА свет (из файла сцены)
 
     // Построить отрисовочный предмет модели reg[index] по состоянию (клиентский рендер).
-    // reg — chars_ (герои) или mobs_ (враги).
+    // reg — chars_ (герои) или mobs_ (враги). oneShotClip>=0 — проиграть конкретный клип в
+    // oneShotTime (для «трупа»: смерть), перекрывая локомоцию/атаку.
     SkinnedItem makeSkinnedItem(const std::vector<PlayerModel>& reg, int index, Vec3 pos, float yaw,
-                                float animParam, float animTime, float attackTime = 0.0f) const;
+                                float animParam, float animTime, float attackTime = 0.0f,
+                                int oneShotClip = -1, float oneShotTime = 0.0f) const;
     // Загрузить модели ростера в GPU-реестр (клипы по имени). Используется для героев и мобов.
     void loadRosterModels(Renderer& renderer, AssetSource& assets,
                           const std::vector<CharacterDesc>& roster, std::vector<PlayerModel>& out);
