@@ -14,6 +14,29 @@
 #include "engine/core/Renderer.h"
 #include "game/SceneLoader.h"
 
+namespace {
+// Запечь статичную OBJ-модель под generic-рендер (он только translation): центрируем по XZ,
+// ставим низ на y=0, масштабируем и поворачиваем вокруг Y — прямо в вершины (позиции+нормали).
+void bakeStaticMesh(MeshData& m, float scale, float yawDeg) {
+    if (m.vertices.empty()) return;
+    float mnx = 1e30f, mxx = -1e30f, mny = 1e30f, mnz = 1e30f, mxz = -1e30f;
+    for (const Vertex& v : m.vertices) {
+        mnx = std::fmin(mnx, v.px); mxx = std::fmax(mxx, v.px);
+        mny = std::fmin(mny, v.py);
+        mnz = std::fmin(mnz, v.pz); mxz = std::fmax(mxz, v.pz);
+    }
+    float cx = (mnx + mxx) * 0.5f, cz = (mnz + mxz) * 0.5f;
+    float r = yawDeg * 3.14159265f / 180.0f;
+    float c = std::cos(r), s = std::sin(r);
+    for (Vertex& v : m.vertices) {
+        float x = (v.px - cx) * scale, y = (v.py - mny) * scale, z = (v.pz - cz) * scale;
+        v.px = x * c + z * s; v.py = y; v.pz = -x * s + z * c;
+        float nx = v.nx, nz = v.nz;
+        v.nx = nx * c + nz * s; v.nz = -nx * s + nz * c;
+    }
+}
+}  // namespace
+
 Scene::Scene() = default;
 Scene::~Scene() = default;
 
@@ -135,10 +158,44 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
     // --- Визуалы сущностей по типу: ОДНА таблица, заполняется ИЗ КОНФИГА (config/buildings.cfg:
     // shape/material/yOffset/pickRadius). Рендер/пикинг/призрак читают её через visual(); yOffset
     // не дублируется. Hero и типы без shape в таблицу не попадают (Hero — скиннинг-лиса).
+    std::unordered_map<std::string, TextureHandle> modelTexCache;  // атлас грузим 1 раз на путь
     for (int t = 0; t < kEntityVisualCount; ++t) {
         const BuildingInfo& bi = config_.byType[t];
-        if (bi.shape == MeshShape::None) continue;  // визуал в конфиге не задан
         EntityVisual& v = visuals_[t];
+
+        // Приоритет — статичная OBJ-модель (KayKit dungeon и т.п.). Не загрузилась -> откат на shape.
+        if (!bi.model.empty()) {
+            MeshData mesh;
+            if (loadObjAsset(assets, bi.model.c_str(), mesh)) {
+                bakeStaticMesh(mesh, bi.modelScale, bi.modelYawDeg);
+                v.mesh = renderer.createMesh(mesh);
+                TextureHandle tex = 0;
+                if (!bi.modelTex.empty()) {
+                    auto it = modelTexCache.find(bi.modelTex);
+                    if (it != modelTexCache.end()) {
+                        tex = it->second;
+                    } else {
+                        TextureData td;
+                        if (loadImageAsset(assets, bi.modelTex.c_str(), td)) tex = renderer.createTexture(td);
+                        modelTexCache[bi.modelTex] = tex;
+                    }
+                }
+                MaterialDesc md;
+                md.shader = bi.shader;
+                md.baseColor = {1.0f, 1.0f, 1.0f};  // цвет из текстуры
+                md.albedo = tex;
+                v.material = renderer.createMaterial(md);
+                v.yOffset = bi.yOffset;
+                v.pickRadius = bi.pickRadius;
+                v.pickable = true;
+                v.building = (EntityType)t != EntityType::Enemy;
+                LOGI("Здание тип %d: модель %s (%d верш.)", t, bi.model.c_str(), (int)mesh.vertices.size());
+                continue;
+            }
+            LOGW("Здание тип %d: модель %s не загрузилась — откат на shape", t, bi.model.c_str());
+        }
+
+        if (bi.shape == MeshShape::None) continue;  // визуал в конфиге не задан
         v.mesh = (bi.shape == MeshShape::Sphere)
                      ? renderer.createMesh(makeSphere(bi.shapeSize, bi.shapeStacks, bi.shapeSlices))
                      : renderer.createMesh(makeCube(bi.shapeSize));
@@ -360,8 +417,8 @@ void Scene::fixedUpdate(float dt) {
         cmd.moveX = moveDir.x;
         cmd.moveZ = moveDir.z;
     }
-    cmd.faceMove = iy >= 0.0f;                      // назад — пятимся
-    cmd.magnitude = (iy < 0.0f) ? mag * 0.5f : mag;  // назад медленнее
+    cmd.faceMove = true;      // всегда доворачиваемся к направлению движения (без пятясь-назад)
+    cmd.magnitude = mag;      // полная скорость во все стороны
     cmd.jump = jumpQueued_;                          // одноразовый прыжок
     jumpQueued_ = false;
     cmd.attack = attackQueued_;                      // одноразовая атака (каст)

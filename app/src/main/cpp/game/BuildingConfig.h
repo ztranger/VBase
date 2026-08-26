@@ -26,6 +26,12 @@ struct BuildingInfo {
     float cost = 0.0f;    // стоимость постройки героем (0 = нельзя ставить в рантайме)
 
     // --- Визуал (только клиент; см. Scene::build -> таблица EntityVisual) ---
+    // Статичная OBJ-модель (напр. KayKit dungeon): путь + текстура-атлас + запекаемые
+    // масштаб/поворот. Если задана и загрузилась — используется вместо процедурной shape.
+    std::string model;          // путь к .obj (пусто = процедурная форma по shape)
+    std::string modelTex;       // путь к текстуре-атласу (albedo)
+    float modelScale = 1.0f;    // запекается в вершины (generic-рендер без масштаба)
+    float modelYawDeg = 0.0f;   // поворот вокруг Y, градусы (запекается)
     MeshShape shape = MeshShape::None;
     float shapeSize = 1.0f;    // cube: сторона; sphere: радиус
     int shapeStacks = 16;      // sphere

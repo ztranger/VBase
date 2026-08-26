@@ -488,7 +488,13 @@ charType % mobs_.size(), …)`, walk-анимация, facing с сервера;
 **Удар моба по ядру** — сделан: сервер выставляет `enemy.move.attackTime` (флаг «в упоре»,
 через существующее `EntityState.attackT`), клиент лупит attack-клип моба (свой у каждого типа),
 иначе walk.
-**Осталось по мобам:** модель самого спавнера (пока куб), разные статы по типу моба.
+**Модели спавнера и ядра** — сделаны: статичные пропы **KayKit Dungeon** (CC0) вместо куба/сферы.
+Формат `.obj` + общий атлас `dungeon_texture.png` (реюз `loadObjAsset`+`loadImageAsset`, новый glTF-
+загрузчик не нужен). `BuildingInfo` получил `model/modelTex/modelScale/modelYawDeg` (директива
+`model <obj> <tex> [scale] [yawDeg]` в buildings.cfg); `Scene::build` грузит OBJ и запекает
+recenter+scale+yaw в вершины (`bakeStaticMesh`) — generic-рендер только translation. core→золотой
+сундук, spawner→врата-арка. Тем же путём теперь можно дать модель ЛЮБОМУ зданию (generator/storage/tower).
+**Осталось по мобам:** разные статы по типу моба (модели врагов и зданий готовы).
 
 **Что нужно для фичи «выбор персонажа игроком» (историческая заметка):**
 1. Каталог персонажей как ДАННЫЕ (id/имя/model/scale/yaw/hide/attackClip) — из этой таблицы

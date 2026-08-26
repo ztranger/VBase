@@ -373,6 +373,14 @@ bool loadBuildingConfig(AssetSource& assets, const char* path, BuildingConfig& o
                 if (a.size() > 1) bi.color.x = toF(a[1]);
                 if (a.size() > 2) bi.color.y = toF(a[2]);
                 if (a.size() > 3) bi.color.z = toF(a[3]);
+            } else if (key == "model") {
+                // model <obj> <texture> [scale] [yawDeg] — статичная модель вместо shape.
+                Tokens a = tokenize(val);
+                if (a.size() < 2) { LOGE("config: строка %d: model требует путь и текстуру", line); return false; }
+                bi.model = a[0];
+                bi.modelTex = a[1];
+                if (a.size() > 2) bi.modelScale = toF(a[2]);
+                if (a.size() > 3) bi.modelYawDeg = toF(a[3]);
             } else if (key == "yoffset") bi.yOffset = toF(val);
             else if (key == "pickradius") bi.pickRadius = toF(val);
             else { LOGE("config: строка %d: неизвестный ключ '%s'", line, key.c_str()); return false; }
