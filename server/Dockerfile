@@ -11,18 +11,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
+# jolt/enet must be regular files in git (not a gitlink). Cloud clones do not
+# fetch gitlinks without .gitmodules, so COPY would be an empty directory.
 COPY third_party/jolt /src/third_party/jolt
 COPY third_party/enet /src/third_party/enet
 COPY server/CMakeLists.txt server/main.cpp /src/server/
 COPY app/src/main/cpp /src/app/src/main/cpp
 
-RUN cmake -S /src/server -B /src/server/build -G Ninja \
+RUN test -f /src/third_party/enet/callbacks.c \
+    && test -f /src/third_party/jolt/Build/CMakeLists.txt \
+    && cmake -S /src/server -B /src/server/build -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DGENERATE_DEBUG_SYMBOLS=OFF \
-    || (echo "==== cmake failed; jolt/Build (must be in git) ====" \
-        && ls -la /src/third_party/jolt /src/third_party/jolt/Build \
+    || (echo "==== cmake/copy failed ====" \
+        && echo "enet:" && ls -la /src/third_party/enet \
+        && echo "jolt/Build:" && ls -la /src/third_party/jolt /src/third_party/jolt/Build \
         && echo "==== CMakeError.log ====" \
-        && cat /src/server/build/CMakeFiles/CMakeError.log \
+        && cat /src/server/build/CMakeFiles/CMakeError.log 2>/dev/null \
         && exit 1) \
     && cmake --build /src/server/build \
     && /src/server/build/vbase_server --selftest \
