@@ -221,6 +221,14 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
         md.baseColor = {0.95f, 0.35f, 0.30f};
         ghostBadMat_ = renderer.createMaterial(md);
     }
+    // Снаряд башни: единичный куб (масштабируется в вытянутый болт) + свечение (Unlit).
+    projMesh_ = renderer.createMesh(makeCube(1.0f));
+    {
+        MaterialDesc md;
+        md.shader = ShaderType::Unlit;
+        md.baseColor = {1.0f, 0.85f, 0.30f};  // тёпло-жёлтый болт
+        projMat_ = renderer.createMaterial(md);
+    }
 
     // --- Статичные коллайдеры физики (из описания сцены) ---
     for (const ColliderSpec& cs : desc.colliders) {
@@ -466,6 +474,7 @@ void Scene::fixedUpdate(float dt) {
     if (client_.status() == NetStatus::Lost) {
         if (!remoteEntities_.empty()) remoteEntities_.clear();
         if (!dyingMobs_.empty()) dyingMobs_.clear();
+        if (!projectiles_.empty()) projectiles_.clear();
         if (!pending_.empty()) pending_.clear();
         if (wantReconnect_) {
             constexpr float kReconnectPeriod = 2.0f;  // сек между попытками
@@ -599,6 +608,7 @@ void Scene::leaveGame() {
     reconnectTimer_ = 0.0f;
     remoteEntities_.clear();
     dyingMobs_.clear();
+    projectiles_.clear();
     pending_.clear();
     localTeam_ = 0;
     localHp_ = 1.0f;      // вне сессии герой «жив» (иначе своя лиса не рисовалась бы)
@@ -736,6 +746,49 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
         float ct = (d.t < d.dur * 0.999f) ? d.t : d.dur * 0.999f;  // не зацикливать
         frame.skinned.push_back(makeSkinnedItem(mobs_, d.charType, d.pos, d.yaw, 0.0f, 0.0f,
                                                 0.0f, mobs_[d.charType].deathClip, ct));
+        ++i;
+    }
+
+    // Выстрелы башен (клиентская косметика): по локальному кулдауну пускаем болт в ближайшего
+    // врага в радиусе. Урон авторитетно-мгновенный на сервере — это лишь летящий снаряд.
+    if (projMesh_ != 0 && !remoteEntities_.empty()) {
+        constexpr float kProjSpeed = 22.0f;
+        const BuildingInfo& tw = config_.get(EntityType::Tower);
+        const float range = tw.range > 0.0f ? tw.range : 5.0f;
+        const float interval = tw.rate > 0.0f ? tw.rate : 0.5f;
+        for (RemoteEntity& r : remoteEntities_) {
+            if ((EntityType)r.type != EntityType::Tower) continue;
+            r.fireTimer -= renderDt;
+            if (r.fireTimer > 0.0f) continue;
+            // Ближайший враг в радиусе (по горизонтали).
+            RemoteEntity* target = nullptr;
+            float best = range * range;
+            for (RemoteEntity& e : remoteEntities_) {
+                if ((EntityType)e.type != EntityType::Enemy) continue;
+                float dx = e.ch.position.x - r.ch.position.x;
+                float dz = e.ch.position.z - r.ch.position.z;
+                float d2 = dx * dx + dz * dz;
+                if (d2 < best) { best = d2; target = &e; }
+            }
+            if (target == nullptr) { r.fireTimer = 0.0f; continue; }  // никого — выстрелим, как появится
+            r.fireTimer = interval;
+            Vec3 origin = r.ch.position + Vec3{0.0f, 2.4f, 0.0f};       // с верхушки башни
+            Vec3 tgt = target->ch.position + Vec3{0.0f, 0.8f, 0.0f};   // в центр врага
+            Vec3 d = tgt - origin;
+            float dist = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+            Vec3 vel = (dist > 1e-3f) ? d * (kProjSpeed / dist) : Vec3{0.0f, 0.0f, 1.0f};
+            projectiles_.push_back({origin, vel, dist / kProjSpeed + 0.05f});
+        }
+    }
+    // Движение и отрисовка болтов: тонкий вытянутый куб вдоль скорости (yaw), пока жив.
+    for (size_t i = 0; i < projectiles_.size();) {
+        Projectile& p = projectiles_[i];
+        p.pos = p.pos + p.vel * renderDt;
+        p.life -= renderDt;
+        if (p.life <= 0.0f) { projectiles_.erase(projectiles_.begin() + (long)i); continue; }
+        float yaw = std::atan2(p.vel.x, p.vel.z);
+        Mat4 m = Mat4::translation(p.pos) * Mat4::rotationY(yaw) * Mat4::scale({0.08f, 0.08f, 0.6f});
+        frame.items.push_back({projMesh_, projMat_, m});
         ++i;
     }
 
