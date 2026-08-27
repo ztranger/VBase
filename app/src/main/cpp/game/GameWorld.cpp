@@ -66,6 +66,7 @@ void GameWorld::reset() {
     capsuleCylHalf_ = 0.3f;
     enemyStats_ = EnemySpec{};
     enemyTypes_.clear();
+    heroTypes_.clear();
     for (BuildTemplate& t : buildTemplates_) t = BuildTemplate{};
     heroHp_ = 100.0f;
     heroRespawn_ = 5.0f;
@@ -95,6 +96,7 @@ void GameWorld::configure(const SceneDesc& desc) {
     capsuleCylHalf_ = desc.player.colliderCylHalf;
     enemyStats_ = desc.enemy;  // дефолтные статы врага (fallback, если нет типов)
     enemyTypes_ = desc.enemyTypes;  // статы по типу моба (индекс = charType); пусто -> все по enemyStats_
+    heroTypes_ = desc.heroTypes;    // статы по типу героя (hp/speed); пусто -> дефолт (heroHp_/6)
     for (int i = 0; i < 8; ++i) buildTemplates_[i] = desc.build[i];  // шаблоны построек героя
     heroHp_ = desc.player.hp;
     heroRespawn_ = desc.player.respawnDelay > 0.0f ? desc.player.respawnDelay : 5.0f;
@@ -231,7 +233,28 @@ void GameWorld::setHeroInput(uint32_t heroId, const InputCommand& in) {
 
 void GameWorld::setHeroCharType(uint32_t heroId, uint8_t charType) {
     Entity* e = entityById(heroId);
-    if (e != nullptr) e->charType = charType;  // только транслируется в снапшот (сервер не рисует)
+    if (e == nullptr) return;
+    // Статы выбранного персонажа применяем при ПЕРВОМ получении charType и при его смене
+    // (charType по умолчанию 0 совпал бы с выбором мага — потому отдельный флаг applied).
+    if (!e->heroStatsApplied || e->charType != charType) {
+        e->charType = charType;
+        e->heroStatsApplied = true;
+        if (e->type == EntityType::Hero) applyHeroStats(*e);
+    }
+}
+
+// hp/скорость выбранного персонажа героя (config/characters.cfg по charType). Ставит полный hp
+// (первый выбор / смена персонажа). Нет типа/поля -> дефолт: heroHp_ и Character.maxSpeed.
+void GameWorld::applyHeroStats(Entity& e) {
+    float hp = heroHp_, spd = 0.0f;  // spd 0 -> оставить дефолт move.maxSpeed
+    if (e.charType < heroTypes_.size()) {
+        const CharacterDesc& t = heroTypes_[e.charType];
+        if (t.hp > 0.0f) hp = t.hp;
+        if (t.speed > 0.0f) spd = t.speed;
+    }
+    e.maxHp = hp;
+    e.hp = hp;  // полный hp при выборе персонажа
+    if (spd > 0.0f) e.move.maxSpeed = spd;
 }
 
 bool GameWorld::tryBuild(uint32_t builderId, EntityType type, int cellX, int cellZ) {

@@ -470,8 +470,18 @@ hide <подстроки>` уже умеет прятать лишний рек�
 чужие рисуются своей моделью. attack-клип per-character (mage→Spellcast_Shoot, barbarian→Chop, knight→Slice,
 rogue→Dualwield). Desktop: авто-join убран (заход через меню), для тестов флаг `--join`.
 
-**Осталось по фиче (не входило):** сохранение выбора между запусками; разные статы/способности
-персонажей; отдельная камера-подставка/фон для превью (сейчас чистый фон).
+**Сохранение выбора между запусками** — сделано: платформа персистит `GameUiState.charIndex` в
+файл (desktop — `vbase_settings.txt` в рабочей папке; Android — `internalDataPath/vbase_settings.txt`);
+экран выбора пишет индекс в `state.charIndex`, платформа сохраняет при смене и читает при старте,
+применяя `scene.selectCharacter` после build. Scene платформонезависима — I/O в `desktop/main.cpp`
+и `platform/main.cpp`.
+**Разные статы у героев** — сделаны: `characters.cfg` задаёт `hp`/`speed` на героя (варвар танк/медленный,
+разбойник быстрый/хрупкий, …). Сервер грузит `characters.cfg` → `SceneDesc.heroTypes` → `GameWorld.heroTypes_`;
+`setHeroCharType` при первом получении/смене charType зовёт `applyHeroStats` (hp/maxHp + `move.maxSpeed`).
+Клиент синхронно ставит `player_.maxSpeed` из `chars_[i].speed` в `selectCharacter` (иначе предсказание
+расходилось бы с сервером) и `localMaxHp_` для HUD. Урон/atkint у героев пока не используются (герой не бьёт).
+**Осталось по фиче (не входило):** способности героев (уникальные умения); отдельная
+камера-подставка/фон для превью (сейчас чистый фон).
 
 **✅ СДЕЛАНО (мобы-скелеты).** Враги спавнеров рисуются скиннинг-моделями **KayKit Skeletons (CC0)**
 вместо процедурной сферы. 4 модели (`models/Skeleton_{Warrior,Minion,Rogue,Mage}.glb`, общий с

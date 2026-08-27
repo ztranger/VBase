@@ -36,6 +36,7 @@ struct Entity {
     float timer = 0.0f;   // spawner: до след. спавна; tower: до след. выстрела; enemy: до след. удара
     int spawnedCount = 0; // spawner: сколько врагов уже породил (потолок = cap)
     uint32_t targetId = 0; // projectile: id цели (враг), к которой летит снаряд (0 = нет)
+    bool heroStatsApplied = false; // hero: применены ли статы выбранного персонажа (по charType)
 };
 
 // Буфер ввода героя. Клиент шлёт по одному InputCommand за тик; сервер НЕ перезаписывает
@@ -110,6 +111,7 @@ private:
     float resourcePerTeam_[kMaxTeams] = {0.0f};  // пул ресурса на каждую команду
     EnemySpec enemyStats_;                    // дефолтные hp/урон/интервал врага (fallback)
     std::vector<CharacterDesc> enemyTypes_;   // статы по типу моба (config/enemies.cfg); индекс = charType
+    std::vector<CharacterDesc> heroTypes_;    // статы по типу героя (config/characters.cfg); индекс = charType
     BuildTemplate buildTemplates_[8];         // шаблоны построек героя по EntityType (из сцены)
     float heroHp_ = 100.0f;                   // здоровье героя при спавне/респауне (из конфига)
     float heroRespawn_ = 5.0f;                // задержка респауна героя, сек (из конфига)
@@ -125,6 +127,7 @@ private:
     float restartTimer_ = 0.0f;                // обратный отсчёт до авто-рестарта (после исхода)
 
     Vec3 spawnFor(uint8_t team) const;         // spawn-точка команды или spawnPos_ (fallback)
+    void applyHeroStats(Entity& e);            // hp/speed выбранного персонажа героя (по charType)
     void spawnBuildings();                     // заспавнить базы из buildingSpecs_ (configure + рестарт)
     void restartMatch();                       // пересобрать матч (базы/герои/экономика), не трогая геометрию
     Entity* entityById(uint32_t id);

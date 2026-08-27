@@ -138,6 +138,7 @@ struct SceneDesc {
     std::vector<SpawnSpec> spawns;        // точки спавна героев по командам (PvP)
     EnemySpec enemy;                      // боевые статы врага по умолчанию (из конфига)
     std::vector<CharacterDesc> enemyTypes; // типы мобов (config/enemies.cfg): статы; индекс = charType
+    std::vector<CharacterDesc> heroTypes;  // типы героев (config/characters.cfg): hp/speed; индекс = charType
     BuildTemplate build[8];               // шаблоны построек героя по EntityType (из конфига)
     Grid grid;                            // строительная сетка (директива `grid` в сцене)
     PlayerSpec player;

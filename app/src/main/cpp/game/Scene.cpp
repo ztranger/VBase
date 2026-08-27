@@ -252,6 +252,7 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
             roster.push_back(std::move(c));
         }
         loadRosterModels(renderer, assets, roster, chars_);
+        sceneDesc_.heroTypes = roster;  // статы героев (hp/speed) -> локальному серверу при hostGame
 
         // Персонаж по умолчанию — совпавший с player.model из сцены, иначе первый.
         int def = 0;
@@ -288,6 +289,8 @@ void Scene::loadRosterModels(Renderer& renderer, AssetSource& assets,
         pm.name = c.name;
         pm.scale = c.scale;
         pm.yawOffset = c.yawOffset;
+        pm.hp = c.hp;          // статы героя (для HUD/предсказания; у мобов не используются)
+        pm.speed = c.speed;
         const std::vector<std::string>* hide = c.hide.empty() ? nullptr : &c.hide;
         if (loadGltfModel(assets, c.model.c_str(), pm.model, hide)) {
             pm.mesh = renderer.createSkinnedMesh(pm.model);
@@ -357,6 +360,10 @@ void Scene::selectCharacter(int i) {
     if (i >= (int)chars_.size()) i = (int)chars_.size() - 1;
     localCharIndex_ = i;
     client_.setCharType((uint8_t)i);  // сервер положит в снапшот -> чужие нарисуют нашей моделью
+    // Статы выбранного героя: скорость — в предсказание (должна совпадать с сервером, иначе
+    // реконсиляция дёргала бы), максимум hp — для HUD (текущий hp авторитетно из снапшота).
+    if (chars_[i].speed > 0.0f) player_.maxSpeed = chars_[i].speed;
+    if (chars_[i].hp > 0.0f) localMaxHp_ = chars_[i].hp;
 }
 
 // Экран выбора: выбранный персонаж в origin, idle-анимация, медленное вращение. Мир НЕ рисуем —

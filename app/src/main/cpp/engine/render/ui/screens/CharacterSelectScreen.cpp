@@ -29,7 +29,10 @@ void draw(UiShell::Ctx& ctx) {
         char label[128];
         std::snprintf(label, sizeof(label), "%s %s", isSel ? "\xE2\x96\xB6" : "   ",
                       ctx.scene.rosterName(i));
-        if (ctx.btn(label, ImVec2(-1, 0))) ctx.scene.selectCharacter(i);
+        if (ctx.btn(label, ImVec2(-1, 0))) {
+            ctx.scene.selectCharacter(i);
+            ctx.state.charIndex = i;  // платформа сохранит выбор в файл (персист между запусками)
+        }
         if (isSel) ImGui::PopStyleColor();
     }
 

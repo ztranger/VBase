@@ -18,6 +18,10 @@ struct GameUiState {
     bool vulkanAvailable = false;
     int backend = 0;         // 0 = OpenGL, 1 = Vulkan
     int requestBackend = -1; // -1 = нет
+
+    // Выбранный персонаж (индекс ростера). Персистится платформой между запусками:
+    // экран выбора пишет сюда, платформа сохраняет в файл и читает при старте. -1 = не выбран.
+    int charIndex = -1;
 };
 
 namespace GameUi {

@@ -197,6 +197,8 @@ private:
         int idleClip = 0, walkClip = 1, runClip = 2, attackClip = -1, deathClip = -1;
         float attackClipDur = 0.0f;  // длительность клипа атаки, сек (масштаб под kAttackDuration)
         float deathClipDur = 0.0f;   // длительность клипа смерти, сек (для «трупа» моба)
+        float hp = 0.0f;             // статы героя (для HUD/предсказания): 0 = дефолт
+        float speed = 0.0f;          // скорость бега героя (client player_.maxSpeed для предсказания)
     };
     std::vector<PlayerModel> chars_;   // ростер героев; индекс = charType в снапшоте (сетевой контракт)
     std::vector<PlayerModel> mobs_;    // ростер мобов (config/enemies.cfg); индекс = enemy.charType

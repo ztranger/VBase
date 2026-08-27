@@ -43,6 +43,22 @@ private:
 
 namespace {
 
+// Персист выбора персонажа между запусками — маленький файл в internalDataPath приложения.
+int loadCharIndex(const std::string& path) {
+    int v = -1;
+    if (FILE* f = std::fopen(path.c_str(), "r")) {
+        if (std::fscanf(f, "%d", &v) != 1) v = -1;
+        std::fclose(f);
+    }
+    return v;
+}
+void saveCharIndex(const std::string& path, int v) {
+    if (FILE* f = std::fopen(path.c_str(), "w")) {
+        std::fprintf(f, "%d\n", v);
+        std::fclose(f);
+    }
+}
+
 // Одно тач-событие пальца за кадр (kind: 0 = down, 1 = move, 2 = up).
 struct TouchEvent { int id; float x, y; int kind; };
 
@@ -56,6 +72,8 @@ struct Engine {
     float accumulator = 0.0f; // накопитель времени для фиксированного тика
     float uiScale = 1.0f;    // масштаб UI по плотности экрана
     GameUiState ui;          // состояние панели — общее с десктопом
+    std::string settingsPath;  // файл персиста (internalDataPath/…): выбор персонажа между запусками
+    int lastSavedChar = -1;    // отслеживаем смену выбора для записи в файл
 
     // Мультитач кадра: pumpInput собирает события ВСЕХ пальцев, а в геймплей (twin-stick)
     // диспатчим ПОСЛЕ renderFrame — тогда WantCaptureMouse свеж (тап по GUI не стартует стик).
@@ -89,6 +107,8 @@ bool createRenderer(Engine* engine, android_app* app) {
     // Мир строится после init рендера: нужны живой GPU-контекст и AAssetManager.
     engine->scene = std::make_unique<Scene>();
     engine->scene->build(*engine->renderer, assets);
+    // Восстанавливаем сохранённый выбор персонажа (пересборка сцены на смене окна/бэкенда — тоже).
+    if (engine->ui.charIndex >= 0) engine->scene->selectCharacter(engine->ui.charIndex);
     engine->haveTime = false;
 
     // Масштаб UI по плотности экрана (иначе на HiDPI интерфейс крошечный).
@@ -220,6 +240,13 @@ extern "C" void android_main(android_app* app) {
     engine.ui.vulkanAvailable = engine.vulkanSupported;  // кнопка Vulkan в GameUi
     LOGI("Vulkan supported: %s", engine.vulkanSupported ? "yes" : "no");
 
+    // Персист выбора персонажа: файл во внутреннем хранилище приложения (доступно на запись).
+    if (app->activity && app->activity->internalDataPath) {
+        engine.settingsPath = std::string(app->activity->internalDataPath) + "/vbase_settings.txt";
+        engine.ui.charIndex = loadCharIndex(engine.settingsPath);  // восстановить сохранённый выбор
+        engine.lastSavedChar = engine.ui.charIndex;
+    }
+
     app->userData = &engine;
     app->onAppCmd = handleCmd;
 
@@ -297,6 +324,13 @@ extern "C" void android_main(android_app* app) {
             frame.ui = [e]() { GameUi::build(e->ui, *e->scene); };
 
             engine.renderer->renderFrame(frame);
+
+            // Выбор персонажа сменился на экране выбора -> сохраняем в файл (персист между запусками).
+            if (!engine.settingsPath.empty() && engine.ui.charIndex != engine.lastSavedChar &&
+                engine.ui.charIndex >= 0) {
+                saveCharIndex(engine.settingsPath, engine.ui.charIndex);
+                engine.lastSavedChar = engine.ui.charIndex;
+            }
 
             // Диспатч касания в геймплей ПОСЛЕ рендера: NewFrame внутри renderFrame уже
             // пересчитал WantCaptureMouse по этому касанию. Тап по GUI (WantCaptureMouse)

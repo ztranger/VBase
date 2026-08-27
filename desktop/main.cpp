@@ -33,6 +33,23 @@ namespace {
 
 constexpr float kTick = kTickDt;  // единый шаг симуляции (из engine/net/Net.h)
 
+// Персист выбора персонажа между запусками — маленький файл в рабочей папке (build/).
+constexpr const char* kSettingsFile = "vbase_settings.txt";
+int loadCharIndex(const char* path) {
+    int v = -1;
+    if (FILE* f = std::fopen(path, "r")) {
+        if (std::fscanf(f, "%d", &v) != 1) v = -1;
+        std::fclose(f);
+    }
+    return v;
+}
+void saveCharIndex(const char* path, int v) {
+    if (FILE* f = std::fopen(path, "w")) {
+        std::fprintf(f, "%d\n", v);
+        std::fclose(f);
+    }
+}
+
 int keyAxis(GLFWwindow* w, int pos, int neg) {
     int v = 0;
     if (glfwGetKey(w, pos) == GLFW_PRESS) v += 1;
@@ -92,6 +109,12 @@ int runClient(int backend, GameUiState& ui, const std::string& assetsDir,
     // (Home -> выбор персонажа -> В бой / Host / Join). serverIp префиллит поле Join (см. main).
     // Флаг --join (для разработки/тестов) подключается сразу, оставаясь в меню.
     if (autoJoin) scene.joinGame(serverIp);
+    // Восстанавливаем сохранённый выбор персонажа (иначе останется дефолт из сцены).
+    if (ui.charIndex >= 0) {
+        scene.selectCharacter(ui.charIndex);
+        std::printf("Восстановлен сохранённый персонаж: индекс %d\n", ui.charIndex);
+    }
+    int lastSavedChar = ui.charIndex;  // отслеживаем смену выбора для записи в файл
 
     ui.backend = backend;
     ui.requestBackend = -1;  // сбросить возможный запрос предыдущего бэкенда
@@ -209,6 +232,12 @@ int runClient(int backend, GameUiState& ui, const std::string& assetsDir,
         renderer->renderFrame(frame);
         if (!useVk) glfwSwapBuffers(window);  // Vulkan презентует сам
 
+        // Выбор персонажа сменился на экране выбора -> сохраняем в файл (персист между запусками).
+        if (ui.charIndex != lastSavedChar && ui.charIndex >= 0) {
+            saveCharIndex(kSettingsFile, ui.charIndex);
+            lastSavedChar = ui.charIndex;
+        }
+
         // Запрошено переключение бэкенда кнопкой — выходим из цикла на перезапуск.
         if (ui.requestBackend >= 0 && ui.requestBackend != backend) {
             next = ui.requestBackend;
@@ -272,6 +301,7 @@ int main(int argc, char** argv) {
     GameUiState ui;
     ui.vulkanAvailable = vulkanAvailable;
     std::snprintf(ui.joinIp, sizeof(ui.joinIp), "%s", serverIp);  // CLI serverIp -> префилл поля Join
+    ui.charIndex = loadCharIndex(kSettingsFile);  // восстановить сохранённый выбор персонажа
     if (startLoadingPreview) GameUi::requestLoadingScreen();  // --loading: стартуем на лоадинге
 
     // Цикл перезапуска: runClient возвращает следующий бэкенд или -1 (выход).

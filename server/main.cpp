@@ -784,6 +784,7 @@ int main(int argc, char** argv) {
         loadBuildingConfig(assets, "config/buildings.cfg", cfg);
         applyBuildingConfig(desc, cfg);
         loadCharacterRoster(assets, "config/enemies.cfg", desc.enemyTypes);  // статы типов мобов
+        loadCharacterRoster(assets, "config/characters.cfg", desc.heroTypes);  // статы героев (hp/speed)
         server.configureWorld(desc);
     } else {
         std::fprintf(stderr, "Сцена не загружена (%s, assets=%s) — сервер без коллизий\n",
