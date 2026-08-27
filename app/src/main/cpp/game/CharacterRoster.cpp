@@ -76,6 +76,15 @@ bool loadCharacterRoster(AssetSource& assets, const char* path, std::vector<Char
             else if (k == "damage") { if (i < t.size()) c.damage = toF(t[i++]); }
             else if (k == "speed") { if (i < t.size()) c.speed = toF(t[i++]); }
             else if (k == "atkint") { if (i < t.size()) c.attackInterval = toF(t[i++]); }
+            else if (k == "target") {
+                if (i < t.size()) {
+                    const std::string& v = t[i++];
+                    if (v == "core") c.goal = CharacterDesc::MobGoal::Core;
+                    else if (v == "building") c.goal = CharacterDesc::MobGoal::Building;
+                    else LOGW("roster: строка %d: неизвестный target '%s' (core|building)",
+                              line, v.c_str());
+                }
+            }
             else LOGW("roster: строка %d: неизвестный ключ '%s'", line, k.c_str());
         }
         if (c.model.empty()) {

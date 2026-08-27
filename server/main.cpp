@@ -11,6 +11,7 @@
 #include <cstring>
 #include <string>
 #include <thread>
+#include <vector>
 
 #ifdef _WIN32
 #include <winsock2.h>   // до windows.h, иначе конфликт с winsock v1
@@ -28,6 +29,7 @@
 #include "game/GameWorld.h"
 #include "engine/net/Net.h"
 #include "game/CharacterRoster.h"
+#include "game/FlowField.h"
 #include "game/SceneDesc.h"
 #include "game/SceneLoader.h"
 
@@ -255,7 +257,7 @@ int runSpawnerTest() {
                 "(ждём ~1, добежал от 8)\n",
                 serverEnemies, clientEnemies, (double)nearest);
     bool spawnOk = serverEnemies == 3 && clientEnemies == 3;  // потолок + стриминг
-    bool moveOk = nearest < 2.5f;                             // добежали к ядру
+    bool moveOk = nearest < 3.0f;                             // добежали к ядру (футпринт держит на ~2.6)
     bool ok = spawnOk && moveOk;
     std::printf("[SpawnTest] %s\n", ok ? "OK" : "FAIL");
     return ok ? 0 : 1;
@@ -717,6 +719,163 @@ bool runningInDocker() {
     return false;
 }
 
+// Пасфайндинг мобов: поле потока на сетке произвольного размера, цели по типу,
+// фолбэк «нет пути к ядру → ломать ближайшее здание».
+int runPathfindTest() {
+    {
+        Grid g;
+        g.cell = 2.0f;
+        g.arenaHalf = 400.0f;
+        NavGrid nav;
+        nav.reset(g);
+        const int n = nav.cellCount();
+        FlowField f;
+        f.compute(nav, {NavCell{0, 0}});
+        const bool scaleOk =
+            n >= 150000 && n <= 170000 && f.reachable(80, 80) && !f.reachable(10000, 0);
+        std::printf("[PathTest] сетка ~400: клеток=%d reachable(80,80)=%d\n", n,
+                    (int)f.reachable(80, 80));
+        if (!scaleOk) {
+            std::printf("[PathTest] FAIL: масштаб сетки\n");
+            return 1;
+        }
+    }
+
+    auto makeArena = [](SceneDesc& desc) {
+        ColliderSpec floor;
+        floor.center = Vec3{0.0f, -0.5f, 0.0f};
+        floor.half = Vec3{50.0f, 0.5f, 50.0f};
+        desc.colliders.push_back(floor);
+        desc.grid.cell = 2.0f;
+        desc.grid.arenaHalf = 6.0f;
+    };
+
+    // Рашер: сплошная стена башен между спавнером и ядром — прогрызает и доходит.
+    {
+        SceneDesc desc;
+        makeArena(desc);
+        BuildingSpec core;
+        core.kind = BuildingSpec::Core;
+        core.pos = desc.grid.cellCenter(-2, 0);
+        core.hp = 500.0f;
+        desc.buildings.push_back(core);
+        BuildingSpec sp;
+        sp.kind = BuildingSpec::Spawner;
+        sp.pos = desc.grid.cellCenter(2, 0);
+        sp.rate = 0.15f;
+        sp.cap = 1.0f;
+        desc.buildings.push_back(sp);
+        int lo = 0, hi = -1;
+        desc.grid.cellRange(lo, hi);
+        int wallCount = 0;
+        for (int cz = lo; cz <= hi; ++cz) {
+            BuildingSpec tw;
+            tw.kind = BuildingSpec::Tower;
+            tw.pos = desc.grid.cellCenter(0, cz);
+            tw.hp = 15.0f;
+            tw.rate = 99.0f;
+            tw.range = 0.0f;
+            desc.buildings.push_back(tw);
+            ++wallCount;
+        }
+        CharacterDesc rusher;
+        rusher.goal = CharacterDesc::MobGoal::Core;
+        rusher.hp = 200.0f;
+        rusher.damage = 20.0f;
+        rusher.speed = 5.0f;
+        rusher.attackInterval = 0.15f;
+        desc.enemyTypes.push_back(rusher);
+        desc.enemy.hp = 200.0f;
+        desc.enemy.damage = 20.0f;
+        desc.enemy.attackInterval = 0.15f;
+
+        GameWorld world;
+        world.configure(desc);
+        const Vec3 corePos = desc.grid.cellCenter(-2, 0);
+        int towersLeft = wallCount;
+        float nearestCore = 999.0f;
+        bool sawDamage = false;
+        for (int i = 0; i < 450; ++i) {
+            world.step(kTickDt);
+            std::vector<EntityState> st;
+            world.writeStates(st);
+            towersLeft = 0;
+            nearestCore = 999.0f;
+            for (const EntityState& s : st) {
+                if ((EntityType)s.type == EntityType::Tower) {
+                    ++towersLeft;
+                    if (s.hp < 14.9f) sawDamage = true;
+                }
+                if ((EntityType)s.type == EntityType::Enemy) {
+                    float dx = s.x - corePos.x, dz = s.z - corePos.z;
+                    float d = std::sqrt(dx * dx + dz * dz);
+                    if (d < nearestCore) nearestCore = d;
+                }
+            }
+        }
+        const bool wallBroken = towersLeft < wallCount || sawDamage;
+        const bool reached = nearestCore < 3.0f;
+        std::printf("[PathTest] рашер через стену: башен %d/%d, к ядру=%.1f, урон=%d\n",
+                    towersLeft, wallCount, (double)nearestCore, (int)sawDamage);
+        if (!wallBroken || !reached) {
+            std::printf("[PathTest] FAIL: рашер не прогрыз стену или не дошёл\n");
+            return 1;
+        }
+    }
+
+    // Ломатель: путь к ядру свободен, но цель — здание; бьёт башню, ядро целёхонько.
+    {
+        SceneDesc desc;
+        makeArena(desc);
+        BuildingSpec core;
+        core.kind = BuildingSpec::Core;
+        core.pos = desc.grid.cellCenter(-2, 0);
+        core.hp = 500.0f;
+        desc.buildings.push_back(core);
+        BuildingSpec tw;
+        tw.kind = BuildingSpec::Tower;
+        tw.pos = desc.grid.cellCenter(0, 0);
+        tw.hp = 80.0f;
+        tw.rate = 99.0f;
+        tw.range = 0.0f;
+        desc.buildings.push_back(tw);
+        BuildingSpec sp;
+        sp.kind = BuildingSpec::Spawner;
+        sp.pos = desc.grid.cellCenter(2, 0);
+        sp.rate = 0.15f;
+        sp.cap = 1.0f;
+        desc.buildings.push_back(sp);
+        CharacterDesc br;
+        br.goal = CharacterDesc::MobGoal::Building;
+        br.hp = 200.0f;
+        br.damage = 15.0f;
+        br.speed = 5.0f;
+        br.attackInterval = 0.15f;
+        desc.enemyTypes.push_back(br);
+
+        GameWorld world;
+        world.configure(desc);
+        for (int i = 0; i < 45; ++i) world.step(kTickDt);
+        std::vector<EntityState> st;
+        world.writeStates(st);
+        float coreHp = 500.0f, towerHp = 80.0f;
+        bool haveTower = false;
+        for (const EntityState& s : st) {
+            if ((EntityType)s.type == EntityType::Core) coreHp = s.hp;
+            if ((EntityType)s.type == EntityType::Tower) { towerHp = s.hp; haveTower = true; }
+        }
+        std::printf("[PathTest] ломатель: hp башни=%.1f (ждём <80), hp ядра=%.1f (ждём ~500)\n",
+                    haveTower ? (double)towerHp : 0.0, (double)coreHp);
+        if (!((!haveTower || towerHp < 79.0f) && coreHp > 499.0f)) {
+            std::printf("[PathTest] FAIL: ломатель пошёл не в здание\n");
+            return 1;
+        }
+    }
+
+    std::printf("[PathTest] OK\n");
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -743,8 +902,9 @@ int main(int argc, char** argv) {
         int m = runTeamCombatTest();    // team-aware бой: свои не бьют своих, чужих бьют (PvP)
         int n = runPvpTest();           // PvP: назначение стороны + спавн-точки + per-team исход
         int o = runMatchRestartTest();  // матч-рестарт: decided -> авто-пересбор -> новый матч
+        int p = runPathfindTest();      // поле потока: стена/фолбэк + ломатель + сетка 400
         return (a == 0 && b == 0 && c == 0 && d == 0 && e == 0 && f == 0 && g == 0 && h == 0 &&
-                k == 0 && m == 0 && n == 0 && o == 0) ? 0 : 1;
+                k == 0 && m == 0 && n == 0 && o == 0 && p == 0) ? 0 : 1;
     }
 
     uint16_t port = kNetPort;

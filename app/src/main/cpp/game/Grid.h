@@ -20,4 +20,13 @@ struct Grid {
         float x = centerOf(cx), z = centerOf(cz);
         return x > -arenaHalf && x < arenaHalf && z > -arenaHalf && z < arenaHalf;
     }
+
+    // Целочисленный диапазон клеток, у которых центр внутри арены (включительно).
+    // Закрытая формула — без перебора; на полях 200–400 клеток на сторону это важно.
+    // Пустой диапазон: lo > hi (арена меньше одной клетки).
+    void cellRange(int& lo, int& hi) const {
+        const float inv = 1.0f / cell;
+        lo = (int)std::floor(-arenaHalf * inv - 0.5f + 1e-4f) + 1;
+        hi = (int)std::floor(arenaHalf * inv - 0.5f - 1e-5f);
+    }
 };

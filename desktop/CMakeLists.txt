@@ -35,6 +35,7 @@ add_executable(vbase_desktop
         ${APP}/engine/assets/Mesh.cpp
         ${APP}/engine/net/Net.cpp
         ${APP}/game/GameWorld.cpp
+        ${APP}/game/FlowField.cpp
         ${APP}/engine/assets/Assets.cpp
         ${APP}/engine/assets/Model.cpp
         ${APP}/game/Scene.cpp

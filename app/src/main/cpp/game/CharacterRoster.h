@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -15,6 +16,11 @@ struct CharacterDesc {
     float yawOffset = 0.0f;
     std::vector<std::string> hide;  // подстроки имён узлов-реквизита, которые прятать
     std::string attackClip;         // имя клипа атаки; пусто -> keyword-поиск в Scene
+
+    // Цель движения моба (config/enemies.cfg, ключ `target`). Ядро — если путь есть;
+    // иначе (и у типов `building`) — ближайшая враждебная постройка по длине пути.
+    enum class MobGoal : uint8_t { Core = 0, Building = 1 };
+    MobGoal goal = MobGoal::Core;
 
     // Боевые статы — только для МОБОВ (config/enemies.cfg), читает сервер. 0 = взять дефолт
     // из `building enemy`. Клиент эти поля игнорирует (ему нужны только модель/визуал).

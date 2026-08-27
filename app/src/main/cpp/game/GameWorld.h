@@ -13,6 +13,7 @@
 #include "game/SceneDesc.h"  // SceneDesc, EnemySpec (по значению)
 
 class CollisionWorld;
+struct NavState;  // клеточная карта + поля потока (определён в GameWorld.cpp)
 
 // Авторитетная игровая сущность (сервер). Толстый tagged-union по типу: поля, не нужные
 // данному типу, просто не используются. При сотнях сущностей это дёшево и кэш-дружелюбно —
@@ -35,7 +36,9 @@ struct Entity {
     float range = 0.0f;   // tower: радиус поражения
     float timer = 0.0f;   // spawner: до след. спавна; tower: до след. выстрела; enemy: до след. удара
     int spawnedCount = 0; // spawner: сколько врагов уже породил (потолок = cap)
-    uint32_t targetId = 0; // projectile: id цели (враг), к которой летит снаряд (0 = нет)
+    uint32_t targetId = 0; // projectile: id цели; enemy: липкая цель удара (здание)
+    uint32_t footprint = 0; // статичный бокс футпринта здания (ColliderBoxId; 0 = нет)
+    uint8_t mobGoal = 0;   // enemy: MobGoal (core / building)
     bool heroStatsApplied = false; // hero: применены ли статы выбранного персонажа (по charType)
 };
 
@@ -103,6 +106,8 @@ private:
     std::vector<BuildingSpec> buildingSpecs_; // здания базы из сцены (для матч-рестарта)
     uint32_t nextEntityId_ = 1;
     std::unique_ptr<CollisionWorld> world_;   // та же геометрия, что у клиента (может быть пуст)
+    std::unique_ptr<NavState> nav_;           // occupancy + поля потока (по командам)
+    std::vector<ColliderSpec> sceneColliders_; // статика сцены — для растеризации в навсетку
     Vec3 spawnPos_{0.0f, 0.0f, 0.0f};         // спавн по умолчанию (player.pos; fallback без spawn-точек)
     Vec3 spawnByTeam_[kMaxTeams];             // точка спавна каждой стороны (из директив spawn)
     bool spawnValid_[kMaxTeams] = {false};    // у команды задана spawn-точка → она «играбельна»
@@ -132,4 +137,7 @@ private:
     void restartMatch();                       // пересобрать матч (базы/герои/экономика), не трогая геометрию
     Entity* entityById(uint32_t id);
     const Entity* entityById(uint32_t id) const;
+    void attachFootprint(Entity& e);           // бокс клетки + пометка навсетки грязной
+    void detachPhysics(Entity& e);             // капсула и/или футпринт
+    void rebuildNavIfNeeded();                 // occupancy + BFS; только если dirty
 };

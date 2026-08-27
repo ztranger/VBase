@@ -14,6 +14,8 @@
 
 // Хэндл контроллера в мире. 0 — недействительный.
 using ColliderCharId = uint32_t;
+// Хэндл статичного бокса (футпринт здания). 0 — недействительный.
+using ColliderBoxId = uint32_t;
 
 class CollisionWorld {
 public:
@@ -22,10 +24,12 @@ public:
     CollisionWorld(const CollisionWorld&) = delete;
     CollisionWorld& operator=(const CollisionWorld&) = delete;
 
-    // --- Статичная геометрия (добавлять до finalize) ---
+    // --- Статичная геометрия ---
     // Бокс с центром center и полуразмерами half (AABB, без поворота — пока хватает).
-    void addBox(Vec3 center, Vec3 half);
-    // Оптимизировать broad-phase после добавления всей статики (один раз).
+    // Можно звать и после finalize (постройка/снос в рантайме). 0 = не удалось создать.
+    ColliderBoxId addBox(Vec3 center, Vec3 half);
+    void removeBox(ColliderBoxId id);
+    // Оптимизировать broad-phase после пачки статики (не обязательно после каждого бокса).
     void finalize();
 
     // --- Кинематический контроллер-капсула ---

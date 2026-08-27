@@ -1,19 +1,27 @@
 #include "game/GameWorld.h"
 
 #include <cmath>
+#include <memory>
+#include <vector>
 
 #include "engine/core/Log.h"
 #include "engine/physics/CollisionWorld.h"
+#include "game/FlowField.h"
 #include "game/Grid.h"
 #include "game/SceneDesc.h"
 
 namespace {
-// Параметры врагов (G2): скорость бега, капсула, дистанция «дошёл до ядра».
+// Параметры врагов: скорость бега, капсула, дистанция «дошёл до цели».
 constexpr float kEnemySpeed = 3.0f;
 constexpr float kEnemyRadius = 0.3f;
 constexpr float kEnemyCylHalf = 0.3f;
-constexpr float kCoreStopDist = 1.0f;
-constexpr float kHeroHitRange = 1.3f;  // враг бьёт героя, если тот ближе этого
+constexpr float kBuildingHitRange = 2.6f;  // мили по зданию (полуклетка + капсула + угол)
+constexpr float kHeroHitRange = 1.3f;      // враг бьёт героя, если тот ближе этого
+
+float horizDist(Vec3 a, Vec3 b) {
+    float dx = a.x - b.x, dz = a.z - b.z;
+    return std::sqrt(dx * dx + dz * dz);
+}
 
 // Снаряд башни (серверная сущность): летит к цели, урон по попаданию.
 constexpr float kProjSpeed = 16.0f;      // world/сек
@@ -34,6 +42,12 @@ bool isBuildingType(EntityType t) {
            t == EntityType::Spawner || t == EntityType::Tower || t == EntityType::Core;
 }
 
+// Блокирует ли тип путь мобов (футпринт + occupancy). Спавнер — нет: из него выходят.
+bool blocksPath(EntityType t) {
+    return t == EntityType::Generator || t == EntityType::Storage ||
+           t == EntityType::Tower || t == EntityType::Core;
+}
+
 // Враждебны ли команды (кого бой считает целью). team 0 — нейтрал/PvE: враждебен всем,
 // в т.ч. сам себе — иначе чисто-PvE-сцена (всё team 0) перестала бы воевать. Стороны 1/2
 // враждебны разным командам и дружественны своей (PvP: башни/враги не бьют своих).
@@ -42,6 +56,13 @@ bool hostile(uint8_t a, uint8_t b) {
     return a != b;
 }
 }  // namespace
+
+struct NavState {
+    NavGrid map;
+    FlowField toCore[GameWorld::kMaxTeams];
+    FlowField toBuildings[GameWorld::kMaxTeams];
+    bool dirty = true;
+};
 
 GameWorld::GameWorld() = default;
 GameWorld::~GameWorld() = default;
@@ -80,6 +101,8 @@ void GameWorld::reset() {
     decided_ = false;
     waveCleared_ = false;
     buildingSpecs_.clear();
+    sceneColliders_.clear();
+    nav_.reset();
     matchRestartDelay_ = 0.0f;
     restartTimer_ = 0.0f;
 }
@@ -87,6 +110,7 @@ void GameWorld::reset() {
 void GameWorld::configure(const SceneDesc& desc) {
     reset();  // идемпотентно: свежий мир на каждую конфигурацию
     world_ = std::make_unique<CollisionWorld>();
+    sceneColliders_ = desc.colliders;
     for (const ColliderSpec& cs : desc.colliders) {
         world_->addBox(cs.center, cs.half);
     }
@@ -114,8 +138,11 @@ void GameWorld::configure(const SceneDesc& desc) {
     // Здания базы: сохраняем спеки (для матч-рестарта — пересоздать базы) и спавним.
     buildingSpecs_ = desc.buildings;
     spawnBuildings();
-    LOGI("GameWorld: мир — %d коллайдеров, %d сущностей базы", (int)desc.colliders.size(),
-         (int)desc.buildings.size());
+    nav_ = std::make_unique<NavState>();  // occupancy пересчитаем на первом step
+    rebuildNavIfNeeded();
+    LOGI("GameWorld: мир — %d коллайдеров, %d сущностей базы, навсетка %dx%d",
+         (int)desc.colliders.size(), (int)desc.buildings.size(),
+         nav_->map.width(), nav_->map.height());
 }
 
 void GameWorld::spawnBuildings() {
@@ -139,6 +166,7 @@ void GameWorld::spawnBuildings() {
         e.damage = b.damage;    // tower: урон
         e.range = b.range;      // tower: радиус
         entities_.push_back(e);
+        attachFootprint(entities_.back());
     }
 }
 
@@ -148,7 +176,7 @@ void GameWorld::restartMatch() {
     for (size_t i = 0; i < entities_.size();) {
         Entity& e = entities_[i];
         if (e.type == EntityType::Hero) { ++i; continue; }  // герои остаются (игроки подключены)
-        if (world_ && e.move.collider != 0) world_->removeCharacter(e.move.collider);  // враг
+        detachPhysics(e);
         entities_.erase(entities_.begin() + (long)i);
     }
     spawnBuildings();  // свежие базы (новые id — клиент увидит их как новые сущности)
@@ -208,9 +236,7 @@ uint32_t GameWorld::addHero(uint8_t team) {
 
 void GameWorld::removeEntity(uint32_t id) {
     Entity* e = entityById(id);
-    if (e != nullptr && world_ && e->move.collider != 0) {
-        world_->removeCharacter(e->move.collider);
-    }
+    if (e != nullptr) detachPhysics(*e);
     heroInputs_.erase(id);  // очередь ввода уходит вместе с героем
     for (size_t i = 0; i < entities_.size(); ++i)
         if (entities_[i].id == id) {
@@ -257,6 +283,55 @@ void GameWorld::applyHeroStats(Entity& e) {
     if (spd > 0.0f) e.move.maxSpeed = spd;
 }
 
+void GameWorld::attachFootprint(Entity& e) {
+    if (!blocksPath(e.type)) return;
+    if (world_) {
+        const float h = grid_.cell * 0.5f;
+        // Бокс в позиции сущности (не в центре клетки): здания из сцены часто не на
+        // cellCenter, иначе моб упирается в футпринт дальше мили.
+        e.footprint = world_->addBox(Vec3{e.move.position.x, 0.5f, e.move.position.z},
+                                     Vec3{h, 0.5f, h});
+    }
+    if (nav_) nav_->dirty = true;
+}
+
+void GameWorld::detachPhysics(Entity& e) {
+    if (world_ == nullptr) return;
+    if (e.move.collider != 0) {
+        world_->removeCharacter(e.move.collider);
+        e.move.collider = 0;
+    }
+    if (e.footprint != 0) {
+        world_->removeBox(e.footprint);
+        e.footprint = 0;
+        if (nav_) nav_->dirty = true;
+    }
+}
+
+void GameWorld::rebuildNavIfNeeded() {
+    if (nav_ == nullptr || !nav_->dirty) return;
+    nav_->dirty = false;
+    nav_->map.reset(grid_);
+    for (const ColliderSpec& cs : sceneColliders_) nav_->map.rasterizeBox(cs.center, cs.half);
+    for (const Entity& e : entities_) {
+        if (!blocksPath(e.type)) continue;
+        nav_->map.setBlocked(grid_.cellOf(e.move.position.x), grid_.cellOf(e.move.position.z),
+                             true);
+    }
+    for (int t = 0; t < kMaxTeams; ++t) {
+        std::vector<NavCell> cores, buildings;
+        for (const Entity& e : entities_) {
+            if (!blocksPath(e.type) || !hostile((uint8_t)t, e.team)) continue;
+            if (e.maxHp > 0.0f && e.hp <= 0.0f) continue;  // мёртвое ядро — не цель
+            NavCell c{grid_.cellOf(e.move.position.x), grid_.cellOf(e.move.position.z)};
+            if (e.type == EntityType::Core) cores.push_back(c);
+            if (e.maxHp > 0.0f) buildings.push_back(c);
+        }
+        nav_->toCore[t].compute(nav_->map, cores);
+        nav_->toBuildings[t].compute(nav_->map, buildings);
+    }
+}
+
 bool GameWorld::tryBuild(uint32_t builderId, EntityType type, int cellX, int cellZ) {
     if ((int)type < 0 || (int)type >= 8) return false;
     const BuildTemplate& t = buildTemplates_[(int)type];
@@ -287,9 +362,8 @@ bool GameWorld::tryBuild(uint32_t builderId, EntityType type, int cellX, int cel
     e.hp = e.maxHp = t.hp;
     e.damage = t.damage;
     e.range = t.range;
-    // Пока БЕЗ футпринт-коллайдера: враги — steer-to-target без пасфайндинга, блок бы их
-    // стопорил. Башня влияет позицией/радиусом, генератор/хранилище — экономикой.
     entities_.push_back(e);
+    attachFootprint(entities_.back());
     LOGI("GameWorld: возведено type=%d team=%d в клетке (%d,%d), ресурс=%.0f",
          (int)type, (int)team, cellX, cellZ, (double)resourcePerTeam_[team]);
     return true;
@@ -410,6 +484,8 @@ void GameWorld::step(float dt) {
                 enemy.damage = edmg;
                 enemy.move.maxSpeed = espeed;  // скорость бега (используется в движении врага)
                 enemy.rate = eatk;             // для врага rate = интервал удара
+                enemy.mobGoal = 0;
+                if (nTypes > 0) enemy.mobGoal = (uint8_t)enemyTypes_[type].goal;
                 if (world_)
                     enemy.move.collider = world_->addCharacter(
                         e.move.position, kEnemyRadius, kEnemyCylHalf);
@@ -424,62 +500,129 @@ void GameWorld::step(float dt) {
     // вектор на каждой сущности (было O(N²): каждый враг искал ядра/героев по всем entities_,
     // каждая башня — врагов). entities_ стабилен от спавна выше до уборки трупов ниже —
     // указатели живут. Ядер/героев/башен немного, врагов может быть много: теперь бой ~O(N).
-    std::vector<Entity*> cores, heroes, enemies;
+    std::vector<Entity*> cores, heroes, enemies, smashables;
     for (Entity& e : entities_) {
         if (e.type == EntityType::Core) cores.push_back(&e);
         else if (e.type == EntityType::Hero) heroes.push_back(&e);
         else if (e.type == EntityType::Enemy) enemies.push_back(&e);
+        if (blocksPath(e.type) && e.maxHp > 0.0f && e.hp > 0.0f) smashables.push_back(&e);
     }
 
-    // Враги бегут к ближайшему ВРАЖДЕБНОМУ ядру (в PvP у каждой стороны своё — враг бежит на
-    // чужое; в PvE всё team 0 и hostile(0,0)=true, поведение как раньше), а по кулдауну бьют
-    // БЛИЖАЙШУЮ цель в радиусе: враждебное ядро (kCoreStopDist) ИЛИ живого враждебного героя
-    // (kHeroHitRange). Цель зависит от команды врага — считаем пер-врага.
+    rebuildNavIfNeeded();
+
+    // Враги: поле потока к предпочитаемой цели (ядро / ближайшая постройка). Если рашер
+    // не может дойти до ядра — фолбэк на поле построек и ломает то, до чего дошёл.
     for (Entity* ep : enemies) {
         Entity& e = *ep;
-        // Ближайшее враждебное ядро — цель движения.
+        const int cx = grid_.cellOf(e.move.position.x);
+        const int cz = grid_.cellOf(e.move.position.z);
+        const uint8_t team = (e.team < kMaxTeams) ? e.team : 0;
+
+        bool smashBuildings = false;
+        Vec3 dir{0.0f, 0.0f, 0.0f};
+        if (nav_ != nullptr && nav_->map.cellCount() > 0) {
+            const bool preferCore =
+                (e.mobGoal != (uint8_t)CharacterDesc::MobGoal::Building);
+            if (preferCore && nav_->toCore[team].reachable(cx, cz)) {
+                dir = nav_->toCore[team].direction(cx, cz);
+            } else if (nav_->toBuildings[team].reachable(cx, cz)) {
+                dir = nav_->toBuildings[team].direction(cx, cz);
+                smashBuildings = true;
+            } else if (nav_->toCore[team].reachable(cx, cz)) {
+                dir = nav_->toCore[team].direction(cx, cz);
+            }
+        }
+
         Entity* core = nullptr;
         float coreDist = 1e30f;
         for (Entity* cp : cores) {
             if (!hostile(e.team, cp->team)) continue;
-            Vec3 to = cp->move.position - e.move.position;
-            to.y = 0.0f;
-            float d = std::sqrt(to.x * to.x + to.z * to.z);
+            float d = horizDist(e.move.position, cp->move.position);
             if (d < coreDist) { coreDist = d; core = cp; }
         }
+        // Нет навсетки — как раньше: прямая на ядро.
+        if (nav_ == nullptr || nav_->map.cellCount() == 0) {
+            smashBuildings = false;
+            if (core != nullptr && coreDist > kBuildingHitRange) {
+                Vec3 to = core->move.position - e.move.position;
+                to.y = 0.0f;
+                dir = to * (1.0f / coreDist);
+            } else {
+                dir = Vec3{0.0f, 0.0f, 0.0f};
+            }
+        }
+
+        Entity* atk = nullptr;
+        float atkDist = 1e30f;
+        if (smashBuildings) {
+            // Ломатель / фолбэк: липкая цель, иначе ближайшая постройка по прямой.
+            // Поле потока ведёт в клетку; последняя миля — в сущность, иначе капсула
+            // объезжает футпринт и поле на той стороне уже указывает в ядро.
+            Entity* dest = nullptr;
+            float destDist = 1e30f;
+            Entity* sticky = entityById(e.targetId);
+            auto okB = [&](Entity* b) {
+                return b != nullptr && b->hp > 0.0f && b->maxHp > 0.0f &&
+                       blocksPath(b->type) && hostile(e.team, b->team);
+            };
+            if (okB(sticky)) {
+                dest = sticky;
+                destDist = horizDist(e.move.position, sticky->move.position);
+            } else {
+                e.targetId = 0;
+                for (Entity* b : smashables) {
+                    if (!okB(b)) continue;
+                    float d = horizDist(e.move.position, b->move.position);
+                    if (d < destDist) { dest = b; destDist = d; }
+                }
+            }
+            if (dest != nullptr) {
+                e.targetId = dest->id;
+                if (destDist <= kBuildingHitRange) {
+                    atk = dest;
+                    atkDist = destDist;
+                    dir = Vec3{0.0f, 0.0f, 0.0f};
+                } else {
+                    Vec3 to = dest->move.position - e.move.position;
+                    to.y = 0.0f;
+                    dir = to * (1.0f / destDist);
+                }
+            }
+        } else {
+            e.targetId = 0;
+            if (core != nullptr && coreDist <= kBuildingHitRange) {
+                atk = core;
+                atkDist = coreDist;
+            }
+        }
+        for (Entity* hero : heroes) {
+            if (hero->hp <= 0.0f || !hostile(e.team, hero->team)) continue;
+            float hd = horizDist(e.move.position, hero->move.position);
+            if (hd <= kHeroHitRange && hd < atkDist) { atk = hero; atkDist = hd; }
+        }
+
         Vec3 vel{0.0f, 0.0f, 0.0f};
-        if (core != nullptr && coreDist > kCoreStopDist) {
-            Vec3 to = core->move.position - e.move.position;
+        if (atk != nullptr && atk->type != EntityType::Hero) {
+            Vec3 to = atk->move.position - e.move.position;
             to.y = 0.0f;
-            Vec3 dir = to * (1.0f / coreDist);
-            float spd = e.move.maxSpeed > 0.0f ? e.move.maxSpeed : kEnemySpeed;  // per-type скорость
+            float len = std::sqrt(to.x * to.x + to.z * to.z);
+            if (len > 1e-4f) e.move.facingYaw = std::atan2(to.x / len, to.z / len);
+        } else if (dir.x != 0.0f || dir.z != 0.0f) {
+            float spd = e.move.maxSpeed > 0.0f ? e.move.maxSpeed : kEnemySpeed;
             vel = dir * spd;
             e.move.facingYaw = std::atan2(dir.x, dir.z);
         }
-        // Цель удара — ближайшее в радиусе: враждебное ядро (в упоре) или ближайший живой
-        // враждебный герой.
-        Entity* atk = nullptr;
-        float atkDist = 1e30f;
-        if (core != nullptr && coreDist <= kCoreStopDist) { atk = core; atkDist = coreDist; }
-        for (Entity* hero : heroes) {
-            if (hero->hp <= 0.0f || !hostile(e.team, hero->team)) continue;
-            Vec3 d = hero->move.position - e.move.position;
-            d.y = 0.0f;
-            float hd = std::sqrt(d.x * d.x + d.z * d.z);
-            if (hd <= kHeroHitRange && hd < atkDist) { atk = hero; atkDist = hd; }
-        }
+
         if (atk != nullptr) {
             e.timer += dt;
-            float atkInt = e.rate > 0.0f ? e.rate : enemyStats_.attackInterval;  // per-type интервал
+            float atkInt = e.rate > 0.0f ? e.rate : enemyStats_.attackInterval;
             if (atkInt > 0.0f && e.timer >= atkInt) {
                 e.timer -= atkInt;
                 atk->hp -= e.damage;
             }
         } else {
-            e.timer = 0.0f;  // никого в радиусе — таймер удара сброшен (подход не бьёт мгновенно)
+            e.timer = 0.0f;
         }
-        // Флаг «в упоре и бьёт цель» -> клиент лупит attack-клип моба (иначе walk). Пишется в
-        // EntityState.attackT (то же поле, что каст героя) — без бампа протокола.
         e.move.attackTime = (atk != nullptr) ? 1.0f : 0.0f;
         if (world_ && e.move.collider != 0)
             e.move.position =
@@ -574,8 +717,10 @@ void GameWorld::step(float dt) {
         Entity& e = entities_[i];
         bool deadEnemy = (e.type == EntityType::Enemy && e.hp <= 0.0f);
         bool deadProj = (e.type == EntityType::Projectile && e.timer >= kProjMaxLife);
-        if (deadEnemy || deadProj) {
-            if (world_ && e.move.collider != 0) world_->removeCharacter(e.move.collider);
+        bool deadBuilding = blocksPath(e.type) && e.type != EntityType::Core &&
+                            e.maxHp > 0.0f && e.hp <= 0.0f;
+        if (deadEnemy || deadProj || deadBuilding) {
+            detachPhysics(e);
             entities_.erase(entities_.begin() + (long)i);
         } else {
             ++i;

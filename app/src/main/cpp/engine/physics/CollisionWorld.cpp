@@ -124,9 +124,13 @@ struct CollisionWorld::Impl {
     std::unordered_map<ColliderCharId, J::Ref<J::CharacterVirtual>> characters;
     ColliderCharId nextId = 1;
 
+    std::unordered_map<ColliderBoxId, J::BodyID> boxes;
+    ColliderBoxId nextBoxId = 1;
+
     Impl() {
-        // Немного тел: статика арены + пара контроллеров.
-        system.Init(256, 0, 256, 256, bpLayer, objVsBp, objVsObj);
+        // Статика арены + футпринты зданий на полях до ~400×400 клеток.
+        // CharacterVirtual в лимит тел не входит (это не Body).
+        system.Init(8192, 0, 16384, 8192, bpLayer, objVsBp, objVsObj);
     }
 };
 
@@ -137,14 +141,30 @@ CollisionWorld::CollisionWorld() {
 
 CollisionWorld::~CollisionWorld() = default;
 
-void CollisionWorld::addBox(Vec3 center, Vec3 half) {
+ColliderBoxId CollisionWorld::addBox(Vec3 center, Vec3 half) {
     J::BodyInterface& bodies = impl_->system.GetBodyInterface();
     J::RefConst<J::Shape> shape = new J::BoxShape(toJ(half));
     J::BodyCreationSettings settings(shape, toJR(center), J::Quat::sIdentity(),
                                      J::EMotionType::Static, Layers::NON_MOVING);
     J::Body* body = bodies.CreateBody(settings);
-    if (body != nullptr) bodies.AddBody(body->GetID(), J::EActivation::DontActivate);
-    else LOGW("CollisionWorld: не удалось создать статичный бокс (лимит тел?)");
+    if (body == nullptr) {
+        LOGW("CollisionWorld: не удалось создать статичный бокс (лимит тел?)");
+        return 0;
+    }
+    bodies.AddBody(body->GetID(), J::EActivation::DontActivate);
+    ColliderBoxId id = impl_->nextBoxId++;
+    impl_->boxes[id] = body->GetID();
+    return id;
+}
+
+void CollisionWorld::removeBox(ColliderBoxId id) {
+    if (id == 0) return;
+    auto it = impl_->boxes.find(id);
+    if (it == impl_->boxes.end()) return;
+    J::BodyInterface& bodies = impl_->system.GetBodyInterface();
+    bodies.RemoveBody(it->second);
+    bodies.DestroyBody(it->second);
+    impl_->boxes.erase(it);
 }
 
 void CollisionWorld::finalize() { impl_->system.OptimizeBroadPhase(); }
