@@ -28,7 +28,9 @@ public:
     void setBlocked(int cx, int cz, bool blocked);
     bool isBlocked(int cx, int cz) const;
     // Занять клетки, которые пересекает AABB в XZ. Пол (верх ≤ 0) пропускаем.
-    void rasterizeBox(Vec3 center, Vec3 half);
+    // clearance — запас под радиус агента: клетка, куда капсула физически не влезет,
+    // не должна считаться проходимой.
+    void rasterizeBox(Vec3 center, Vec3 half, float clearance = 0.0f);
 
     int width() const { return w_; }
     int height() const { return h_; }
@@ -49,9 +51,11 @@ private:
 class FlowField {
 public:
     void compute(const NavGrid& nav, const std::vector<NavCell>& goals);
+    // true, если из клетки (или соседней, если стоим внутри блока) есть путь к цели.
     bool reachable(int cx, int cz) const;
     // Горизонтальное направление к цели (нормализованное). (0,0,0) — на цели
-    // или путь недоступен.
+    // или путь недоступен. Если текущая клетка занята препятствием — шаг на
+    // соседнюю проходимую с минимальной дистанцией.
     Vec3 direction(int cx, int cz) const;
     bool empty() const { return dist_.empty(); }
 

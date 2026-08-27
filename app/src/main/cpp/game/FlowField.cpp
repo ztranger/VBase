@@ -5,6 +5,11 @@
 
 #include "engine/core/Log.h"
 
+namespace {
+constexpr int kDx[8] = {1, -1, 0, 0, 1, 1, -1, -1};
+constexpr int kDz[8] = {0, 0, 1, -1, 1, -1, 1, -1};
+}  // namespace
+
 void NavGrid::reset(const Grid& grid) {
     grid_ = grid;
     int lo = 0, hi = -1;
@@ -59,14 +64,15 @@ bool NavGrid::isBlocked(int cx, int cz) const {
     return i >= 0 && blocked_[(size_t)i] != 0;
 }
 
-void NavGrid::rasterizeBox(Vec3 center, Vec3 half) {
+void NavGrid::rasterizeBox(Vec3 center, Vec3 half, float clearance) {
     // Пол арены (верх на y=0) не должен занять всю карту.
     if (center.y + half.y <= 0.05f) return;
     if (w_ <= 0 || h_ <= 0 || grid_.cell <= 0.0f) return;
 
     const float cell = grid_.cell;
-    const float minWx = center.x - half.x, maxWx = center.x + half.x;
-    const float minWz = center.z - half.z, maxWz = center.z + half.z;
+    const float pad = clearance > 0.0f ? clearance : 0.0f;
+    const float minWx = center.x - half.x - pad, maxWx = center.x + half.x + pad;
+    const float minWz = center.z - half.z - pad, maxWz = center.z + half.z + pad;
     int cx0 = grid_.cellOf(minWx);
     int cx1 = grid_.cellOf(maxWx - 1e-4f);
     int cz0 = grid_.cellOf(minWz);
@@ -116,9 +122,6 @@ void FlowField::compute(const NavGrid& nav, const std::vector<NavCell>& goals) {
     }
 
     // 4 ортогонали, затем 4 диагонали — ортогональный путь выигрывает при равной цене.
-    static constexpr int kDx[8] = {1, -1, 0, 0, 1, 1, -1, -1};
-    static constexpr int kDz[8] = {0, 0, 1, -1, 1, -1, 1, -1};
-
     size_t head = 0;
     while (head < q.size()) {
         const int cur = q[head++];
@@ -143,16 +146,42 @@ void FlowField::compute(const NavGrid& nav, const std::vector<NavCell>& goals) {
 
 bool FlowField::reachable(int cx, int cz) const {
     int i = idx(cx, cz);
-    return i >= 0 && dist_[(size_t)i] != kUnreach;
+    if (i >= 0 && dist_[(size_t)i] != kUnreach) return true;
+    // Стоим на блоке (куб/футпринт): путь есть, если соседняя клетка в поле.
+    for (int d = 0; d < 8; ++d) {
+        int ni = idx(cx + kDx[d], cz + kDz[d]);
+        if (ni >= 0 && dist_[(size_t)ni] != kUnreach) return true;
+    }
+    return false;
 }
 
 Vec3 FlowField::direction(int cx, int cz) const {
     int i = idx(cx, cz);
-    if (i < 0 || dist_[(size_t)i] == kUnreach) return Vec3{0.0f, 0.0f, 0.0f};
-    int p = parent_[(size_t)i];
-    if (p < 0) return Vec3{0.0f, 0.0f, 0.0f};  // уже на клетке цели
-    const int px = minX_ + (p % w_);
-    const int pz = minZ_ + (p / w_);
-    Vec3 dir{(float)(px - cx), 0.0f, (float)(pz - cz)};
+    if (i >= 0 && dist_[(size_t)i] != kUnreach) {
+        int p = parent_[(size_t)i];
+        if (p < 0) return Vec3{0.0f, 0.0f, 0.0f};  // уже на клетке цели
+        const int px = minX_ + (p % w_);
+        const int pz = minZ_ + (p / w_);
+        Vec3 dir{(float)(px - cx), 0.0f, (float)(pz - cz)};
+        return normalize(dir);
+    }
+    // Внутри препятствия — выйти на ближайшую (по dist) проходимую соседнюю.
+    int bx = 0, bz = 0;
+    uint16_t best = kUnreach;
+    bool found = false;
+    for (int d = 0; d < 8; ++d) {
+        const int nx = cx + kDx[d];
+        const int nz = cz + kDz[d];
+        int ni = idx(nx, nz);
+        if (ni < 0 || dist_[(size_t)ni] == kUnreach) continue;
+        if (!found || dist_[(size_t)ni] < best) {
+            best = dist_[(size_t)ni];
+            bx = nx;
+            bz = nz;
+            found = true;
+        }
+    }
+    if (!found) return Vec3{0.0f, 0.0f, 0.0f};
+    Vec3 dir{(float)(bx - cx), 0.0f, (float)(bz - cz)};
     return normalize(dir);
 }

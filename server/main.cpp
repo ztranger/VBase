@@ -872,6 +872,62 @@ int runPathfindTest() {
         }
     }
 
+    // Статические кубы (не здания) перекрывают прямую — обходят, доходят до ядра.
+    {
+        SceneDesc desc;
+        makeArena(desc);
+        BuildingSpec core;
+        core.kind = BuildingSpec::Core;
+        core.pos = desc.grid.cellCenter(-2, 0);
+        core.hp = 500.0f;
+        desc.buildings.push_back(core);
+        BuildingSpec sp;
+        sp.kind = BuildingSpec::Spawner;
+        sp.pos = desc.grid.cellCenter(2, 0);
+        sp.rate = 0.15f;
+        sp.cap = 1.0f;
+        desc.buildings.push_back(sp);
+        for (int cz : {-1, 0, 1}) {
+            ColliderSpec box;
+            box.center = desc.grid.cellCenter(0, cz);
+            box.center.y = 0.9f;
+            box.half = Vec3{0.85f, 0.9f, 0.85f};
+            desc.colliders.push_back(box);
+        }
+        CharacterDesc rusher;
+        rusher.goal = CharacterDesc::MobGoal::Core;
+        rusher.hp = 200.0f;
+        rusher.damage = 20.0f;
+        rusher.speed = 5.0f;
+        rusher.attackInterval = 0.15f;
+        desc.enemyTypes.push_back(rusher);
+        desc.enemy.hp = 200.0f;
+        desc.enemy.damage = 20.0f;
+        desc.enemy.attackInterval = 0.15f;
+
+        GameWorld world;
+        world.configure(desc);
+        const Vec3 corePos = desc.grid.cellCenter(-2, 0);
+        float nearestCore = 999.0f;
+        for (int i = 0; i < 250; ++i) {
+            world.step(kTickDt);
+            std::vector<EntityState> st;
+            world.writeStates(st);
+            nearestCore = 999.0f;
+            for (const EntityState& s : st) {
+                if ((EntityType)s.type != EntityType::Enemy) continue;
+                float dx = s.x - corePos.x, dz = s.z - corePos.z;
+                float d = std::sqrt(dx * dx + dz * dz);
+                if (d < nearestCore) nearestCore = d;
+            }
+        }
+        std::printf("[PathTest] обход кубов: к ядру=%.1f (ждём <3)\n", (double)nearestCore);
+        if (nearestCore >= 3.0f) {
+            std::printf("[PathTest] FAIL: застряли на статических кубах\n");
+            return 1;
+        }
+    }
+
     std::printf("[PathTest] OK\n");
     return 0;
 }

@@ -1,5 +1,8 @@
 # Сцена по умолчанию VBase. Формат: одна директива на строку, '#' — комментарий.
 # Ссылки (mat/tex) — по именам, объявленным выше.
+#
+# Арена ~36×36 (стены ±18): спавнер СВ, ядро Ю — длинный путь через центр.
+# В центре стена-препятствие: рашеры обходят на запад, миньоны могут грызть базу.
 
 # --- Текстуры ---
 texture checker procedural 256 8            # процедурная шахматка
@@ -15,50 +18,62 @@ material gold  phong color 0.95 0.80 0.25
 material edge  lit   color 0.55 0.65 0.85   tex checker
 
 # --- Меши-примитивы ---
-mesh ground plane  24 12    # size 24, UV-тайлинг 12
+mesh ground plane  36 18    # size 36, UV-тайлинг 18 (арена ±18)
 mesh box    cube   1
 mesh ball   sphere 0.6
 
 # --- Свет и камера ---
 light  dir 0.4 1 0.6
-camera distance 18 pitch 0.9        # ¾-вид: наклон ~51°, зум/орбита — правым стиком/стрелками
-grid   cell 2 arena 11              # строительная сетка: размер клетки и полуразмер зоны стройки
-matchrestart 8                      # после победы/поражения — авто-рестарт матча через 8 с
+camera distance 26 pitch 0.85   # чуть выше и дальше — видна вся дорожка
+grid   cell 2 arena 17          # стройка внутри стен ±18
+matchrestart 8                  # после победы/поражения — авто-рестарт матча через 8 с
 
 # --- Объекты окружения ---
 object ground mat floor
 
-object box mat crate pos -4 0.5 -4 spin 0.6
-object box mat red   pos  0 0.5 -4 spin 0.9
-object box mat green pos  4 0.5 -4 spin 1.2
+# Стена-препятствие углом (визуал = коллайдер). Прямая спавнер→ядро упирается сюда;
+# обход на −X. Крючки на концах — проверка, не застревают ли капсулы в угле.
+object box mat crate pos  4 0.9  8  scale 1.8
+object box mat crate pos  4 0.9  6  scale 1.8
+object box mat crate pos  4 0.9  4  scale 1.8
+object box mat crate pos  4 0.9  2  scale 1.8
+object box mat crate pos  4 0.9  0  scale 1.8
+object box mat crate pos  4 0.9 -2  scale 1.8
+object box mat crate pos  6 0.9 -2  scale 1.8
+object box mat crate pos  2 0.9  8  scale 1.8
 
-object ball mat blue pos -4 0.6 4
-object ball mat gold pos  0 0.6 4
-object ball mat red  pos  4 0.6 4
+# Декор в стороне от дорожки (без коллизий — не путают пасфайндинг)
+object ball mat blue pos -12 0.6  8
+object ball mat gold pos -12 0.6  0
+object ball mat red  pos -12 0.6 -8
 
 # Кольцо инстансных кубов по краю (демо инстансинга)
-ring box mat edge count 48 radius 10 y 0.4 scale 0.4 spin 1.2
+ring box mat edge count 48 radius 16 y 0.4 scale 0.4 spin 1.2
 
 # --- Коллайдеры физики (независимы от визуальных мешей) ---
 # collider box center <x y z> half <hx hy hz>
-collider box center 0 -0.5 0  half 12 0.5 12       # пол (верх на y=0)
-collider box center 12 1 0    half 0.25 1 12        # стена +X (граница поля)
-collider box center -12 1 0   half 0.25 1 12        # стена -X
-collider box center 0 1 12    half 12 1 0.25         # стена +Z
-collider box center 0 1 -12   half 12 1 0.25         # стена -Z
-collider box center -4 0.5 -4 half 0.5 0.5 0.5       # куб-препятствие
-collider box center 0 0.5 -4  half 0.5 0.5 0.5
-collider box center 4 0.5 -4  half 0.5 0.5 0.5
+collider box center 0 -0.5 0  half 18 0.5 18       # пол (верх на y=0)
+collider box center 18 1 0    half 0.25 1 18        # стена +X
+collider box center -18 1 0   half 0.25 1 18        # стена -X
+collider box center 0 1 18    half 18 1 0.25         # стена +Z
+collider box center 0 1 -18   half 18 1 0.25         # стена -Z
+# Та же стена, что визуал выше
+collider box center  4 0.9  8  half 0.9 0.9 0.9
+collider box center  4 0.9  6  half 0.9 0.9 0.9
+collider box center  4 0.9  4  half 0.9 0.9 0.9
+collider box center  4 0.9  2  half 0.9 0.9 0.9
+collider box center  4 0.9  0  half 0.9 0.9 0.9
+collider box center  4 0.9 -2  half 0.9 0.9 0.9
+collider box center  6 0.9 -2  half 0.9 0.9 0.9
+collider box center  2 0.9  8  half 0.9 0.9 0.9
 
-# --- Здания базы: только РАЗМЕЩЕНИЕ; параметры (rate/cap/interval/max) и тексты —
-# из config/buildings.cfg. Директивы: generator/storage/spawner/core pos <x y z>.
-generator pos -2 0 -6
-storage   pos  2 0 -6
-core      pos  0 0 -8              # ядро базы — цель врагов (hp из конфига)
-spawner   pos  9 0 -8             # плодит врагов, бегут к ядру (путь по z=-8 чист)
-tower     pos  4 0 -6             # башня-защита (урон/радиус/интервал из конфига)
-tower     pos  4 0 -10            # вторая башня — фланкируют путь врагов
+# --- Здания базы: только РАЗМЕЩЕНИЕ; параметры — из config/buildings.cfg. ---
+# База на юге, спавнер на северо-востоке (~30 единиц пути).
+core      pos  0 0 -14
+generator pos -4 0 -14
+storage   pos  4 0 -14
+tower     pos  0 0 -10             # одна слабая башня у подхода к ядру
+spawner   pos 14 0  14             # волны идут через центральную стену
 
-# --- Управляемый персонаж (glTF + скиннинг) ---
-# capsule <radius> <cylHalf> — кинематический контроллер (по умолчанию 0.3 0.3)
-player model models/Mage.glb pos 0 0 0 scale 1.0 hide wand,spellbook
+# --- Управляемый персонаж (у базы, не на дорожке) ---
+player model models/Mage.glb pos 0 0 -12 scale 1.0 hide wand,spellbook

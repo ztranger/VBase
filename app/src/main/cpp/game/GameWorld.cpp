@@ -312,7 +312,9 @@ void GameWorld::rebuildNavIfNeeded() {
     if (nav_ == nullptr || !nav_->dirty) return;
     nav_->dirty = false;
     nav_->map.reset(grid_);
-    for (const ColliderSpec& cs : sceneColliders_) nav_->map.rasterizeBox(cs.center, cs.half);
+    for (const ColliderSpec& cs : sceneColliders_) {
+        nav_->map.rasterizeBox(cs.center, cs.half, kEnemyRadius);
+    }
     for (const Entity& e : entities_) {
         if (!blocksPath(e.type)) continue;
         nav_->map.setBlocked(grid_.cellOf(e.move.position.x), grid_.cellOf(e.move.position.z),
@@ -555,9 +557,8 @@ void GameWorld::step(float dt) {
         Entity* atk = nullptr;
         float atkDist = 1e30f;
         if (smashBuildings) {
-            // Ломатель / фолбэк: липкая цель, иначе ближайшая постройка по прямой.
-            // Поле потока ведёт в клетку; последняя миля — в сущность, иначе капсула
-            // объезжает футпринт и поле на той стороне уже указывает в ядро.
+            // Ломатель / фолбэк: идём по полю потока (обход статики). Прямая на
+            // здание — только в мили: иначе капсула лезет сквозь неломаемые кубы.
             Entity* dest = nullptr;
             float destDist = 1e30f;
             Entity* sticky = entityById(e.targetId);
@@ -566,27 +567,26 @@ void GameWorld::step(float dt) {
                        blocksPath(b->type) && hostile(e.team, b->team);
             };
             if (okB(sticky)) {
-                dest = sticky;
                 destDist = horizDist(e.move.position, sticky->move.position);
-            } else {
+                if (destDist <= kBuildingHitRange) dest = sticky;
+            }
+            if (dest == nullptr) {
                 e.targetId = 0;
+                destDist = 1e30f;
                 for (Entity* b : smashables) {
                     if (!okB(b)) continue;
                     float d = horizDist(e.move.position, b->move.position);
-                    if (d < destDist) { dest = b; destDist = d; }
+                    if (d <= kBuildingHitRange && d < destDist) {
+                        dest = b;
+                        destDist = d;
+                    }
                 }
             }
             if (dest != nullptr) {
                 e.targetId = dest->id;
-                if (destDist <= kBuildingHitRange) {
-                    atk = dest;
-                    atkDist = destDist;
-                    dir = Vec3{0.0f, 0.0f, 0.0f};
-                } else {
-                    Vec3 to = dest->move.position - e.move.position;
-                    to.y = 0.0f;
-                    dir = to * (1.0f / destDist);
-                }
+                atk = dest;
+                atkDist = destDist;
+                dir = Vec3{0.0f, 0.0f, 0.0f};
             }
         } else {
             e.targetId = 0;
