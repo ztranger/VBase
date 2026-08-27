@@ -27,6 +27,7 @@
 #include "engine/assets/FileAssetSource.h"
 #include "game/GameWorld.h"
 #include "engine/net/Net.h"
+#include "game/CharacterRoster.h"
 #include "game/SceneDesc.h"
 #include "game/SceneLoader.h"
 
@@ -782,6 +783,7 @@ int main(int argc, char** argv) {
         BuildingConfig cfg;  // параметры зданий (rate/cap/…) — из конфига
         loadBuildingConfig(assets, "config/buildings.cfg", cfg);
         applyBuildingConfig(desc, cfg);
+        loadCharacterRoster(assets, "config/enemies.cfg", desc.enemyTypes);  // статы типов мобов
         server.configureWorld(desc);
     } else {
         std::fprintf(stderr, "Сцена не загружена (%s, assets=%s) — сервер без коллизий\n",

@@ -15,6 +15,13 @@ constexpr float kEnemyCylHalf = 0.3f;
 constexpr float kCoreStopDist = 1.0f;
 constexpr float kHeroHitRange = 1.3f;  // враг бьёт героя, если тот ближе этого
 
+// Снаряд башни (серверная сущность): летит к цели, урон по попаданию.
+constexpr float kProjSpeed = 16.0f;      // world/сек
+constexpr float kProjHitRadius = 1.0f;   // радиус попадания (>= kProjSpeed*dt, чтобы не проскочить)
+constexpr float kProjMaxLife = 2.5f;     // сек до самоуничтожения (если цель пропала)
+constexpr float kTowerMuzzleY = 2.2f;    // высота вылета снаряда над башней
+constexpr float kEnemyAimY = 0.8f;       // куда целимся по высоте (центр врага)
+
 // Очередь ввода героя (см. HeroInputBuf). Целевая глубина буфера сглаживает джиттер;
 // при бэклоге выше неё догоняем на +1 ввод/тик, чтобы буфер не превращался в постоянную
 // задержку. Жёсткий предел — защита от флуда / долгой смерти (иначе очередь растёт).
@@ -58,6 +65,7 @@ void GameWorld::reset() {
     capsuleRadius_ = 0.3f;
     capsuleCylHalf_ = 0.3f;
     enemyStats_ = EnemySpec{};
+    enemyTypes_.clear();
     for (BuildTemplate& t : buildTemplates_) t = BuildTemplate{};
     heroHp_ = 100.0f;
     heroRespawn_ = 5.0f;
@@ -85,7 +93,8 @@ void GameWorld::configure(const SceneDesc& desc) {
     spawnPos_ = desc.player.pos;
     capsuleRadius_ = desc.player.colliderRadius;
     capsuleCylHalf_ = desc.player.colliderCylHalf;
-    enemyStats_ = desc.enemy;  // hp/урон/интервал врага (враг не в сцене — плодит спавнер)
+    enemyStats_ = desc.enemy;  // дефолтные статы врага (fallback, если нет типов)
+    enemyTypes_ = desc.enemyTypes;  // статы по типу моба (индекс = charType); пусто -> все по enemyStats_
     for (int i = 0; i < 8; ++i) buildTemplates_[i] = desc.build[i];  // шаблоны построек героя
     heroHp_ = desc.player.hp;
     heroRespawn_ = desc.player.respawnDelay > 0.0f ? desc.player.respawnDelay : 5.0f;
@@ -357,13 +366,27 @@ void GameWorld::step(float dt) {
                 enemy.id = nextEntityId_++;
                 enemy.type = EntityType::Enemy;
                 enemy.team = e.team;
-                // Тип модели моба (клиентский ростер config/enemies.cfg): чередуем по спавну.
-                // Клиент берёт mobs_[charType % mobs_.size()] — устойчиво к числу моделей.
-                enemy.charType = (uint8_t)(e.spawnedCount % 4);
+                // Тип моба: чередуем по спавну. Индекс = charType (клиент берёт mobs_[charType %
+                // size]); он же выбирает статы из enemyTypes_ (config/enemies.cfg).
+                int nTypes = (int)enemyTypes_.size();
+                int type = (nTypes > 0) ? (e.spawnedCount % nTypes) : (e.spawnedCount % 4);
+                enemy.charType = (uint8_t)type;
                 enemy.move.position = e.move.position;
                 enemy.move.snapshot();
-                enemy.hp = enemy.maxHp = enemyStats_.hp;  // боевые статы врага
-                enemy.damage = enemyStats_.damage;        // урон по ядру
+                // Статы: из типа (enemyTypes_), с откатом на дефолтные enemyStats_/kEnemySpeed.
+                float ehp = enemyStats_.hp, edmg = enemyStats_.damage;
+                float espeed = kEnemySpeed, eatk = enemyStats_.attackInterval;
+                if (nTypes > 0) {
+                    const CharacterDesc& ct = enemyTypes_[type];
+                    if (ct.hp > 0.0f) ehp = ct.hp;
+                    if (ct.damage > 0.0f) edmg = ct.damage;
+                    if (ct.speed > 0.0f) espeed = ct.speed;
+                    if (ct.attackInterval > 0.0f) eatk = ct.attackInterval;
+                }
+                enemy.hp = enemy.maxHp = ehp;
+                enemy.damage = edmg;
+                enemy.move.maxSpeed = espeed;  // скорость бега (используется в движении врага)
+                enemy.rate = eatk;             // для врага rate = интервал удара
                 if (world_)
                     enemy.move.collider = world_->addCharacter(
                         e.move.position, kEnemyRadius, kEnemyCylHalf);
@@ -406,7 +429,8 @@ void GameWorld::step(float dt) {
             Vec3 to = core->move.position - e.move.position;
             to.y = 0.0f;
             Vec3 dir = to * (1.0f / coreDist);
-            vel = dir * kEnemySpeed;
+            float spd = e.move.maxSpeed > 0.0f ? e.move.maxSpeed : kEnemySpeed;  // per-type скорость
+            vel = dir * spd;
             e.move.facingYaw = std::atan2(dir.x, dir.z);
         }
         // Цель удара — ближайшее в радиусе: враждебное ядро (в упоре) или ближайший живой
@@ -423,8 +447,9 @@ void GameWorld::step(float dt) {
         }
         if (atk != nullptr) {
             e.timer += dt;
-            if (enemyStats_.attackInterval > 0.0f && e.timer >= enemyStats_.attackInterval) {
-                e.timer -= enemyStats_.attackInterval;
+            float atkInt = e.rate > 0.0f ? e.rate : enemyStats_.attackInterval;  // per-type интервал
+            if (atkInt > 0.0f && e.timer >= atkInt) {
+                e.timer -= atkInt;
                 atk->hp -= e.damage;
             }
         } else {
@@ -440,8 +465,9 @@ void GameWorld::step(float dt) {
             e.move.position = e.move.position + vel * dt;
     }
 
-    // Башни: по кулдауну (rate) бьют ближайшего врага в радиусе (range). Урон правит hp
-    // цели — структура entities_ не меняется, поэтому указатели/итерация безопасны.
+    // Башни: по кулдауну (rate) выпускают СНАРЯД в ближайшего врага в радиусе (range). Урон
+    // применяется при попадании (см. система снарядов ниже), а не мгновенно.
+    std::vector<Entity> projSpawned;  // добавим ПОСЛЕ цикла — push_back инвалидировал бы итерацию
     for (Entity& tw : entities_) {
         if (tw.type != EntityType::Tower) continue;
         tw.timer += dt;
@@ -456,10 +482,46 @@ void GameWorld::step(float dt) {
         }
         if (target != nullptr) {
             tw.timer -= tw.rate;
-            target->hp -= tw.damage;
+            Entity proj;
+            proj.id = nextEntityId_++;
+            proj.type = EntityType::Projectile;
+            proj.team = tw.team;
+            proj.move.position = tw.move.position + Vec3{0.0f, kTowerMuzzleY, 0.0f};
+            proj.move.snapshot();
+            proj.damage = tw.damage;
+            proj.move.maxSpeed = kProjSpeed;
+            proj.targetId = target->id;  // хоминг по id цели
+            Vec3 to = (target->move.position + Vec3{0.0f, kEnemyAimY, 0.0f}) - proj.move.position;
+            proj.move.facingYaw = std::atan2(to.x, to.z);  // начальный курс (для ориентации болта)
+            projSpawned.push_back(std::move(proj));
         } else {
             tw.timer = tw.rate;  // цели нет — держим заряд готовым (без роста таймера)
         }
+    }
+    for (Entity& p : projSpawned) entities_.push_back(std::move(p));
+
+    // Снаряды: хомингом летят к цели (по её id). Попал в радиусе — урон и самоуничтожение;
+    // цель пропала — летят прямо по последнему курсу и гаснут по kProjMaxLife (уборка ниже).
+    for (Entity& p : entities_) {
+        if (p.type != EntityType::Projectile) continue;
+        p.timer += dt;
+        Entity* tgt = entityById(p.targetId);
+        Vec3 dir;
+        if (tgt != nullptr && tgt->type == EntityType::Enemy && tgt->hp > 0.0f) {
+            Vec3 to = (tgt->move.position + Vec3{0.0f, kEnemyAimY, 0.0f}) - p.move.position;
+            float d = std::sqrt(to.x * to.x + to.y * to.y + to.z * to.z);
+            if (d <= kProjHitRadius) {          // попадание
+                tgt->hp -= p.damage;
+                p.timer = kProjMaxLife;         // пометить на уборку
+                continue;
+            }
+            dir = (d > 1e-4f) ? to * (1.0f / d) : Vec3{0.0f, 0.0f, 1.0f};
+            p.move.facingYaw = std::atan2(dir.x, dir.z);
+        } else {
+            dir = Vec3{std::sin(p.move.facingYaw), 0.0f, std::cos(p.move.facingYaw)};
+        }
+        float spd = p.move.maxSpeed > 0.0f ? p.move.maxSpeed : kProjSpeed;
+        p.move.position = p.move.position + dir * (spd * dt);
     }
 
     // Ставки героя: при hp<=0 герой повержен. Таймер респауна храним в aux (едет клиенту как
@@ -487,7 +549,9 @@ void GameWorld::step(float dt) {
     // систем — тут указатель core инвалидируется, дальше им не пользуемся.
     for (size_t i = 0; i < entities_.size();) {
         Entity& e = entities_[i];
-        if (e.type == EntityType::Enemy && e.hp <= 0.0f) {
+        bool deadEnemy = (e.type == EntityType::Enemy && e.hp <= 0.0f);
+        bool deadProj = (e.type == EntityType::Projectile && e.timer >= kProjMaxLife);
+        if (deadEnemy || deadProj) {
             if (world_ && e.move.collider != 0) world_->removeCharacter(e.move.collider);
             entities_.erase(entities_.begin() + (long)i);
         } else {

@@ -72,6 +72,10 @@ bool loadCharacterRoster(AssetSource& assets, const char* path, std::vector<Char
             else if (k == "yaw") { if (i < t.size()) c.yawOffset = toF(t[i++]); }
             else if (k == "hide") { if (i < t.size()) splitCommas(t[i++], c.hide); }
             else if (k == "attack") { if (i < t.size()) c.attackClip = t[i++]; }
+            else if (k == "hp") { if (i < t.size()) c.hp = toF(t[i++]); }
+            else if (k == "damage") { if (i < t.size()) c.damage = toF(t[i++]); }
+            else if (k == "speed") { if (i < t.size()) c.speed = toF(t[i++]); }
+            else if (k == "atkint") { if (i < t.size()) c.attackInterval = toF(t[i++]); }
             else LOGW("roster: строка %d: неизвестный ключ '%s'", line, k.c_str());
         }
         if (c.model.empty()) {

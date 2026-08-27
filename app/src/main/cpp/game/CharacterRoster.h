@@ -15,6 +15,13 @@ struct CharacterDesc {
     float yawOffset = 0.0f;
     std::vector<std::string> hide;  // подстроки имён узлов-реквизита, которые прятать
     std::string attackClip;         // имя клипа атаки; пусто -> keyword-поиск в Scene
+
+    // Боевые статы — только для МОБОВ (config/enemies.cfg), читает сервер. 0 = взять дефолт
+    // из `building enemy`. Клиент эти поля игнорирует (ему нужны только модель/визуал).
+    float hp = 0.0f;
+    float damage = 0.0f;          // урон по ядру/герою за удар
+    float speed = 0.0f;           // скорость бега, world/сек
+    float attackInterval = 0.0f;  // секунд между ударами
 };
 
 // Загрузка ростера из текстового конфига (через AssetSource). Формат — по строке:

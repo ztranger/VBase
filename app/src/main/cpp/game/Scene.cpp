@@ -265,6 +265,7 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
         std::vector<CharacterDesc> mobRoster;
         if (loadCharacterRoster(assets, "config/enemies.cfg", mobRoster)) {
             loadRosterModels(renderer, assets, mobRoster, mobs_);
+            sceneDesc_.enemyTypes = mobRoster;  // статы типов мобов -> локальному серверу при hostGame
         }
 
         // Позиция и кинематический контроллер — независимо от загрузки модели (это игра).
@@ -474,7 +475,6 @@ void Scene::fixedUpdate(float dt) {
     if (client_.status() == NetStatus::Lost) {
         if (!remoteEntities_.empty()) remoteEntities_.clear();
         if (!dyingMobs_.empty()) dyingMobs_.clear();
-        if (!projectiles_.empty()) projectiles_.clear();
         if (!pending_.empty()) pending_.clear();
         if (wantReconnect_) {
             constexpr float kReconnectPeriod = 2.0f;  // сек между попытками
@@ -608,7 +608,6 @@ void Scene::leaveGame() {
     reconnectTimer_ = 0.0f;
     remoteEntities_.clear();
     dyingMobs_.clear();
-    projectiles_.clear();
     pending_.clear();
     localTeam_ = 0;
     localHp_ = 1.0f;      // вне сессии герой «жив» (иначе своя лиса не рисовалась бы)
@@ -729,6 +728,11 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
                                      r.ch.animTime, 0.0f);
             }
             frame.skinned.push_back(it);
+        } else if (et == EntityType::Projectile && projMesh_ != 0) {
+            // Снаряд башни (серверная сущность): тонкий вытянутый болт вдоль полёта (yaw с сервера).
+            Mat4 m = Mat4::translation(r.ch.position) * Mat4::rotationY(r.ch.facingYaw) *
+                     Mat4::scale({0.08f, 0.08f, 0.6f});
+            frame.items.push_back({projMesh_, projMat_, m});
         } else {
             const EntityVisual& v = visual(et);
             if (v.mesh != 0)
@@ -749,48 +753,7 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
         ++i;
     }
 
-    // Выстрелы башен (клиентская косметика): по локальному кулдауну пускаем болт в ближайшего
-    // врага в радиусе. Урон авторитетно-мгновенный на сервере — это лишь летящий снаряд.
-    if (projMesh_ != 0 && !remoteEntities_.empty()) {
-        constexpr float kProjSpeed = 22.0f;
-        const BuildingInfo& tw = config_.get(EntityType::Tower);
-        const float range = tw.range > 0.0f ? tw.range : 5.0f;
-        const float interval = tw.rate > 0.0f ? tw.rate : 0.5f;
-        for (RemoteEntity& r : remoteEntities_) {
-            if ((EntityType)r.type != EntityType::Tower) continue;
-            r.fireTimer -= renderDt;
-            if (r.fireTimer > 0.0f) continue;
-            // Ближайший враг в радиусе (по горизонтали).
-            RemoteEntity* target = nullptr;
-            float best = range * range;
-            for (RemoteEntity& e : remoteEntities_) {
-                if ((EntityType)e.type != EntityType::Enemy) continue;
-                float dx = e.ch.position.x - r.ch.position.x;
-                float dz = e.ch.position.z - r.ch.position.z;
-                float d2 = dx * dx + dz * dz;
-                if (d2 < best) { best = d2; target = &e; }
-            }
-            if (target == nullptr) { r.fireTimer = 0.0f; continue; }  // никого — выстрелим, как появится
-            r.fireTimer = interval;
-            Vec3 origin = r.ch.position + Vec3{0.0f, 2.4f, 0.0f};       // с верхушки башни
-            Vec3 tgt = target->ch.position + Vec3{0.0f, 0.8f, 0.0f};   // в центр врага
-            Vec3 d = tgt - origin;
-            float dist = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
-            Vec3 vel = (dist > 1e-3f) ? d * (kProjSpeed / dist) : Vec3{0.0f, 0.0f, 1.0f};
-            projectiles_.push_back({origin, vel, dist / kProjSpeed + 0.05f});
-        }
-    }
-    // Движение и отрисовка болтов: тонкий вытянутый куб вдоль скорости (yaw), пока жив.
-    for (size_t i = 0; i < projectiles_.size();) {
-        Projectile& p = projectiles_[i];
-        p.pos = p.pos + p.vel * renderDt;
-        p.life -= renderDt;
-        if (p.life <= 0.0f) { projectiles_.erase(projectiles_.begin() + (long)i); continue; }
-        float yaw = std::atan2(p.vel.x, p.vel.z);
-        Mat4 m = Mat4::translation(p.pos) * Mat4::rotationY(yaw) * Mat4::scale({0.08f, 0.08f, 0.6f});
-        frame.items.push_back({projMesh_, projMat_, m});
-        ++i;
-    }
+    // (Снаряды башен — серверные сущности EntityType::Projectile; рисуются в remote-цикле выше.)
 
     // Призрак размещения (режим стройки): куб типа на клетке перед героем, зелёный/красный.
     if (buildActive_) {

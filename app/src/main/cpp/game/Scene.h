@@ -36,7 +36,6 @@ struct RemoteEntity {
     uint8_t type = 0;   // EntityType
     uint8_t team = 0;
     uint8_t charType = 0;  // индекс персонажа в ростере (какой моделью рисовать чужого героя)
-    float fireTimer = 0.0f;  // башня: локальный кулдаун визуального выстрела (косметика)
     Character ch;       // трансформ для рендера/интерполяции
     std::vector<TimedState> buffer;
     float aux = 0.0f;   // ресурс в хранилище и т.п. (последнее значение, без интерполяции)
@@ -215,13 +214,8 @@ private:
     };
     std::vector<DyingMob> dyingMobs_;
 
-    // Летящий снаряд башни (клиентская косметика; урон авторитетно-мгновенный на сервере).
-    struct Projectile {
-        Vec3 pos{0.0f, 0.0f, 0.0f};
-        Vec3 vel{0.0f, 0.0f, 0.0f};  // world/сек
-        float life = 0.0f;           // остаток жизни, сек
-    };
-    std::vector<Projectile> projectiles_;
+    // Снаряды башен теперь СЕРВЕРНЫЕ сущности (EntityType::Projectile в снапшотах) — рисуем их
+    // в remote-цикле этим мешем/материалом (болт). Клиентская симуляция снаряда убрана.
     MeshHandle projMesh_ = 0;        // меш болта (единичный куб, масштабируется в вытянутый)
     MaterialHandle projMat_ = 0;     // материал болта (Unlit, свечение)
 

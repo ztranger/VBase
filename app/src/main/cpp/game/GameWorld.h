@@ -35,6 +35,7 @@ struct Entity {
     float range = 0.0f;   // tower: радиус поражения
     float timer = 0.0f;   // spawner: до след. спавна; tower: до след. выстрела; enemy: до след. удара
     int spawnedCount = 0; // spawner: сколько врагов уже породил (потолок = cap)
+    uint32_t targetId = 0; // projectile: id цели (враг), к которой летит снаряд (0 = нет)
 };
 
 // Буфер ввода героя. Клиент шлёт по одному InputCommand за тик; сервер НЕ перезаписывает
@@ -107,7 +108,8 @@ private:
     float capsuleRadius_ = 0.3f;
     float capsuleCylHalf_ = 0.3f;
     float resourcePerTeam_[kMaxTeams] = {0.0f};  // пул ресурса на каждую команду
-    EnemySpec enemyStats_;                    // hp/урон/интервал врага (из конфига через сцену)
+    EnemySpec enemyStats_;                    // дефолтные hp/урон/интервал врага (fallback)
+    std::vector<CharacterDesc> enemyTypes_;   // статы по типу моба (config/enemies.cfg); индекс = charType
     BuildTemplate buildTemplates_[8];         // шаблоны построек героя по EntityType (из сцены)
     float heroHp_ = 100.0f;                   // здоровье героя при спавне/респауне (из конфига)
     float heroRespawn_ = 5.0f;                // задержка респауна героя, сек (из конфига)

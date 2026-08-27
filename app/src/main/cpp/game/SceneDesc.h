@@ -6,6 +6,7 @@
 
 #include "engine/core/MathUtil.h"
 #include "engine/core/Texture.h"  // ShaderType
+#include "game/CharacterRoster.h" // CharacterDesc (типы мобов: статы + порядок charType)
 #include "game/Grid.h"            // строительная сетка (параметры из сцены)
 
 // Декларативное описание сцены (чистые данные, без рендера и платформы).
@@ -135,7 +136,8 @@ struct SceneDesc {
     std::vector<ColliderSpec> colliders;  // статичная геометрия для физики
     std::vector<BuildingSpec> buildings;  // здания базы (генераторы/хранилища/башни/ядро)
     std::vector<SpawnSpec> spawns;        // точки спавна героев по командам (PvP)
-    EnemySpec enemy;                      // боевые статы врага (из конфига)
+    EnemySpec enemy;                      // боевые статы врага по умолчанию (из конфига)
+    std::vector<CharacterDesc> enemyTypes; // типы мобов (config/enemies.cfg): статы; индекс = charType
     BuildTemplate build[8];               // шаблоны построек героя по EntityType (из конфига)
     Grid grid;                            // строительная сетка (директива `grid` в сцене)
     PlayerSpec player;

@@ -24,7 +24,8 @@ constexpr float kTickDt = 1.0f / kTickHz;
 // v2: SnapshotHeader получил байт GamePhase (G3-A, бой). v3: сообщение MSG_BUILD (G3-B).
 // v4: атака — InputMsg.attack + EntityState.attackT (дискретная анимация каста).
 // v5: выбор персонажа — InputMsg.charType + EntityState.charType (индекс модели в ростере).
-constexpr uint32_t kProtocolVersion = 5;
+// v6: снаряды башен как сущность (EntityType::Projectile в снапшотах).
+constexpr uint32_t kProtocolVersion = 6;
 
 // Тип игровой сущности (тег в снапшоте; по нему клиент выбирает визуал/поведение).
 // Пока используется только Hero; остальные — задел под геймплей (генераторы,
@@ -37,6 +38,7 @@ enum class EntityType : uint8_t {
     Enemy,
     Tower,
     Core,
+    Projectile,  // снаряд башни (серверная сущность): летит к цели, урон по попаданию
 };
 
 // Фаза матча (жизненный цикл). Глобальна (не per-entity) — шлётся в заголовке снапшота.
