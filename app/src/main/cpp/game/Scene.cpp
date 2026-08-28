@@ -229,6 +229,21 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
         md.baseColor = {1.0f, 0.85f, 0.30f};  // тёпло-жёлтый болт
         projMat_ = renderer.createMaterial(md);
     }
+    // Тайл подсветки сетки: плоскость чуть меньше клетки — зазоры дают линии сетки. Один меш
+    // инстансится на все клетки (батч по mesh+material), поэтому цвет — в материале, не в тайле.
+    gridTileMesh_ = renderer.createMesh(makePlane(grid_.cell * 0.9f));
+    {
+        MaterialDesc md;
+        md.shader = ShaderType::Unlit;
+        md.baseColor = {0.16f, 0.26f, 0.22f};  // свободная клетка — приглушённый нейтральный
+        gridFreeMat_ = renderer.createMaterial(md);
+    }
+    {
+        MaterialDesc md;
+        md.shader = ShaderType::Unlit;
+        md.baseColor = {0.42f, 0.14f, 0.12f};  // занятая клетка — приглушённый красный
+        gridBusyMat_ = renderer.createMaterial(md);
+    }
 
     // --- Статичные коллайдеры физики (из описания сцены) ---
     for (const ColliderSpec& cs : desc.colliders) {
@@ -584,6 +599,43 @@ void Scene::applySnapshot() {
             ++i;
         }
     }
+
+    // Синхронизируем футпринт-коллайдеры зданий под текущий список сущностей (для предсказания героя).
+    syncBuildingColliders();
+}
+
+// Зеркало серверного GameWorld::blocksPath: какие здания физически блокируют движение (футпринт-
+// бокс). Должно СОВПАДАТЬ с сервером — иначе предсказание героя разойдётся с авторитетом. Спавнер
+// НЕ блокирует (из него выходят враги), враг — тоже.
+static bool blocksHeroPath(EntityType t) {
+    return t == EntityType::Generator || t == EntityType::Storage ||
+           t == EntityType::Tower || t == EntityType::Core;
+}
+
+void Scene::syncBuildingColliders() {
+    if (!collision_) return;
+    // Здания статичны: бокс ставим один раз по позиции появления, геометрия ТА ЖЕ, что у сервера
+    // (GameWorld::attachFootprint) — центр {x, 0.5, z}, полуразмеры {cell/2, 0.5, cell/2}.
+    const float h = grid_.cell * 0.5f;
+    for (const RemoteEntity& r : remoteEntities_) {
+        if (!blocksHeroPath((EntityType)r.type)) continue;
+        if (buildingColliders_.count(r.id) != 0) continue;
+        uint32_t box = collision_->addBox(Vec3{r.ch.position.x, 0.5f, r.ch.position.z},
+                                          Vec3{h, 0.5f, h});
+        if (box != 0) buildingColliders_[r.id] = box;
+    }
+    // Убрать боксы зданий, которых больше нет (разрушены / матч-рестарт / выход из сессии).
+    for (auto it = buildingColliders_.begin(); it != buildingColliders_.end();) {
+        bool alive = false;
+        for (const RemoteEntity& r : remoteEntities_)
+            if (r.id == it->first && blocksHeroPath((EntityType)r.type)) { alive = true; break; }
+        if (alive) {
+            ++it;
+        } else {
+            collision_->removeBox(it->second);
+            it = buildingColliders_.erase(it);
+        }
+    }
 }
 
 void Scene::hostGame() {
@@ -614,6 +666,7 @@ void Scene::leaveGame() {
     wantReconnect_ = false;  // сознательный выход — не переподключаемся
     reconnectTimer_ = 0.0f;
     remoteEntities_.clear();
+    syncBuildingColliders();  // снять все футпринт-боксы зданий (remoteEntities_ уже пуст)
     dyingMobs_.clear();
     pending_.clear();
     localTeam_ = 0;
@@ -762,14 +815,36 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
 
     // (Снаряды башен — серверные сущности EntityType::Projectile; рисуются в remote-цикле выше.)
 
-    // Призрак размещения (режим стройки): куб типа на клетке перед героем, зелёный/красный.
+    // Снап-подсветка сетки + призрак размещения (режим стройки).
     if (buildActive_) {
-        int cx, cz;
-        Vec3 center;
-        bool valid = computeGhost(cx, cz, center);
+        int tcx, tcz;
+        Vec3 tcenter;
+        bool valid = computeGhost(tcx, tcz, tcenter);  // клетка перед героем + её валидность
+        // Подсветку рисуем не по всей арене, а окном ±kBuildGridRadius клеток вокруг героя:
+        // цель размещения всегда рядом (перед героем), а на больших полях перебор всей арены —
+        // это тысячи тайлов и переполнение инстанс-буфера. Окно пересекаем с границами арены.
+        constexpr int kBuildGridRadius = 4;  // 9x9 клеток вокруг героя (тюнится; при клик-плейсменте — вокруг курсора)
+        int lo, hi;
+        grid_.cellRange(lo, hi);  // границы арены (центр клетки внутри) — закрытая формула
+        int hx = grid_.cellOf(player_.position.x), hz = grid_.cellOf(player_.position.z);
+        int x0 = (hx - kBuildGridRadius < lo) ? lo : hx - kBuildGridRadius;
+        int x1 = (hx + kBuildGridRadius > hi) ? hi : hx + kBuildGridRadius;
+        int z0 = (hz - kBuildGridRadius < lo) ? lo : hz - kBuildGridRadius;
+        int z1 = (hz + kBuildGridRadius > hi) ? hi : hz + kBuildGridRadius;
+        // Тайлы (чуть над полом): занятая — красный, свободная — нейтральный; клетка под
+        // призраком — цвет валидности, чтобы снап читался и на полу.
+        for (int cz = z0; cz <= z1; ++cz)
+            for (int cx = x0; cx <= x1; ++cx) {
+                MaterialHandle mat = (cx == tcx && cz == tcz)
+                                         ? (valid ? ghostOkMat_ : ghostBadMat_)
+                                         : (cellOccupied(cx, cz) ? gridBusyMat_ : gridFreeMat_);
+                Vec3 c = grid_.cellCenter(cx, cz);
+                frame.items.push_back({gridTileMesh_, mat, Mat4::translation({c.x, 0.02f, c.z})});
+            }
+        // Призрак типа на целевой клетке (куб/сфера), зелёный/красный.
         const EntityVisual& v = visual(buildType_);
         frame.items.push_back({v.mesh, valid ? ghostOkMat_ : ghostBadMat_,
-                               Mat4::translation(center + Vec3{0.0f, v.yOffset, 0.0f})});
+                               Mat4::translation(tcenter + Vec3{0.0f, v.yOffset, 0.0f})});
     }
 
     // HUD ставок героя (bitmap-шрифт — только ASCII; кириллический баннер — в ImGui-слое
@@ -899,13 +974,18 @@ bool Scene::computeGhost(int& cx, int& cz, Vec3& center) const {
     center = grid_.cellCenter(cx, cz);
 
     if (!grid_.inArena(cx, cz)) return false;             // вне зоны строительства
-    for (const RemoteEntity& r : remoteEntities_) {       // клетка занята зданием?
-        if (!visual((EntityType)r.type).building) continue;
-        if (grid_.cellOf(r.ch.position.x) == cx && grid_.cellOf(r.ch.position.z) == cz)
-            return false;
-    }
+    if (cellOccupied(cx, cz)) return false;               // клетка занята зданием
     if (resourceCurrent() < config_.get(buildType_).cost) return false;  // не хватает ресурса
     return true;
+}
+
+bool Scene::cellOccupied(int cx, int cz) const {
+    for (const RemoteEntity& r : remoteEntities_) {
+        if (!visual((EntityType)r.type).building) continue;  // враг не занимает клетку
+        if (grid_.cellOf(r.ch.position.x) == cx && grid_.cellOf(r.ch.position.z) == cz)
+            return true;
+    }
+    return false;
 }
 
 bool Scene::buildGhostValid() const {

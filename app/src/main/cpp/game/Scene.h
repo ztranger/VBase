@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include "engine/assets/AssetSource.h"
@@ -274,8 +275,13 @@ private:
     bool buildActive_ = false;
     EntityType buildType_ = EntityType::Tower;
     MaterialHandle ghostOkMat_ = 0, ghostBadMat_ = 0;
+    // Снап-подсветка сетки (режим стройки): один плоский тайл < клетки, инстансится на все
+    // клетки арены; зазоры между тайлами образуют линии сетки. Материалы по состоянию клетки.
+    MeshHandle gridTileMesh_ = 0;
+    MaterialHandle gridFreeMat_ = 0, gridBusyMat_ = 0;  // свободна / занята зданием
     // Призрак: клетка перед героем + мировой центр + валидность. Возвращает валидность.
     bool computeGhost(int& cx, int& cz, Vec3& center) const;
+    bool cellOccupied(int cx, int cz) const;  // клетка занята зданием (для сетки и призрака)
     bool host_ = false;
     // Авто-реконнект для join-сессии (host к 127.0.0.1 не переподключаем). serverIp_
     // запоминается в joinGame; при статусе Lost повторяем connect раз в kReconnectPeriod.
@@ -288,5 +294,12 @@ private:
     double simClock_ = 0.0;              // часы симуляции (сек)
     float tickDt_ = kTickDt;             // длительность тика (единый шаг, из engine/net/Net.h)
 
+    // Футпринт-коллайдеры зданий на клиенте (id сущности -> ColliderBoxId). Сервер ставит боксы
+    // блокирующим зданиям (GameWorld::attachFootprint), и предсказание героя должно видеть ту же
+    // геометрию — иначе герой прошёл бы сквозь здание локально, а сервер вытолкнул = rubber-band.
+    // Реконсилируется против remoteEntities_ по снапшотам (см. syncBuildingColliders).
+    std::unordered_map<uint32_t, uint32_t> buildingColliders_;
+
     void applySnapshot();
+    void syncBuildingColliders();  // добавить/убрать боксы зданий под текущий remoteEntities_
 };
