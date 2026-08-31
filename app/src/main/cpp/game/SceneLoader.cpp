@@ -351,6 +351,9 @@ bool loadBuildingConfig(AssetSource& assets, const char* path, BuildingConfig& o
             else if (key == "damage") bi.damage = toF(val);
             else if (key == "range") bi.range = toF(val);
             else if (key == "cost") bi.cost = toF(val);
+            else if (key == "wavesize") bi.waveSize = toI(val);
+            else if (key == "wavepause") bi.wavePause = toF(val);
+            else if (key == "wavegrow") bi.waveGrow = toI(val);
             // --- Визуал (клиент) ---
             else if (key == "shape") {
                 Tokens a = tokenize(val);
@@ -407,6 +410,9 @@ void applyBuildingConfig(SceneDesc& desc, const BuildingConfig& cfg) {
             b.hp = bi.hp;
             b.damage = bi.damage;
             b.range = bi.range;
+            b.waveSize = bi.waveSize;    // spawner: бесконечные волны (0 = легаси по cap)
+            b.wavePause = bi.wavePause;
+            b.waveGrow = bi.waveGrow;
         }
     }
     // Боевые статы врага (враг не размещается в сцене — берём из блока `building enemy`).

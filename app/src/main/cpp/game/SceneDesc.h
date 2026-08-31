@@ -74,6 +74,9 @@ struct BuildingSpec {
     float hp = 0.0f;      // core: здоровье
     float damage = 0.0f;  // tower: урон за выстрел
     float range = 0.0f;   // tower: радиус поражения
+    int   waveSize = 0;   // spawner: врагов в волне (>0 = бесконечные волны; 0 = легаси по cap)
+    float wavePause = 0.0f; // spawner: пауза между волнами, сек
+    int   waveGrow = 0;   // spawner: прирост размера волны за волну
     uint8_t team = 0;     // сторона (0 = соло/кооп; 1/2 — PvP)
 };
 

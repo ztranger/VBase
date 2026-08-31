@@ -34,8 +34,14 @@ struct Entity {
     float cap = 0.0f;     // storage: ёмкость; spawner: макс. врагов
     float damage = 0.0f;  // tower: урон выстрела; enemy: урон по ядру за удар
     float range = 0.0f;   // tower: радиус поражения
-    float timer = 0.0f;   // spawner: до след. спавна; tower: до след. выстрела; enemy: до след. удара
-    int spawnedCount = 0; // spawner: сколько врагов уже породил (потолок = cap)
+    float timer = 0.0f;   // spawner: до след. спавна/паузы; tower: до след. выстрела; enemy: до след. удара
+    int spawnedCount = 0; // spawner: всего врагов породил (легаси-потолок = cap; в волнах — для чередования типов)
+    // spawner: бесконечные волны (waveSize>0). Иначе легаси-режим (спавн до cap).
+    int   waveSize = 0;   // базовый размер волны (из конфига)
+    float wavePause = 0.0f; // пауза между волнами, сек
+    int   waveGrow = 0;   // прирост размера за волну
+    int   waveIndex = 0;  // текущая волна (0-based; размер = waveSize + waveIndex*waveGrow)
+    int   spawnedInWave = 0; // выпущено в текущей волне
     uint32_t targetId = 0; // projectile: id цели; enemy: липкая цель удара (здание)
     uint32_t footprint = 0; // статичный бокс футпринта здания (ColliderBoxId; 0 = нет)
     uint8_t mobGoal = 0;   // enemy: MobGoal (core / building)

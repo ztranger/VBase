@@ -178,6 +178,9 @@ void GameWorld::spawnBuildings() {
         e.hp = e.maxHp = b.hp;  // core: здоровье
         e.damage = b.damage;    // tower: урон
         e.range = b.range;      // tower: радиус
+        e.waveSize = b.waveSize;   // spawner: бесконечные волны (0 = легаси по cap)
+        e.wavePause = b.wavePause;
+        e.waveGrow = b.waveGrow;
         entities_.push_back(e);
         attachFootprint(entities_.back());
     }
@@ -477,48 +480,79 @@ void GameWorld::step(float dt) {
         }
     }
 
-    // Спавнеры: по таймеру плодят врагов (до потолка cap) с боевыми статами из конфига.
+    // Спавнеры: плодят врагов с боевыми статами из конфига. Два режима на спавнер:
+    //  - бесконечные волны (waveSize>0): волна из curWaveSize врагов через `rate`, затем
+    //    пауза `wavePause`, затем следующая волна (размер растёт на waveGrow). Не иссякают.
+    //  - легаси (waveSize==0): спавн до потолка `cap`, затем стоп (как было).
     // Новые сущности КОПИМ и добавляем ПОСЛЕ цикла — push_back инвалидировал бы итерацию.
     {
         std::vector<Entity> spawned;
+        // Один враг из спавнера e -> в `spawned` (тип/статы по charType, коллайдер).
+        auto spawnEnemy = [&](Entity& e) {
+            Entity enemy;
+            enemy.id = nextEntityId_++;
+            enemy.type = EntityType::Enemy;
+            enemy.team = e.team;
+            // Тип моба: чередуем по спавну. Индекс = charType (клиент берёт mobs_[charType %
+            // size]); он же выбирает статы из enemyTypes_ (config/enemies.cfg).
+            int nTypes = (int)enemyTypes_.size();
+            int type = (nTypes > 0) ? (e.spawnedCount % nTypes) : (e.spawnedCount % 4);
+            enemy.charType = (uint8_t)type;
+            enemy.move.position = e.move.position;
+            enemy.move.snapshot();
+            // Статы: из типа (enemyTypes_), с откатом на дефолтные enemyStats_/kEnemySpeed.
+            float ehp = enemyStats_.hp, edmg = enemyStats_.damage;
+            float espeed = kEnemySpeed, eatk = enemyStats_.attackInterval;
+            if (nTypes > 0) {
+                const CharacterDesc& ct = enemyTypes_[type];
+                if (ct.hp > 0.0f) ehp = ct.hp;
+                if (ct.damage > 0.0f) edmg = ct.damage;
+                if (ct.speed > 0.0f) espeed = ct.speed;
+                if (ct.attackInterval > 0.0f) eatk = ct.attackInterval;
+            }
+            enemy.hp = enemy.maxHp = ehp;
+            enemy.damage = edmg;
+            enemy.move.maxSpeed = espeed;  // скорость бега (используется в движении врага)
+            enemy.rate = eatk;             // для врага rate = интервал удара
+            enemy.mobGoal = 0;
+            if (nTypes > 0) enemy.mobGoal = (uint8_t)enemyTypes_[type].goal;
+            if (world_)
+                enemy.move.collider =
+                    world_->addCharacter(e.move.position, kEnemyRadius, kEnemyCylHalf);
+            spawned.push_back(enemy);
+            e.spawnedCount++;
+        };
+
         for (Entity& e : entities_) {
-            if (e.type != EntityType::Spawner) continue;
-            if (e.rate <= 0.0f || e.spawnedCount >= (int)e.cap) continue;
-            e.timer += dt;
-            if (e.timer >= e.rate) {
-                e.timer -= e.rate;
-                Entity enemy;
-                enemy.id = nextEntityId_++;
-                enemy.type = EntityType::Enemy;
-                enemy.team = e.team;
-                // Тип моба: чередуем по спавну. Индекс = charType (клиент берёт mobs_[charType %
-                // size]); он же выбирает статы из enemyTypes_ (config/enemies.cfg).
-                int nTypes = (int)enemyTypes_.size();
-                int type = (nTypes > 0) ? (e.spawnedCount % nTypes) : (e.spawnedCount % 4);
-                enemy.charType = (uint8_t)type;
-                enemy.move.position = e.move.position;
-                enemy.move.snapshot();
-                // Статы: из типа (enemyTypes_), с откатом на дефолтные enemyStats_/kEnemySpeed.
-                float ehp = enemyStats_.hp, edmg = enemyStats_.damage;
-                float espeed = kEnemySpeed, eatk = enemyStats_.attackInterval;
-                if (nTypes > 0) {
-                    const CharacterDesc& ct = enemyTypes_[type];
-                    if (ct.hp > 0.0f) ehp = ct.hp;
-                    if (ct.damage > 0.0f) edmg = ct.damage;
-                    if (ct.speed > 0.0f) espeed = ct.speed;
-                    if (ct.attackInterval > 0.0f) eatk = ct.attackInterval;
+            if (e.type != EntityType::Spawner || e.rate <= 0.0f) continue;
+            if (e.waveSize > 0) {
+                // --- Бесконечные волны ---
+                int curWave = e.waveSize + e.waveIndex * e.waveGrow;
+                if (curWave < 1) curWave = 1;
+                if (e.spawnedInWave >= curWave) {
+                    // Пауза между волнами: копим timer до wavePause, затем следующая волна.
+                    e.timer += dt;
+                    if (e.timer >= e.wavePause) {
+                        e.timer = 0.0f;
+                        ++e.waveIndex;
+                        e.spawnedInWave = 0;
+                    }
+                    continue;
                 }
-                enemy.hp = enemy.maxHp = ehp;
-                enemy.damage = edmg;
-                enemy.move.maxSpeed = espeed;  // скорость бега (используется в движении врага)
-                enemy.rate = eatk;             // для врага rate = интервал удара
-                enemy.mobGoal = 0;
-                if (nTypes > 0) enemy.mobGoal = (uint8_t)enemyTypes_[type].goal;
-                if (world_)
-                    enemy.move.collider = world_->addCharacter(
-                        e.move.position, kEnemyRadius, kEnemyCylHalf);
-                spawned.push_back(enemy);
-                e.spawnedCount++;
+                e.timer += dt;
+                if (e.timer >= e.rate) {
+                    e.timer -= e.rate;
+                    spawnEnemy(e);
+                    ++e.spawnedInWave;
+                }
+            } else {
+                // --- Легаси: спавн до потолка cap ---
+                if (e.spawnedCount >= (int)e.cap) continue;
+                e.timer += dt;
+                if (e.timer >= e.rate) {
+                    e.timer -= e.rate;
+                    spawnEnemy(e);
+                }
             }
         }
         for (Entity& n : spawned) entities_.push_back(std::move(n));
@@ -766,7 +800,9 @@ void GameWorld::step(float dt) {
             coreHpByTeam_[e.team] += (e.hp > 0.0f ? e.hp : 0.0f);
         } else if (e.type == EntityType::Spawner) {
             haveSpawner = true;
-            if (e.spawnedCount < (int)e.cap) allSpawned = false;
+            // Бесконечный спавнер (waveSize>0) никогда не «отработал» → PvE становится
+            // выживанием (победы по волнам нет; проигрыш = ядро пало). Легаси — по cap.
+            if (e.waveSize > 0 || e.spawnedCount < (int)e.cap) allSpawned = false;
         } else if (e.type == EntityType::Enemy) {
             ++enemyCount;
         }

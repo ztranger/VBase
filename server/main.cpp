@@ -933,6 +933,67 @@ int runPathfindTest() {
     return 0;
 }
 
+// Бесконечные волны: спавнер с waveSize>0 не иссякает и растит волны; легаси (waveSize=0)
+// стопается на cap. Враги здесь бессмертны и безвредны — считаем только СКОЛЬКО породилось.
+int runEndlessWaveTest() {
+    auto makeBase = [](SceneDesc& desc) {
+        ColliderSpec floor;
+        floor.center = Vec3{0.0f, -0.5f, 0.0f};
+        floor.half = Vec3{50.0f, 0.5f, 50.0f};
+        desc.colliders.push_back(floor);
+        desc.grid.cell = 2.0f;
+        desc.grid.arenaHalf = 20.0f;
+        BuildingSpec core;
+        core.kind = BuildingSpec::Core;
+        core.pos = desc.grid.cellCenter(-6, 0);
+        core.hp = 1e7f;  // не умирает -> нет матч-рестарта, счётчик врагов монотонен
+        desc.buildings.push_back(core);
+        CharacterDesc slow;  // бессмертный, безвредный, медленный — просто копится
+        slow.goal = CharacterDesc::MobGoal::Core;
+        slow.hp = 1e6f; slow.damage = 0.0f; slow.speed = 0.5f; slow.attackInterval = 1.0f;
+        desc.enemyTypes.push_back(slow);
+        desc.enemy.hp = 1e6f; desc.enemy.damage = 0.0f; desc.enemy.attackInterval = 1.0f;
+    };
+    auto countEnemies = [](GameWorld& w) {
+        std::vector<EntityState> st; w.writeStates(st);
+        int n = 0; for (const EntityState& s : st) if ((EntityType)s.type == EntityType::Enemy) ++n;
+        return n;
+    };
+    const int steps = (int)(4.0f / kTickDt);  // ~4 c симуляции
+
+    // Бесконечный: волны 4,6,8,10... через rate=0.1 с паузой 0.5 → за ~4 c ~24 врага
+    // (больше легаси-cap 12, но меньше сплошного потока 40 из-за пауз).
+    {
+        SceneDesc desc; makeBase(desc);
+        BuildingSpec sp;
+        sp.kind = BuildingSpec::Spawner;
+        sp.pos = desc.grid.cellCenter(6, 0);
+        sp.rate = 0.1f; sp.waveSize = 4; sp.wavePause = 0.5f; sp.waveGrow = 2;
+        desc.buildings.push_back(sp);
+        GameWorld world; world.configure(desc);
+        for (int i = 0; i < steps; ++i) world.step(kTickDt);
+        int n = countEnemies(world);
+        std::printf("[WaveTest] бесконечный: врагов за ~4с=%d (ждём >13 и <37: растущие волны+паузы)\n", n);
+        if (n <= 13 || n >= 37) { std::printf("[WaveTest] FAIL: волны иссякли/не растут/сплошной поток\n"); return 1; }
+    }
+    // Легаси: waveSize=0, cap=3 → ровно 3 и стоп
+    {
+        SceneDesc desc; makeBase(desc);
+        BuildingSpec sp;
+        sp.kind = BuildingSpec::Spawner;
+        sp.pos = desc.grid.cellCenter(6, 0);
+        sp.rate = 0.1f; sp.cap = 3;  // waveSize=0 по умолчанию
+        desc.buildings.push_back(sp);
+        GameWorld world; world.configure(desc);
+        for (int i = 0; i < steps; ++i) world.step(kTickDt);
+        int n = countEnemies(world);
+        std::printf("[WaveTest] легаси: врагов=%d (ждём 3 = cap, стоп)\n", n);
+        if (n != 3) { std::printf("[WaveTest] FAIL: легаси-cap сломан\n"); return 1; }
+    }
+    std::printf("[WaveTest] OK\n");
+    return 0;
+}
+
 // Плотная застройка (vbase_server --densetest, отдельно от --selftest): маршрутизация
 // через узкие 1-клеточные проходы, полностью запечатанное ядро (фолбэк «нет пути → ломать»),
 // диагональный зазор (запрет срезания угла), детектор застреваний и стоимость пересчёта
@@ -1191,8 +1252,9 @@ int main(int argc, char** argv) {
         int n = runPvpTest();           // PvP: назначение стороны + спавн-точки + per-team исход
         int o = runMatchRestartTest();  // матч-рестарт: decided -> авто-пересбор -> новый матч
         int p = runPathfindTest();      // поле потока: стена/фолбэк + ломатель + сетка 400
+        int q = runEndlessWaveTest();   // бесконечные волны растут; легаси-спавнер стопается на cap
         return (a == 0 && b == 0 && c == 0 && d == 0 && e == 0 && f == 0 && g == 0 && h == 0 &&
-                k == 0 && m == 0 && n == 0 && o == 0 && p == 0) ? 0 : 1;
+                k == 0 && m == 0 && n == 0 && o == 0 && p == 0 && q == 0) ? 0 : 1;
     }
 
     uint16_t port = kNetPort;
