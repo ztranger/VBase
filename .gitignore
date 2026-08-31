@@ -9,6 +9,13 @@
 /server/build/
 /desktop/build/
 
+# Python bytecode (tools/)
+__pycache__/
+*.pyc
+
+# Generated preview (tools/gen_scene_previews.py default output)
+/scene_previews.html
+
 # Local configuration file (sdk path, etc)
 local.properties
 
