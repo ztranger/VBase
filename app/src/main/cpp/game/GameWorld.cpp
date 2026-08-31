@@ -48,6 +48,16 @@ bool blocksPath(EntityType t) {
            t == EntityType::Tower || t == EntityType::Core;
 }
 
+// Бокс футпринта здания — ОДНА геометрия для физики (Jolt) и occupancy (навсетка):
+// поле потока не должно вести мобов в клетку, где стоит коллайдер. Клетка-в-размер,
+// центр = позиция здания (НЕ cellCenter: здания из сцены часто не по сетке — иначе
+// физбокс и занятость разъехались бы на полклетки).
+void footprintBox(const Entity& e, float cell, Vec3& center, Vec3& half) {
+    const float h = cell * 0.5f;
+    center = Vec3{e.move.position.x, 0.5f, e.move.position.z};
+    half = Vec3{h, 0.5f, h};
+}
+
 // Враждебны ли команды (кого бой считает целью). team 0 — нейтрал/PvE: враждебен всем,
 // в т.ч. сам себе — иначе чисто-PvE-сцена (всё team 0) перестала бы воевать. Стороны 1/2
 // враждебны разным командам и дружественны своей (PvP: башни/враги не бьют своих).
@@ -61,7 +71,8 @@ struct NavState {
     NavGrid map;
     FlowField toCore[GameWorld::kMaxTeams];
     FlowField toBuildings[GameWorld::kMaxTeams];
-    bool dirty = true;
+    bool mapDirty = true;                             // occupancy устарела (постройка/снос)
+    bool fieldValid[GameWorld::kMaxTeams] = {false};  // поле команды актуально для текущей occupancy
 };
 
 GameWorld::GameWorld() = default;
@@ -114,7 +125,8 @@ void GameWorld::configure(const SceneDesc& desc) {
     for (const ColliderSpec& cs : desc.colliders) {
         world_->addBox(cs.center, cs.half);
     }
-    world_->finalize();
+    // finalize() перенесён на ПОСЛЕ spawnBuildings — broad-phase оптимизируется со
+    // статикой сцены И футпринтами базовых зданий сразу (см. ниже).
     spawnPos_ = desc.player.pos;
     capsuleRadius_ = desc.player.colliderRadius;
     capsuleCylHalf_ = desc.player.colliderCylHalf;
@@ -138,6 +150,7 @@ void GameWorld::configure(const SceneDesc& desc) {
     // Здания базы: сохраняем спеки (для матч-рестарта — пересоздать базы) и спавним.
     buildingSpecs_ = desc.buildings;
     spawnBuildings();
+    world_->finalize();  // broad-phase со статикой сцены И футпринтами базовых зданий
     nav_ = std::make_unique<NavState>();  // occupancy пересчитаем на первом step
     rebuildNavIfNeeded();
     LOGI("GameWorld: мир — %d коллайдеров, %d сущностей базы, навсетка %dx%d",
@@ -286,13 +299,11 @@ void GameWorld::applyHeroStats(Entity& e) {
 void GameWorld::attachFootprint(Entity& e) {
     if (!blocksPath(e.type)) return;
     if (world_) {
-        const float h = grid_.cell * 0.5f;
-        // Бокс в позиции сущности (не в центре клетки): здания из сцены часто не на
-        // cellCenter, иначе моб упирается в футпринт дальше мили.
-        e.footprint = world_->addBox(Vec3{e.move.position.x, 0.5f, e.move.position.z},
-                                     Vec3{h, 0.5f, h});
+        Vec3 c, h;
+        footprintBox(e, grid_.cell, c, h);
+        e.footprint = world_->addBox(c, h);
     }
-    if (nav_) nav_->dirty = true;
+    if (nav_) nav_->mapDirty = true;
 }
 
 void GameWorld::detachPhysics(Entity& e) {
@@ -304,34 +315,49 @@ void GameWorld::detachPhysics(Entity& e) {
     if (e.footprint != 0) {
         world_->removeBox(e.footprint);
         e.footprint = 0;
-        if (nav_) nav_->dirty = true;
+        if (nav_) nav_->mapDirty = true;
     }
 }
 
 void GameWorld::rebuildNavIfNeeded() {
-    if (nav_ == nullptr || !nav_->dirty) return;
-    nav_->dirty = false;
+    if (nav_ == nullptr || !nav_->mapDirty) return;
+    nav_->mapDirty = false;
     nav_->map.reset(grid_);
     for (const ColliderSpec& cs : sceneColliders_) {
         nav_->map.rasterizeBox(cs.center, cs.half, kEnemyRadius);
     }
+    // Футпринты зданий — той же геометрией, что физбокс (footprintBox), и растеризацией
+    // (а не одной клеткой): здание не по сетке перекрывает до 4 клеток, иначе поле провело
+    // бы моба в полузанятую клетку, где капсула упрётся в коллайдер. Без clearance —
+    // соседние клетки застройки игрока должны оставаться проходимыми.
     for (const Entity& e : entities_) {
         if (!blocksPath(e.type)) continue;
-        nav_->map.setBlocked(grid_.cellOf(e.move.position.x), grid_.cellOf(e.move.position.z),
-                             true);
+        Vec3 c, h;
+        footprintBox(e, grid_.cell, c, h);
+        nav_->map.rasterizeBox(c, h);
     }
-    for (int t = 0; t < kMaxTeams; ++t) {
-        std::vector<NavCell> cores, buildings;
-        for (const Entity& e : entities_) {
-            if (!blocksPath(e.type) || !hostile((uint8_t)t, e.team)) continue;
-            if (e.maxHp > 0.0f && e.hp <= 0.0f) continue;  // мёртвое ядро — не цель
-            NavCell c{grid_.cellOf(e.move.position.x), grid_.cellOf(e.move.position.z)};
-            if (e.type == EntityType::Core) cores.push_back(c);
-            if (e.maxHp > 0.0f) buildings.push_back(c);
-        }
-        nav_->toCore[t].compute(nav_->map, cores);
-        nav_->toBuildings[t].compute(nav_->map, buildings);
+    // Поля потока пересчитываем ЛЕНИВО (ensureFlowField) — только для команд, у которых
+    // реально есть мобы. Здесь лишь помечаем их устаревшими под новую occupancy: в PvE
+    // это 2 BFS (team 0) вместо 2*kMaxTeams на каждое изменение построек.
+    for (int t = 0; t < kMaxTeams; ++t) nav_->fieldValid[t] = false;
+}
+
+void GameWorld::ensureFlowField(uint8_t team) {
+    if (nav_ == nullptr || team >= (uint8_t)kMaxTeams || nav_->fieldValid[team]) return;
+    nav_->fieldValid[team] = true;
+    // Цели команды team — ВРАЖДЕБНЫЕ ей живые постройки (ядра отдельно — для рашеров).
+    // Цели зависят только от построек (не от мобов), а те всегда помечают mapDirty →
+    // поле, посчитанное здесь при первом мобе, актуально до следующего изменения построек.
+    std::vector<NavCell> cores, buildings;
+    for (const Entity& e : entities_) {
+        if (!blocksPath(e.type) || !hostile(team, e.team)) continue;
+        if (e.maxHp > 0.0f && e.hp <= 0.0f) continue;  // мёртвое ядро/здание — не цель
+        NavCell c{grid_.cellOf(e.move.position.x), grid_.cellOf(e.move.position.z)};
+        if (e.type == EntityType::Core) cores.push_back(c);
+        if (e.maxHp > 0.0f) buildings.push_back(c);
     }
+    nav_->toCore[team].compute(nav_->map, cores);
+    nav_->toBuildings[team].compute(nav_->map, buildings);
 }
 
 bool GameWorld::tryBuild(uint32_t builderId, EntityType type, int cellX, int cellZ) {
@@ -523,6 +549,7 @@ void GameWorld::step(float dt) {
         bool smashBuildings = false;
         Vec3 dir{0.0f, 0.0f, 0.0f};
         if (nav_ != nullptr && nav_->map.cellCount() > 0) {
+            ensureFlowField(team);  // ленивый пересчёт поля этой команды (раз на dirty)
             const bool preferCore =
                 (e.mobGoal != (uint8_t)CharacterDesc::MobGoal::Building);
             if (preferCore && nav_->toCore[team].reachable(cx, cz)) {

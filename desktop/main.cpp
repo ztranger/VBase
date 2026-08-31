@@ -243,6 +243,12 @@ int runClient(int backend, GameUiState& ui, const std::string& assetsDir,
             next = ui.requestBackend;
             break;
         }
+        // Запрошена смена сцены (меню) — перезапуск с тем же бэкендом, новой сценой.
+        // Полная пересборка (renderer.reset + новый scene.build) — без утечек GPU.
+        if (ui.requestScenePath[0] != '\0') {
+            next = backend;
+            break;
+        }
     }
 
     scene.leaveGame();
@@ -305,8 +311,15 @@ int main(int argc, char** argv) {
     if (startLoadingPreview) GameUi::requestLoadingScreen();  // --loading: стартуем на лоадинге
 
     // Цикл перезапуска: runClient возвращает следующий бэкенд или -1 (выход).
+    // Активная сцена может меняться в рантайме (меню -> ui.requestScenePath).
+    std::string activeScene = scenePath;
     while (backend >= 0) {
-        backend = runClient(backend, ui, assetsDir, serverIp, scenePath, autoJoin);
+        backend = runClient(backend, ui, assetsDir, serverIp, activeScene.c_str(), autoJoin);
+        if (ui.requestScenePath[0] != '\0') {  // меню запросило другую сцену -> перезайти с ней
+            activeScene = ui.requestScenePath;
+            ui.requestScenePath[0] = '\0';
+            if (backend < 0) backend = ui.backend;  // не выход, а перезагрузка сцены
+        }
     }
 
     glfwTerminate();

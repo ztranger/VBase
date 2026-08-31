@@ -1,6 +1,8 @@
 #include "engine/render/ui/panels/HomePanel.h"
 
+#include <cstdio>
 #include <cstring>
+#include <string>
 
 #include "imgui.h"
 
@@ -98,6 +100,30 @@ void draw(UiShell::Ctx& ctx) {
         if (ctx.btn("Join")) {
             ctx.scene.joinGame(ctx.state.joinIp);
             UiShell::setMode(UiMode::CharacterSelect);
+        }
+    }
+
+    // Выбор сцены — только вне сессии: смена сцены = полная пересборка мира, а в
+    // онлайне клиент обязан рисовать ту же геометрию, что симулирует сервер.
+    if (!ctx.scene.netConnected() && !ctx.scene.netConnecting()) {
+        ImGui::SeparatorText("Сцена");
+        int n = ctx.scene.sceneListCount();
+        if (n == 0) {
+            ImGui::TextDisabled("Манифест не найден (config/scenes.cfg)");
+        } else {
+            int cur = ctx.scene.currentSceneIndex();
+            for (int i = 0; i < n; ++i) {
+                bool isCur = (i == cur);
+                if (isCur) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.2f, 1.0f));
+                std::string lbl = (isCur ? "> " : "   ") + std::string(ctx.scene.sceneListName(i));
+                if (ctx.btn(lbl.c_str(), ImVec2(-1, 0)) && !isCur) {
+                    ctx.scene.leaveGame();  // разорвать сессию до перезагрузки мира
+                    std::snprintf(ctx.state.requestScenePath, sizeof(ctx.state.requestScenePath),
+                                  "%s", ctx.scene.sceneListPath(i));
+                }
+                if (isCur) ImGui::PopStyleColor();
+            }
+            ImGui::TextDisabled("Клик — перезагрузить мир этой сценой (до Host).");
         }
     }
 

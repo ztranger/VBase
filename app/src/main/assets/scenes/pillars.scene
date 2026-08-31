@@ -1,0 +1,141 @@
+# Лес колонн: решётка одиночных препятствий с коридорами в 1 клетку.
+# Мобы петляют между колонн к ядру. Проверка потока в плотной решётке.
+
+# --- Текстуры / материалы / меши ---
+texture checker procedural 256 8
+texture crate   image textures/crate.png
+material floor lit   color 1 1 1          tex checker
+material crate lit   color 1 1 1          tex crate
+material edge  lit   color 0.55 0.65 0.85 tex checker
+mesh ground plane 44 22
+mesh box    cube  1
+
+# --- Свет / камера / сетка ---
+light  dir 0.4 1 0.6
+camera distance 40 pitch 1.05
+grid   cell 2 arena 20
+matchrestart 8
+
+object ground mat floor
+ring box mat edge count 64 radius 21 y 0.4 scale 0.4 spin 0.6
+
+# --- Границы арены (коллайдеры) ---
+collider box center 0 -0.5 0  half 22 0.5 22   # пол
+collider box center  22 1 0  half 0.25 1 22   # стена +X
+collider box center -22 1 0  half 0.25 1 22   # стена -X
+collider box center 0 1  22  half 22 1 0.25   # стена +Z
+collider box center 0 1 -22  half 22 1 0.25   # стена -Z
+
+# --- Колонны: клетки с чётными cx,cz в центральной зоне ---
+object box mat crate pos -11 0.9 -11 scale 1.8
+collider box center -11 0.9 -11 half 0.9 0.9 0.9
+object box mat crate pos -11 0.9 -7 scale 1.8
+collider box center -11 0.9 -7 half 0.9 0.9 0.9
+object box mat crate pos -11 0.9 -3 scale 1.8
+collider box center -11 0.9 -3 half 0.9 0.9 0.9
+object box mat crate pos -11 0.9 1 scale 1.8
+collider box center -11 0.9 1 half 0.9 0.9 0.9
+object box mat crate pos -11 0.9 5 scale 1.8
+collider box center -11 0.9 5 half 0.9 0.9 0.9
+object box mat crate pos -11 0.9 9 scale 1.8
+collider box center -11 0.9 9 half 0.9 0.9 0.9
+object box mat crate pos -11 0.9 13 scale 1.8
+collider box center -11 0.9 13 half 0.9 0.9 0.9
+object box mat crate pos -7 0.9 -11 scale 1.8
+collider box center -7 0.9 -11 half 0.9 0.9 0.9
+object box mat crate pos -7 0.9 -7 scale 1.8
+collider box center -7 0.9 -7 half 0.9 0.9 0.9
+object box mat crate pos -7 0.9 -3 scale 1.8
+collider box center -7 0.9 -3 half 0.9 0.9 0.9
+object box mat crate pos -7 0.9 1 scale 1.8
+collider box center -7 0.9 1 half 0.9 0.9 0.9
+object box mat crate pos -7 0.9 5 scale 1.8
+collider box center -7 0.9 5 half 0.9 0.9 0.9
+object box mat crate pos -7 0.9 9 scale 1.8
+collider box center -7 0.9 9 half 0.9 0.9 0.9
+object box mat crate pos -7 0.9 13 scale 1.8
+collider box center -7 0.9 13 half 0.9 0.9 0.9
+object box mat crate pos -3 0.9 -11 scale 1.8
+collider box center -3 0.9 -11 half 0.9 0.9 0.9
+object box mat crate pos -3 0.9 -7 scale 1.8
+collider box center -3 0.9 -7 half 0.9 0.9 0.9
+object box mat crate pos -3 0.9 -3 scale 1.8
+collider box center -3 0.9 -3 half 0.9 0.9 0.9
+object box mat crate pos -3 0.9 1 scale 1.8
+collider box center -3 0.9 1 half 0.9 0.9 0.9
+object box mat crate pos -3 0.9 5 scale 1.8
+collider box center -3 0.9 5 half 0.9 0.9 0.9
+object box mat crate pos -3 0.9 9 scale 1.8
+collider box center -3 0.9 9 half 0.9 0.9 0.9
+object box mat crate pos -3 0.9 13 scale 1.8
+collider box center -3 0.9 13 half 0.9 0.9 0.9
+object box mat crate pos 1 0.9 -11 scale 1.8
+collider box center 1 0.9 -11 half 0.9 0.9 0.9
+object box mat crate pos 1 0.9 -7 scale 1.8
+collider box center 1 0.9 -7 half 0.9 0.9 0.9
+object box mat crate pos 1 0.9 -3 scale 1.8
+collider box center 1 0.9 -3 half 0.9 0.9 0.9
+object box mat crate pos 1 0.9 1 scale 1.8
+collider box center 1 0.9 1 half 0.9 0.9 0.9
+object box mat crate pos 1 0.9 5 scale 1.8
+collider box center 1 0.9 5 half 0.9 0.9 0.9
+object box mat crate pos 1 0.9 9 scale 1.8
+collider box center 1 0.9 9 half 0.9 0.9 0.9
+object box mat crate pos 1 0.9 13 scale 1.8
+collider box center 1 0.9 13 half 0.9 0.9 0.9
+object box mat crate pos 5 0.9 -11 scale 1.8
+collider box center 5 0.9 -11 half 0.9 0.9 0.9
+object box mat crate pos 5 0.9 -7 scale 1.8
+collider box center 5 0.9 -7 half 0.9 0.9 0.9
+object box mat crate pos 5 0.9 -3 scale 1.8
+collider box center 5 0.9 -3 half 0.9 0.9 0.9
+object box mat crate pos 5 0.9 1 scale 1.8
+collider box center 5 0.9 1 half 0.9 0.9 0.9
+object box mat crate pos 5 0.9 5 scale 1.8
+collider box center 5 0.9 5 half 0.9 0.9 0.9
+object box mat crate pos 5 0.9 9 scale 1.8
+collider box center 5 0.9 9 half 0.9 0.9 0.9
+object box mat crate pos 5 0.9 13 scale 1.8
+collider box center 5 0.9 13 half 0.9 0.9 0.9
+object box mat crate pos 9 0.9 -11 scale 1.8
+collider box center 9 0.9 -11 half 0.9 0.9 0.9
+object box mat crate pos 9 0.9 -7 scale 1.8
+collider box center 9 0.9 -7 half 0.9 0.9 0.9
+object box mat crate pos 9 0.9 -3 scale 1.8
+collider box center 9 0.9 -3 half 0.9 0.9 0.9
+object box mat crate pos 9 0.9 1 scale 1.8
+collider box center 9 0.9 1 half 0.9 0.9 0.9
+object box mat crate pos 9 0.9 5 scale 1.8
+collider box center 9 0.9 5 half 0.9 0.9 0.9
+object box mat crate pos 9 0.9 9 scale 1.8
+collider box center 9 0.9 9 half 0.9 0.9 0.9
+object box mat crate pos 9 0.9 13 scale 1.8
+collider box center 9 0.9 13 half 0.9 0.9 0.9
+object box mat crate pos 13 0.9 -11 scale 1.8
+collider box center 13 0.9 -11 half 0.9 0.9 0.9
+object box mat crate pos 13 0.9 -7 scale 1.8
+collider box center 13 0.9 -7 half 0.9 0.9 0.9
+object box mat crate pos 13 0.9 -3 scale 1.8
+collider box center 13 0.9 -3 half 0.9 0.9 0.9
+object box mat crate pos 13 0.9 1 scale 1.8
+collider box center 13 0.9 1 half 0.9 0.9 0.9
+object box mat crate pos 13 0.9 5 scale 1.8
+collider box center 13 0.9 5 half 0.9 0.9 0.9
+object box mat crate pos 13 0.9 9 scale 1.8
+collider box center 13 0.9 9 half 0.9 0.9 0.9
+object box mat crate pos 13 0.9 13 scale 1.8
+collider box center 13 0.9 13 half 0.9 0.9 0.9
+
+# --- База (запад) ---
+core      pos -17 0 0
+generator pos -19 0 4
+storage   pos -19 0 -4
+tower     pos -17 0 6
+tower     pos -17 0 -6
+
+# --- Спавнеры (восток) ---
+spawner   pos 19 0 6
+spawner   pos 19 0 -6
+
+# --- Игрок ---
+player model models/Mage.glb pos -17 0 8 scale 1.0 hide wand,spellbook

@@ -107,7 +107,6 @@ void FlowField::compute(const NavGrid& nav, const std::vector<NavCell>& goals) {
     h_ = nav.height();
     const int n = w_ * h_;
     dist_.assign((size_t)n, kUnreach);
-    parent_.assign((size_t)n, -2);
     if (n <= 0) return;
 
     std::vector<int> q;
@@ -117,7 +116,6 @@ void FlowField::compute(const NavGrid& nav, const std::vector<NavCell>& goals) {
         if (i < 0) continue;
         if (dist_[(size_t)i] == 0) continue;  // дубль цели
         dist_[(size_t)i] = 0;
-        parent_[(size_t)i] = -1;
         q.push_back(i);
     }
 
@@ -138,7 +136,6 @@ void FlowField::compute(const NavGrid& nav, const std::vector<NavCell>& goals) {
                 if (nav.isBlocked(cx + kDx[d], cz) || nav.isBlocked(cx, cz + kDz[d])) continue;
             }
             dist_[(size_t)ni] = (uint16_t)std::min(65534, (int)dist_[(size_t)cur] + 1);
-            parent_[(size_t)ni] = cur;
             q.push_back(ni);
         }
     }
@@ -158,14 +155,38 @@ bool FlowField::reachable(int cx, int cz) const {
 Vec3 FlowField::direction(int cx, int cz) const {
     int i = idx(cx, cz);
     if (i >= 0 && dist_[(size_t)i] != kUnreach) {
-        int p = parent_[(size_t)i];
-        if (p < 0) return Vec3{0.0f, 0.0f, 0.0f};  // уже на клетке цели
-        const int px = minX_ + (p % w_);
-        const int pz = minZ_ + (p / w_);
-        Vec3 dir{(float)(px - cx), 0.0f, (float)(pz - cz)};
-        return normalize(dir);
+        const uint16_t here = dist_[(size_t)i];
+        if (here == 0) return Vec3{0.0f, 0.0f, 0.0f};  // уже на клетке цели
+        // Устойчивая база — сосед с наименьшей дистанцией. BFS гарантирует соседа с
+        // dist = here-1, поэтому вектор всегда ненулевой и НЕ застревает на «гребнях»,
+        // равноудалённых от цели двумя обходами (там градиент был бы нулём).
+        int bx = cx, bz = cz;
+        uint16_t best = here;
+        for (int d = 0; d < 8; ++d) {
+            int ni = idx(cx + kDx[d], cz + kDz[d]);
+            if (ni < 0 || dist_[(size_t)ni] == kUnreach) continue;
+            if (dist_[(size_t)ni] < best) { best = dist_[(size_t)ni]; bx = cx + kDx[d]; bz = cz + kDz[d]; }
+        }
+        if (bx == cx && bz == cz) return Vec3{0.0f, 0.0f, 0.0f};  // спуска нет (клип dist)
+        Vec3 base = normalize(Vec3{(float)(bx - cx), 0.0f, (float)(bz - cz)});
+        // Сглаживание: градиент поля по 4 соседям — непрерывный вектор (убирает лесенку).
+        // Применяем ТОЛЬКО если он согласован со спуском (dot>0): у вогнутых препятствий
+        // градиент может смотреть «в стену», база же всегда ведёт в обход. Стена/за картой
+        // читается как (here+1) — вектор отталкивается от препятствия.
+        auto sample = [&](int nx, int nz) -> float {
+            int ni = idx(nx, nz);
+            if (ni < 0 || dist_[(size_t)ni] == kUnreach) return (float)here + 1.0f;
+            return (float)dist_[(size_t)ni];
+        };
+        float gx = sample(cx - 1, cz) - sample(cx + 1, cz);
+        float gz = sample(cx, cz - 1) - sample(cx, cz + 1);
+        if (gx * gx + gz * gz > 1e-6f) {
+            Vec3 g = normalize(Vec3{gx, 0.0f, gz});
+            if (g.x * base.x + g.z * base.z > 0.0f) return g;  // согласован — сглаживаем
+        }
+        return base;
     }
-    // Внутри препятствия — выйти на ближайшую (по dist) проходимую соседнюю.
+    // Внутри препятствия — шаг на ближайшую (по dist) проходимую соседнюю.
     int bx = 0, bz = 0;
     uint16_t best = kUnreach;
     bool found = false;

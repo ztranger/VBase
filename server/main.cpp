@@ -11,6 +11,7 @@
 #include <cstring>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #ifdef _WIN32
@@ -932,6 +933,233 @@ int runPathfindTest() {
     return 0;
 }
 
+// Плотная застройка (vbase_server --densetest, отдельно от --selftest): маршрутизация
+// через узкие 1-клеточные проходы, полностью запечатанное ядро (фолбэк «нет пути → ломать»),
+// диагональный зазор (запрет срезания угла), детектор застреваний и стоимость пересчёта
+// поля на большой сетке. Наглядная замена визуальной проверке (окно агент не видит).
+int runDenseBuildTest() {
+    int fails = 0;
+
+    auto arena = [](SceneDesc& desc, float half) {
+        ColliderSpec floor;
+        floor.center = Vec3{0.0f, -0.5f, 0.0f};
+        floor.half = Vec3{half + 4.0f, 0.5f, half + 4.0f};
+        desc.colliders.push_back(floor);
+        desc.grid.cell = 2.0f;
+        desc.grid.arenaHalf = half;
+    };
+    auto addB = [](SceneDesc& desc, BuildingSpec::Kind k, int cx, int cz, float hp,
+                   float range = 0.0f) {
+        BuildingSpec b;
+        b.kind = k;
+        b.pos = desc.grid.cellCenter(cx, cz);
+        b.hp = hp;
+        b.range = range;   // 0 -> башня как чистая стена (не стреляет)
+        b.rate = 99.0f;
+        desc.buildings.push_back(b);
+    };
+    auto rusher = [](SceneDesc& desc, float hp, float dmg, float spd, float atkint) {
+        CharacterDesc r;
+        r.goal = CharacterDesc::MobGoal::Core;
+        r.hp = hp;
+        r.damage = dmg;
+        r.speed = spd;
+        r.attackInterval = atkint;
+        desc.enemyTypes.push_back(r);
+        desc.enemy.hp = hp;
+        desc.enemy.damage = dmg;
+        desc.enemy.attackInterval = atkint;
+    };
+
+    // Прогон мира с детектором застреваний. Возвращает: ближайший подход врага к ядру,
+    // макс. серию тиков «стоит на месте И не атакует» (застрял), сколько тиков враг был
+    // в reachDist от ядра (дошёл), был ли хоть какой-то урон по постройкам.
+    struct RunStats { float nearestCore; int maxStuck; int reachedTicks; bool anyDamage; };
+    auto run = [](GameWorld& world, Vec3 corePos, int ticks, float reachDist) -> RunStats {
+        std::unordered_map<uint32_t, std::pair<float, float>> lastPos;
+        std::unordered_map<uint32_t, int> stuckStreak;
+        RunStats rs{999.0f, 0, 0, false};
+        float prevBuildHp = -1.0f;
+        for (int i = 0; i < ticks; ++i) {
+            world.step(kTickDt);
+            std::vector<EntityState> st;
+            world.writeStates(st);
+            float nearest = 999.0f, buildHp = 0.0f;
+            for (const EntityState& s : st) {
+                EntityType t = (EntityType)s.type;
+                if (t == EntityType::Enemy) {
+                    float dx = s.x - corePos.x, dz = s.z - corePos.z;
+                    float d = std::sqrt(dx * dx + dz * dz);
+                    if (d < nearest) nearest = d;
+                    auto it = lastPos.find(s.id);
+                    bool moved = (it == lastPos.end());
+                    if (it != lastPos.end()) {
+                        float mdx = s.x - it->second.first, mdz = s.z - it->second.second;
+                        moved = (mdx * mdx + mdz * mdz) > (0.01f * 0.01f);
+                    }
+                    lastPos[s.id] = {s.x, s.z};
+                    if (!moved && s.attackT <= 0.5f) {
+                        int v = ++stuckStreak[s.id];
+                        if (v > rs.maxStuck) rs.maxStuck = v;
+                    } else {
+                        stuckStreak[s.id] = 0;
+                    }
+                } else if (t == EntityType::Tower || t == EntityType::Core ||
+                           t == EntityType::Generator || t == EntityType::Storage) {
+                    buildHp += s.hp;
+                }
+            }
+            if (nearest < rs.nearestCore) rs.nearestCore = nearest;
+            if (nearest < reachDist) rs.reachedTicks++;
+            if (prevBuildHp >= 0.0f && buildHp < prevBuildHp - 0.001f) rs.anyDamage = true;
+            prevBuildHp = buildHp;
+        }
+        return rs;
+    };
+
+    // --- S1: серпантин из 1-клеточных проходов (маршрутизация через тесноту) ---
+    {
+        const float half = 24.0f;
+        SceneDesc desc;
+        arena(desc, half);
+        const int lo = -12, hi = 11;  // диапазон клеток при arena 24 / cell 2
+        addB(desc, BuildingSpec::Core, -10, 0, 100000.0f);
+        BuildingSpec sp;
+        sp.kind = BuildingSpec::Spawner;
+        sp.pos = desc.grid.cellCenter(10, 0);
+        sp.rate = 0.2f;
+        sp.cap = 1.0f;
+        desc.buildings.push_back(sp);
+        // 4 стены поперёк, зазор по одной клетке, попеременно верх/низ.
+        const int wallX[4] = {8, 4, 0, -4};
+        for (int w = 0; w < 4; ++w) {
+            int gap = (w % 2 == 0) ? hi : lo;  // чётные — сверху, нечётные — снизу
+            for (int cz = lo; cz <= hi; ++cz) {
+                if (cz == gap) continue;
+                addB(desc, BuildingSpec::Tower, wallX[w], cz, 100000.0f);  // несокрушимая стена
+            }
+        }
+        rusher(desc, 100000.0f, 10.0f, 5.0f, 0.2f);  // толстый — не гибнет, просто идёт
+
+        GameWorld world;
+        world.configure(desc);
+        RunStats rs = run(world, desc.grid.cellCenter(-10, 0), 2500, 3.0f);
+        std::printf("[Dense] S1 серпантин: подход к ядру=%.2f (ждём <3), застрял_макс=%d тик, "
+                    "дошёл_тиков=%d\n",
+                    (double)rs.nearestCore, rs.maxStuck, rs.reachedTicks);
+        if (rs.nearestCore >= 3.0f || rs.maxStuck > 300) {
+            std::printf("[Dense] FAIL: не прошёл серпантин или застрял\n");
+            ++fails;
+        }
+    }
+
+    // --- S2: полностью запечатанное ядро (кольцо построек) — фолбэк-снос, прорыв ---
+    {
+        const float half = 14.0f;
+        SceneDesc desc;
+        arena(desc, half);
+        addB(desc, BuildingSpec::Core, 0, 0, 100000.0f);
+        // Кольцо 1: 8 клеток вокруг ядра, скромный hp — рашер прогрызает одну и входит.
+        for (int dx = -1; dx <= 1; ++dx)
+            for (int dz = -1; dz <= 1; ++dz)
+                if (dx != 0 || dz != 0) addB(desc, BuildingSpec::Tower, dx, dz, 60.0f);
+        BuildingSpec sp;
+        sp.kind = BuildingSpec::Spawner;
+        sp.pos = desc.grid.cellCenter(6, 0);
+        sp.rate = 0.2f;
+        sp.cap = 1.0f;
+        desc.buildings.push_back(sp);
+        rusher(desc, 500.0f, 30.0f, 5.0f, 0.15f);
+
+        GameWorld world;
+        world.configure(desc);
+        RunStats rs = run(world, desc.grid.cellCenter(0, 0), 1500, 3.0f);
+        std::printf("[Dense] S2 запечатанное ядро: урон_по_стене=%d, прорвался(подход=%.2f), "
+                    "застрял_макс=%d\n",
+                    (int)rs.anyDamage, (double)rs.nearestCore, rs.maxStuck);
+        if (!rs.anyDamage || rs.nearestCore >= 3.0f) {
+            std::printf("[Dense] FAIL: не прогрыз кольцо или не дошёл до ядра\n");
+            ++fails;
+        }
+    }
+
+    // --- S3: ядро запечатано, «щель» только диагональная — срезать угол нельзя, значит
+    //         рашер обязан ЛОМАТЬ (а не проскользнуть по диагонали между двумя башнями) ---
+    {
+        const float half = 14.0f;
+        SceneDesc desc;
+        arena(desc, half);
+        addB(desc, BuildingSpec::Core, 0, 0, 100000.0f);
+        // 8 клеток вокруг ядра, но (1,1) ОТКРЫТА. Ядро всё равно запечатано: попасть в (1,1)
+        // из ядра можно лишь срезав угол между (1,0) и (0,1) — а это запрещено. Правильное
+        // поведение: toCore недостижимо -> рашер ломает башню и прорывается (урон обязателен).
+        for (int dx = -1; dx <= 1; ++dx)
+            for (int dz = -1; dz <= 1; ++dz) {
+                if (dx == 0 && dz == 0) continue;
+                if (dx == 1 && dz == 1) continue;  // диагональная щель
+                addB(desc, BuildingSpec::Tower, dx, dz, 60.0f);
+            }
+        BuildingSpec sp;
+        sp.kind = BuildingSpec::Spawner;
+        sp.pos = desc.grid.cellCenter(6, 6);  // заходит со стороны открытой диагонали
+        sp.rate = 0.2f;
+        sp.cap = 1.0f;
+        desc.buildings.push_back(sp);
+        rusher(desc, 500.0f, 30.0f, 5.0f, 0.15f);
+
+        GameWorld world;
+        world.configure(desc);
+        RunStats rs = run(world, desc.grid.cellCenter(0, 0), 1500, 3.0f);
+        // Ключевое: дошёл до ядра (<3) И для этого ЛОМАЛ (anyDamage). Если бы угол срезался —
+        // рашер проскользнул бы диагональ без урона (anyDamage=false) либо застрял бы в углу.
+        std::printf("[Dense] S3 диагональ-щель: ломал=%d, прорвался(подход=%.2f), застрял_макс=%d\n",
+                    (int)rs.anyDamage, (double)rs.nearestCore, rs.maxStuck);
+        if (!rs.anyDamage || rs.nearestCore >= 3.0f || rs.maxStuck > 300) {
+            std::printf("[Dense] FAIL: рашер проскользнул диагональ, застрял или не прорвался\n");
+            ++fails;
+        }
+    }
+
+    // --- S4: стоимость ОДНОГО пересчёта на большой плотной сетке (= спайк на смену построек) ---
+    {
+        Grid g;
+        g.cell = 2.0f;
+        g.arenaHalf = 400.0f;  // ~400 клеток на сторону, как в scale-тесте
+        NavGrid nav;
+        nav.reset(g);
+        const int side = nav.width();
+        // Плотный блок футпринтов ~20x20 = 400 «зданий» в центре.
+        auto rasterizeAll = [&]() {
+            nav.clearBlocked();
+            for (int cx = -10; cx < 10; ++cx)
+                for (int cz = -10; cz < 10; ++cz)
+                    nav.rasterizeBox(Vec3{(cx + 0.5f) * g.cell, 0.5f, (cz + 0.5f) * g.cell},
+                                     Vec3{g.cell * 0.5f, 0.5f, g.cell * 0.5f});
+        };
+        const int reps = 5;
+        auto t0 = std::chrono::steady_clock::now();
+        FlowField f;
+        for (int r = 0; r < reps; ++r) {
+            rasterizeAll();                         // растеризация занятости
+            f.compute(nav, {NavCell{side / 2 - 10, side / 2 - 10}});  // 1 BFS по всему полю
+        }
+        auto t1 = std::chrono::steady_clock::now();
+        double ms = std::chrono::duration<double, std::milli>(t1 - t0).count() / reps;
+        // Оценка полного пересчёта на смену построек: 2 поля (toCore+toBuildings) на команду
+        // с мобами. В PvE это ×2 к измеренному (ленивый eval считает только team 0).
+        std::printf("[Dense] S4 пересчёт (сетка %d^2=%d кл, 400 футпринтов): rasterize+BFS=%.2f мс; "
+                    "полный ребилд PvE ~%.2f мс (2 поля)\n",
+                    side, side * side, ms, ms * 2.0);
+        if (ms > 50.0) {  // порог-страховка: даже 512^2 не должен уходить в десятки мс на поле
+            std::printf("[Dense] WARN: пересчёт поля дороговат (%.2f мс) — см. #1 (ленивость уже вкл.)\n",
+                        ms);
+        }
+    }
+
+    std::printf("[Dense] %s (провалов: %d)\n", fails == 0 ? "OK" : "FAIL", fails);
+    return fails == 0 ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -944,6 +1172,10 @@ int main(int argc, char** argv) {
 #ifndef _WIN32
     std::signal(SIGPIPE, SIG_IGN);
 #endif
+
+    if (argc > 1 && std::strcmp(argv[1], "--densetest") == 0) {
+        return runDenseBuildTest();     // плотная застройка: серпантин/запечатка/диагональ/перф
+    }
 
     if (argc > 1 && std::strcmp(argv[1], "--selftest") == 0) {
         int a = runPhysicsSelfTest();   // примитив: collide-and-slide

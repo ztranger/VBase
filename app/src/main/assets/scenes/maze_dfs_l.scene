@@ -1,0 +1,187 @@
+# DFS-лабиринт 6x6 комнат (seed 7): идеальный лабиринт — ровно один путь
+# от спавнера (комната ЮЗ) до ядра (комната СВ). Коридоры в 2 клетки.
+
+# --- Текстуры / материалы / меши ---
+texture checker procedural 256 8
+texture crate   image textures/crate.png
+material floor lit   color 1 1 1          tex checker
+material crate lit   color 1 1 1          tex crate
+material edge  lit   color 0.55 0.65 0.85 tex checker
+mesh ground plane 42 21
+mesh box    cube  1
+
+# --- Свет / камера / сетка ---
+light  dir 0.4 1 0.6
+camera distance 46 pitch 1.15
+grid   cell 2 arena 19
+matchrestart 8
+
+object ground mat floor
+ring box mat edge count 64 radius 20 y 0.4 scale 0.4 spin 0.6
+
+# --- Границы арены (коллайдеры) ---
+collider box center 0 -0.5 0  half 21 0.5 21   # пол
+collider box center  21 1 0  half 0.25 1 21   # стена +X
+collider box center -21 1 0  half 0.25 1 21   # стена -X
+collider box center 0 1  21  half 21 1 0.25   # стена +Z
+collider box center 0 1 -21  half 21 1 0.25   # стена -Z
+
+# --- Стены лабиринта ---
+object box mat crate pos -5 0.9 -15 scale 1.8
+collider box center -5 0.9 -15 half 0.9 0.9 0.9
+object box mat crate pos -5 0.9 -13 scale 1.8
+collider box center -5 0.9 -13 half 0.9 0.9 0.9
+object box mat crate pos -15 0.9 -11 scale 1.8
+collider box center -15 0.9 -11 half 0.9 0.9 0.9
+object box mat crate pos -13 0.9 -11 scale 1.8
+collider box center -13 0.9 -11 half 0.9 0.9 0.9
+object box mat crate pos -11 0.9 -11 scale 1.8
+collider box center -11 0.9 -11 half 0.9 0.9 0.9
+object box mat crate pos -5 0.9 -11 scale 1.8
+collider box center -5 0.9 -11 half 0.9 0.9 0.9
+object box mat crate pos 1 0.9 -11 scale 1.8
+collider box center 1 0.9 -11 half 0.9 0.9 0.9
+object box mat crate pos 3 0.9 -11 scale 1.8
+collider box center 3 0.9 -11 half 0.9 0.9 0.9
+object box mat crate pos 5 0.9 -11 scale 1.8
+collider box center 5 0.9 -11 half 0.9 0.9 0.9
+object box mat crate pos 7 0.9 -11 scale 1.8
+collider box center 7 0.9 -11 half 0.9 0.9 0.9
+object box mat crate pos 9 0.9 -11 scale 1.8
+collider box center 9 0.9 -11 half 0.9 0.9 0.9
+object box mat crate pos 11 0.9 -11 scale 1.8
+collider box center 11 0.9 -11 half 0.9 0.9 0.9
+object box mat crate pos 13 0.9 -11 scale 1.8
+collider box center 13 0.9 -11 half 0.9 0.9 0.9
+object box mat crate pos -5 0.9 -9 scale 1.8
+collider box center -5 0.9 -9 half 0.9 0.9 0.9
+object box mat crate pos 1 0.9 -9 scale 1.8
+collider box center 1 0.9 -9 half 0.9 0.9 0.9
+object box mat crate pos 13 0.9 -9 scale 1.8
+collider box center 13 0.9 -9 half 0.9 0.9 0.9
+object box mat crate pos -5 0.9 -7 scale 1.8
+collider box center -5 0.9 -7 half 0.9 0.9 0.9
+object box mat crate pos 1 0.9 -7 scale 1.8
+collider box center 1 0.9 -7 half 0.9 0.9 0.9
+object box mat crate pos 13 0.9 -7 scale 1.8
+collider box center 13 0.9 -7 half 0.9 0.9 0.9
+object box mat crate pos -11 0.9 -5 scale 1.8
+collider box center -11 0.9 -5 half 0.9 0.9 0.9
+object box mat crate pos -9 0.9 -5 scale 1.8
+collider box center -9 0.9 -5 half 0.9 0.9 0.9
+object box mat crate pos -7 0.9 -5 scale 1.8
+collider box center -7 0.9 -5 half 0.9 0.9 0.9
+object box mat crate pos -5 0.9 -5 scale 1.8
+collider box center -5 0.9 -5 half 0.9 0.9 0.9
+object box mat crate pos 1 0.9 -5 scale 1.8
+collider box center 1 0.9 -5 half 0.9 0.9 0.9
+object box mat crate pos 7 0.9 -5 scale 1.8
+collider box center 7 0.9 -5 half 0.9 0.9 0.9
+object box mat crate pos 9 0.9 -5 scale 1.8
+collider box center 9 0.9 -5 half 0.9 0.9 0.9
+object box mat crate pos 11 0.9 -5 scale 1.8
+collider box center 11 0.9 -5 half 0.9 0.9 0.9
+object box mat crate pos 13 0.9 -5 scale 1.8
+collider box center 13 0.9 -5 half 0.9 0.9 0.9
+object box mat crate pos -11 0.9 -3 scale 1.8
+collider box center -11 0.9 -3 half 0.9 0.9 0.9
+object box mat crate pos 1 0.9 -3 scale 1.8
+collider box center 1 0.9 -3 half 0.9 0.9 0.9
+object box mat crate pos 7 0.9 -3 scale 1.8
+collider box center 7 0.9 -3 half 0.9 0.9 0.9
+object box mat crate pos -11 0.9 -1 scale 1.8
+collider box center -11 0.9 -1 half 0.9 0.9 0.9
+object box mat crate pos 1 0.9 -1 scale 1.8
+collider box center 1 0.9 -1 half 0.9 0.9 0.9
+object box mat crate pos 7 0.9 -1 scale 1.8
+collider box center 7 0.9 -1 half 0.9 0.9 0.9
+object box mat crate pos -11 0.9 1 scale 1.8
+collider box center -11 0.9 1 half 0.9 0.9 0.9
+object box mat crate pos -5 0.9 1 scale 1.8
+collider box center -5 0.9 1 half 0.9 0.9 0.9
+object box mat crate pos 1 0.9 1 scale 1.8
+collider box center 1 0.9 1 half 0.9 0.9 0.9
+object box mat crate pos 7 0.9 1 scale 1.8
+collider box center 7 0.9 1 half 0.9 0.9 0.9
+object box mat crate pos 13 0.9 1 scale 1.8
+collider box center 13 0.9 1 half 0.9 0.9 0.9
+object box mat crate pos 15 0.9 1 scale 1.8
+collider box center 15 0.9 1 half 0.9 0.9 0.9
+object box mat crate pos 17 0.9 1 scale 1.8
+collider box center 17 0.9 1 half 0.9 0.9 0.9
+object box mat crate pos -11 0.9 3 scale 1.8
+collider box center -11 0.9 3 half 0.9 0.9 0.9
+object box mat crate pos -5 0.9 3 scale 1.8
+collider box center -5 0.9 3 half 0.9 0.9 0.9
+object box mat crate pos 1 0.9 3 scale 1.8
+collider box center 1 0.9 3 half 0.9 0.9 0.9
+object box mat crate pos 13 0.9 3 scale 1.8
+collider box center 13 0.9 3 half 0.9 0.9 0.9
+object box mat crate pos -11 0.9 5 scale 1.8
+collider box center -11 0.9 5 half 0.9 0.9 0.9
+object box mat crate pos -5 0.9 5 scale 1.8
+collider box center -5 0.9 5 half 0.9 0.9 0.9
+object box mat crate pos 1 0.9 5 scale 1.8
+collider box center 1 0.9 5 half 0.9 0.9 0.9
+object box mat crate pos 13 0.9 5 scale 1.8
+collider box center 13 0.9 5 half 0.9 0.9 0.9
+object box mat crate pos -11 0.9 7 scale 1.8
+collider box center -11 0.9 7 half 0.9 0.9 0.9
+object box mat crate pos -5 0.9 7 scale 1.8
+collider box center -5 0.9 7 half 0.9 0.9 0.9
+object box mat crate pos 1 0.9 7 scale 1.8
+collider box center 1 0.9 7 half 0.9 0.9 0.9
+object box mat crate pos 7 0.9 7 scale 1.8
+collider box center 7 0.9 7 half 0.9 0.9 0.9
+object box mat crate pos 9 0.9 7 scale 1.8
+collider box center 9 0.9 7 half 0.9 0.9 0.9
+object box mat crate pos 11 0.9 7 scale 1.8
+collider box center 11 0.9 7 half 0.9 0.9 0.9
+object box mat crate pos 13 0.9 7 scale 1.8
+collider box center 13 0.9 7 half 0.9 0.9 0.9
+object box mat crate pos -11 0.9 9 scale 1.8
+collider box center -11 0.9 9 half 0.9 0.9 0.9
+object box mat crate pos -5 0.9 9 scale 1.8
+collider box center -5 0.9 9 half 0.9 0.9 0.9
+object box mat crate pos 1 0.9 9 scale 1.8
+collider box center 1 0.9 9 half 0.9 0.9 0.9
+object box mat crate pos -11 0.9 11 scale 1.8
+collider box center -11 0.9 11 half 0.9 0.9 0.9
+object box mat crate pos -5 0.9 11 scale 1.8
+collider box center -5 0.9 11 half 0.9 0.9 0.9
+object box mat crate pos 1 0.9 11 scale 1.8
+collider box center 1 0.9 11 half 0.9 0.9 0.9
+object box mat crate pos -11 0.9 13 scale 1.8
+collider box center -11 0.9 13 half 0.9 0.9 0.9
+object box mat crate pos -9 0.9 13 scale 1.8
+collider box center -9 0.9 13 half 0.9 0.9 0.9
+object box mat crate pos -7 0.9 13 scale 1.8
+collider box center -7 0.9 13 half 0.9 0.9 0.9
+object box mat crate pos -5 0.9 13 scale 1.8
+collider box center -5 0.9 13 half 0.9 0.9 0.9
+object box mat crate pos 1 0.9 13 scale 1.8
+collider box center 1 0.9 13 half 0.9 0.9 0.9
+object box mat crate pos 3 0.9 13 scale 1.8
+collider box center 3 0.9 13 half 0.9 0.9 0.9
+object box mat crate pos 5 0.9 13 scale 1.8
+collider box center 5 0.9 13 half 0.9 0.9 0.9
+object box mat crate pos 7 0.9 13 scale 1.8
+collider box center 7 0.9 13 half 0.9 0.9 0.9
+object box mat crate pos 9 0.9 13 scale 1.8
+collider box center 9 0.9 13 half 0.9 0.9 0.9
+object box mat crate pos 11 0.9 13 scale 1.8
+collider box center 11 0.9 13 half 0.9 0.9 0.9
+object box mat crate pos 13 0.9 13 scale 1.8
+collider box center 13 0.9 13 half 0.9 0.9 0.9
+object box mat crate pos 1 0.9 15 scale 1.8
+collider box center 1 0.9 15 half 0.9 0.9 0.9
+object box mat crate pos 1 0.9 17 scale 1.8
+collider box center 1 0.9 17 half 0.9 0.9 0.9
+
+# --- Ядро (комната СВ) и спавнер (комната ЮЗ) ---
+core      pos 15 0 15
+tower     pos 15 0 13
+spawner   pos -15 0 -15
+
+# --- Игрок ---
+player model models/Mage.glb pos 15 0 17 scale 1.0 hide wand,spellbook

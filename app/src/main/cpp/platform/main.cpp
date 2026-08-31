@@ -74,6 +74,7 @@ struct Engine {
     GameUiState ui;          // состояние панели — общее с десктопом
     std::string settingsPath;  // файл персиста (internalDataPath/…): выбор персонажа между запусками
     int lastSavedChar = -1;    // отслеживаем смену выбора для записи в файл
+    std::string scenePath = "scenes/default.scene";  // активная сцена (меняется из меню)
 
     // Мультитач кадра: pumpInput собирает события ВСЕХ пальцев, а в геймплей (twin-stick)
     // диспатчим ПОСЛЕ renderFrame — тогда WantCaptureMouse свеж (тап по GUI не стартует стик).
@@ -106,7 +107,7 @@ bool createRenderer(Engine* engine, android_app* app) {
     }
     // Мир строится после init рендера: нужны живой GPU-контекст и AAssetManager.
     engine->scene = std::make_unique<Scene>();
-    engine->scene->build(*engine->renderer, assets);
+    engine->scene->build(*engine->renderer, assets, engine->scenePath.c_str());
     // Восстанавливаем сохранённый выбор персонажа (пересборка сцены на смене окна/бэкенда — тоже).
     if (engine->ui.charIndex >= 0) engine->scene->selectCharacter(engine->ui.charIndex);
     engine->haveTime = false;
@@ -366,6 +367,16 @@ extern "C" void android_main(android_app* app) {
                 engine.scene.reset();
                 engine.renderer.reset();
                 engine.backend = nb;
+                createRenderer(&engine, app);
+            }
+
+            // Смена сцены по кнопке меню: пересобираем мир из того же окна/бэкенда
+            // (полный рекриэйт рендера — без утечек GPU-ресурсов старой сцены).
+            if (engine.ui.requestScenePath[0] != '\0' && app->window != nullptr) {
+                engine.scenePath = engine.ui.requestScenePath;
+                engine.ui.requestScenePath[0] = '\0';
+                engine.scene.reset();
+                engine.renderer.reset();
                 createRenderer(&engine, app);
             }
         }

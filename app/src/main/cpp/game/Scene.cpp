@@ -3,9 +3,11 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 
+#include "engine/assets/AssetSource.h"
 #include "engine/assets/Assets.h"
 #include "engine/physics/CollisionWorld.h"
 #include "game/CharacterRoster.h"
@@ -40,9 +42,42 @@ void bakeStaticMesh(MeshData& m, float scale, float yawDeg) {
 Scene::Scene() = default;
 Scene::~Scene() = default;
 
+// Манифест сцен config/scenes.cfg: строка = "<путь> <имя с пробелами...>". Первый токен —
+// путь, остаток строки (после пробелов) — отображаемое имя. Комментарии с '#'. Отсутствие
+// файла не критично (список будет пуст, меню просто не покажет выбор).
+void Scene::loadSceneManifest(AssetSource& assets, const char* path) {
+    sceneList_.clear();
+    std::vector<uint8_t> bytes;
+    if (!assets.read(path, bytes)) {
+        LOGW("scenes: манифест не найден: %s (выбор сцен недоступен)", path);
+        return;
+    }
+    std::string text(bytes.begin(), bytes.end());
+    std::istringstream in(text);
+    std::string raw;
+    while (std::getline(in, raw)) {
+        if (!raw.empty() && raw.back() == '\r') raw.pop_back();  // CRLF
+        size_t hash = raw.find('#');
+        if (hash != std::string::npos) raw.erase(hash);
+        std::istringstream ls(raw);
+        std::string p;
+        if (!(ls >> p)) continue;                 // пустая строка
+        std::string name;
+        std::getline(ls, name);                   // остаток строки — имя
+        size_t s = name.find_first_not_of(" \t");
+        size_t e = name.find_last_not_of(" \t");
+        name = (s == std::string::npos) ? p : name.substr(s, e - s + 1);
+        sceneList_.push_back({p, name});
+    }
+    LOGI("scenes: в манифесте %d сцен", (int)sceneList_.size());
+}
+
 void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath) {
     objects_.clear();
     collision_ = std::make_unique<CollisionWorld>();  // свежий мир коллизий на каждую сборку
+
+    currentScenePath_ = scenePath ? scenePath : "";
+    loadSceneManifest(assets, "config/scenes.cfg");  // список сцен для меню (не критично, если нет)
 
     SceneDesc desc;
     if (!loadSceneDesc(assets, scenePath, desc)) {

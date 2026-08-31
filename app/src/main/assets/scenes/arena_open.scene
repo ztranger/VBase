@@ -1,0 +1,41 @@
+# Открытая арена VBase (без препятствий). Базовое поведение: прямой подход,
+# сглаженный доворот. Сравнение с лабиринтами.
+
+# --- Текстуры / материалы / меши ---
+texture checker procedural 256 8
+texture crate   image textures/crate.png
+material floor lit   color 1 1 1          tex checker
+material crate lit   color 1 1 1          tex crate
+material edge  lit   color 0.55 0.65 0.85 tex checker
+mesh ground plane 32 16
+mesh box    cube  1
+
+# --- Свет / камера / сетка ---
+light  dir 0.4 1 0.6
+camera distance 30 pitch 0.95
+grid   cell 2 arena 14
+matchrestart 8
+
+object ground mat floor
+ring box mat edge count 64 radius 15 y 0.4 scale 0.4 spin 0.6
+
+# --- Границы арены (коллайдеры) ---
+collider box center 0 -0.5 0  half 16 0.5 16   # пол
+collider box center  16 1 0  half 0.25 1 16   # стена +X
+collider box center -16 1 0  half 0.25 1 16   # стена -X
+collider box center 0 1  16  half 16 1 0.25   # стена +Z
+collider box center 0 1 -16  half 16 1 0.25   # стена -Z
+
+# --- База (запад) ---
+core      pos -11 0 0
+generator pos -13 0 4
+storage   pos -13 0 -4
+tower     pos -7 0 4
+tower     pos -7 0 -4
+
+# --- Спавнеры (восток) ---
+spawner   pos 13 0 6
+spawner   pos 13 0 -6
+
+# --- Игрок ---
+player model models/Mage.glb pos -11 0 8 scale 1.0 hide wand,spellbook

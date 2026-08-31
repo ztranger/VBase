@@ -139,5 +139,6 @@ private:
     const Entity* entityById(uint32_t id) const;
     void attachFootprint(Entity& e);           // бокс клетки + пометка навсетки грязной
     void detachPhysics(Entity& e);             // капсула и/или футпринт
-    void rebuildNavIfNeeded();                 // occupancy + BFS; только если dirty
+    void rebuildNavIfNeeded();                 // occupancy (только если mapDirty) + сброс полей
+    void ensureFlowField(uint8_t team);        // ленивый BFS поля команды (раз на изменение построек)
 };

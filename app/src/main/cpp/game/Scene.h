@@ -170,6 +170,23 @@ public:
     int selectedCharacter() const { return localCharIndex_; }
     void selectCharacter(int i);  // локальный персонаж + уведомить сервер (для рендера чужими)
 
+    // Список доступных сцен (config/scenes.cfg) для выбора в меню. Смена сцены —
+    // перезагрузкой мира платформой (десктоп: пересоздание рендера; Android: рекриэйт),
+    // поэтому сам Scene только перечисляет; путь текущей — currentScenePath().
+    int sceneListCount() const { return (int)sceneList_.size(); }
+    const char* sceneListName(int i) const {
+        return (i >= 0 && i < (int)sceneList_.size()) ? sceneList_[i].name.c_str() : "";
+    }
+    const char* sceneListPath(int i) const {
+        return (i >= 0 && i < (int)sceneList_.size()) ? sceneList_[i].path.c_str() : "";
+    }
+    const char* currentScenePath() const { return currentScenePath_.c_str(); }
+    int currentSceneIndex() const {  // индекс текущей сцены в списке; -1 если нет в манифесте
+        for (int i = 0; i < (int)sceneList_.size(); ++i)
+            if (sceneList_[i].path == currentScenePath_) return i;
+        return -1;
+    }
+
     // Рендер вне боя (главный цикл выбирает путь по UiMode): 3D-превью выбранного
     // персонажа (экран выбора) и пустой фон меню (мир не показываем).
     RenderFrame renderCharacterPreview(float alpha, float aspect, float renderDt);
@@ -185,6 +202,13 @@ public:
 private:
     FollowCamera camera_;
     std::vector<GameObject> objects_;
+
+    // Манифест доступных сцен (config/scenes.cfg): путь + отображаемое имя. Меню
+    // перечисляет их и просит платформу перезагрузить мир выбранной.
+    struct SceneEntry { std::string path, name; };
+    std::vector<SceneEntry> sceneList_;
+    std::string currentScenePath_;     // путь сцены, которой построен этот Scene
+    void loadSceneManifest(AssetSource& assets, const char* path);  // config/scenes.cfg -> sceneList_
 
     // Реестр выбираемых персонажей (грузится в build из config/characters.cfg). ВСЕ модели
     // грузятся один раз -> мгновенное переключение и рендер чужих их моделями без утечек GPU
