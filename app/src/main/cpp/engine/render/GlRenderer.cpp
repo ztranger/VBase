@@ -34,7 +34,7 @@ constexpr GLuint kFrameBinding = 0;
 constexpr int kBoneTexRows = 1024;
 
 // Раскладка std140 блока Frame. vec3 в std140 выравнивается на 16 байт,
-// поэтому явные паддинги. Размер = 160 байт. ОБЯЗАНА совпадать с common.glsl.
+// поэтому явные паддинги. Размер = 176 байт. ОБЯЗАНА совпадать с common.glsl.
 struct FrameUBO {
     float viewProj[16];  // 0
     float lightVP[16];   // 64  проекция глазами света (для выборки теней)
@@ -42,6 +42,8 @@ struct FrameUBO {
     float pad0;          // 140
     float viewPos[3];    // 144
     float shadowBias;    // 156 (последний скаляр в 16-байтном слоте viewPos)
+    float fogColor[3];   // 160 (линейное пространство)
+    float fogDensity;    // 172 (0 = туман выключен)
 };
 
 // Тела шейдеров вынесены в ассеты shaders/*.vert|frag и грузятся через
@@ -761,6 +763,10 @@ void GlRenderer::renderFrame(const RenderFrame& frame) {
     fd.viewPos[1] = frame.cameraPos.y;
     fd.viewPos[2] = frame.cameraPos.z;
     fd.shadowBias = frame.shadowBias;
+    fd.fogColor[0] = frame.fogColor.x;
+    fd.fogColor[1] = frame.fogColor.y;
+    fd.fogColor[2] = frame.fogColor.z;
+    fd.fogDensity = frame.fogDensity;
     glBindBuffer(GL_UNIFORM_BUFFER, frameUbo_);
     glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(FrameUBO), &fd);
 
@@ -772,7 +778,15 @@ void GlRenderer::renderFrame(const RenderFrame& frame) {
 
     // Проход 2 — основной кадр. Возврат на экранный фреймбуфер, карта теней на юнит 2.
     glViewport(0, 0, width, height);
-    glClearColor(0.07f, 0.07f, 0.12f, 1.0f);
+    // При тумане красим фон в его цвет (gamma), чтобы дальняя геометрия сливалась
+    // с горизонтом без резкого края. Без тумана — прежний тёмно-синий.
+    if (frame.fogDensity > 0.0f) {
+        const float ig = 1.0f / 2.2f;
+        glClearColor(std::pow(frame.fogColor.x, ig), std::pow(frame.fogColor.y, ig),
+                     std::pow(frame.fogColor.z, ig), 1.0f);
+    } else {
+        glClearColor(0.07f, 0.07f, 0.12f, 1.0f);
+    }
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, shadowTex_);

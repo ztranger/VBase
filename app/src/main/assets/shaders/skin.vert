@@ -10,6 +10,7 @@ uniform highp sampler2D uBones;  // bones: row = bone, 4 texels = 4 columns
 uniform int uBoneOffset;         // this model's bone offset in the texture
 out vec3 vNormal;
 out vec2 vUV;
+out vec3 vWorldPos;         // world position (fog distance)
 out highp vec4 vLightClip;  // position in light clip space (shadow lookup)
 mat4 boneMat(int j) {
     int row = uBoneOffset + j;
@@ -27,5 +28,6 @@ void main() {
     gl_Position = uViewProj * worldPos;
     vNormal = mat3(uModel * skin) * aNormal;
     vUV = aUV;
+    vWorldPos = worldPos.xyz;
     vLightClip = uLightVP * worldPos;
 }

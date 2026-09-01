@@ -432,6 +432,8 @@ RenderFrame Scene::renderCharacterPreview(float alpha, float aspect, float rende
     frame.shadowsEnabled = shadowsEnabled_;
     frame.shadowBias = shadowBias_;
     frame.shadowRadius = shadowRadius_;
+    frame.fogColor = fogColor_;
+    frame.fogDensity = fogDensity_;
 
     float yaw = previewSpin_ * 0.6f;                    // медленный оборот
     frame.skinned.push_back(
@@ -450,6 +452,8 @@ RenderFrame Scene::renderMenuBackdrop(float aspect) {
     frame.shadowsEnabled = shadowsEnabled_;
     frame.shadowBias = shadowBias_;
     frame.shadowRadius = shadowRadius_;
+    frame.fogColor = fogColor_;
+    frame.fogDensity = fogDensity_;
     return frame;
 }
 
@@ -759,6 +763,8 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
     frame.shadowsEnabled = shadowsEnabled_;
     frame.shadowBias = shadowBias_;
     frame.shadowRadius = shadowRadius_;
+    frame.fogColor = fogColor_;
+    frame.fogDensity = fogDensity_;
 
     for (const GameObject& obj : objects_) {
         Transform t = obj.transform;

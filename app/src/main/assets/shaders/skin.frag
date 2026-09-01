@@ -3,6 +3,7 @@
 #include "lighting.glsl"
 in vec3 vNormal;
 in vec2 vUV;
+in vec3 vWorldPos;
 in highp vec4 vLightClip;
 uniform vec3 uColor;
 uniform sampler2D uAlbedo;
@@ -13,5 +14,6 @@ void main() {
     float sh = shadowFactor(vLightClip, ndotl);
     vec3 albedo = toLinear(texture(uAlbedo, vUV).rgb * uColor);
     vec3 c = albedo * (hemiAmbient(N) + kSunColor * ndotl * sh);
+    c = applyFog(c, vWorldPos);
     fragColor = vec4(toGamma(c), 1.0);
 }

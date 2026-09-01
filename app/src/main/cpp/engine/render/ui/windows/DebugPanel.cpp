@@ -1,6 +1,7 @@
 #include "engine/render/ui/windows/DebugPanel.h"
 
 #include <cfloat>
+#include <cmath>
 
 #include "imgui.h"
 
@@ -47,6 +48,17 @@ void draw(UiShell::Ctx& ctx) {
     float sr = ctx.scene.shadowRadius();
     if (ImGui::SliderFloat("Area", &sr, 5.0f, 40.0f, "%.1f")) ctx.scene.setShadowRadius(sr);
     ImGui::EndDisabled();
+
+    ImGui::SeparatorText("Fog");
+    // Плотность 0 = туман выключен. Цвет правим в гамма-пространстве (как на экране),
+    // храним/шлём в линейном — конверсия тут.
+    float fd = ctx.scene.fogDensity();
+    if (ImGui::SliderFloat("Density", &fd, 0.0f, 0.06f, "%.3f")) ctx.scene.setFogDensity(fd);
+    Vec3 fc = ctx.scene.fogColor();  // linear
+    float g[3] = {std::pow(fc.x, 1.0f / 2.2f), std::pow(fc.y, 1.0f / 2.2f), std::pow(fc.z, 1.0f / 2.2f)};
+    if (ImGui::ColorEdit3("Color", g)) {
+        ctx.scene.setFogColor(Vec3{std::pow(g[0], 2.2f), std::pow(g[1], 2.2f), std::pow(g[2], 2.2f)});
+    }
 
     ImGui::SeparatorText("Renderer");
     bool isGl = (ctx.state.backend == 0);

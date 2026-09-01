@@ -4,6 +4,8 @@ layout(std140) uniform Frame {
     mat4 uViewProj;   // 0
     mat4 uLightVP;    // 64  view-proj source (directional), for shadow lookup
     vec3 uLightDir;   // 128 direction TO the light
-    vec3 uViewPos;    // 144 camera position (Phong)
+    vec3 uViewPos;    // 144 camera position (Phong / fog distance)
     float uShadowBias;// 156 depth bias against self-shadow acne
+    vec3 uFogColor;   // 160 fog color (LINEAR space)
+    float uFogDensity;// 172 exponential fog density (0 = off)
 };

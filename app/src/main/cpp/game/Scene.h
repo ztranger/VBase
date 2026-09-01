@@ -207,6 +207,12 @@ public:
     float shadowRadius() const { return shadowRadius_; }
     void setShadowRadius(float r) { shadowRadius_ = r; }
 
+    // Туман по глубине (fogColor — в линейном пространстве, как ждёт шейдер).
+    Vec3 fogColor() const { return fogColor_; }
+    void setFogColor(Vec3 c) { fogColor_ = c; }
+    float fogDensity() const { return fogDensity_; }
+    void setFogDensity(float d) { fogDensity_ = d; }
+
 private:
     FollowCamera camera_;
     std::vector<GameObject> objects_;
@@ -283,6 +289,8 @@ private:
     bool shadowsEnabled_ = true;       // тени (directional shadow map)
     float shadowBias_ = 0.0025f;       // сдвиг глубины против self-shadow acne
     float shadowRadius_ = 14.0f;       // полуширина орто-коробки света (охват арены)
+    Vec3 fogColor_{0.09f, 0.13f, 0.20f};  // цвет тумана (линейное пространство)
+    float fogDensity_ = 0.014f;        // плотность экспоненциального тумана (0 = выкл)
 
     // Построить отрисовочный предмет модели reg[index] по состоянию (клиентский рендер).
     // reg — chars_ (герои) или mobs_ (враги). oneShotClip>=0 — проиграть конкретный клип в

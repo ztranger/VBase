@@ -48,6 +48,11 @@ struct RenderFrame {
     float shadowBias = 0.0025f;   // сдвиг глубины против self-shadow acne
     float shadowRadius = 14.0f;   // полуширина орто-коробки света (охват арены)
 
+    // Экспоненциальный туман по глубине. fogColor — в ЛИНЕЙНОМ пространстве.
+    // fogDensity 0 = выключен. Дальний фон (clear color) рендер подгоняет под туман.
+    Vec3 fogColor{0.09f, 0.13f, 0.20f};
+    float fogDensity = 0.014f;
+
     std::vector<RenderItem> items;
     std::vector<SkinnedItem> skinned; // анимированные модели (скиннинг)
     std::vector<HudText> hud;         // оверлей-текст (рисуется после 3D)

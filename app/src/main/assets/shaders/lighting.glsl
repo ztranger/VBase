@@ -24,6 +24,15 @@ const vec3 kSunColor = vec3(0.85);
 // highp: depth math needs full precision on GLES, else acne/swimming.
 uniform highp sampler2DShadow uShadowMap;
 
+// Exponential distance fog, blended in LINEAR space (before gamma). Fades distant
+// geometry into uFogColor -> depth cue + hides the far arena edge. Density 0 = off.
+vec3 applyFog(vec3 colorLinear, vec3 worldPos) {
+    if (uFogDensity <= 0.0) return colorLinear;
+    float dist = length(uViewPos - worldPos);
+    float f = 1.0 - exp(-uFogDensity * dist);
+    return mix(colorLinear, uFogColor, clamp(f, 0.0, 1.0));
+}
+
 // Lit fraction in [0,1] (0 = fully shadowed, 1 = fully lit). ndotl steers the
 // slope-scaled bias. Fragments outside the map or past its far plane -> lit.
 float shadowFactor(highp vec4 lightClip, float ndotl) {
