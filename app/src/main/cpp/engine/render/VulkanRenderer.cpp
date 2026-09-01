@@ -10,6 +10,7 @@
 #include <GLFW/glfw3.h>
 #endif
 
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -66,11 +67,14 @@ VkDebugUtilsMessengerCreateInfoEXT makeDebugInfo() {
     return ci;
 }
 
-// Кадровые данные (descriptor set 0, binding 0). std140: mat4 + vec4 + vec4.
+// Кадровые данные (descriptor set 0, binding 0). std140: mat4+mat4+vec4+vec4+vec4.
+// Раскладка ОБЯЗАНА совпадать с блоком Frame в vk-шейдерах. Размер 176 байт.
 struct FrameUBOData {
     float viewProj[16];
-    float lightDir[4];
-    float viewPos[4];
+    float lightVP[16];   // проекция глазами света (тени)
+    float lightDir[4];   // xyz = направление НА свет, w = shadow bias
+    float viewPos[4];    // xyz = позиция камеры
+    float fogColor[4];   // xyz = цвет тумана (линейный), w = плотность
 };
 
 // Push-константы окружения: только цвет материала (модельная матрица — инстансный
@@ -145,10 +149,10 @@ bool VulkanRenderer::init(void* nativeWindow, AssetSource& assets) {
     vkGetDeviceQueue(device_, queueFamily_, 0, &queue_);
 
     if (!createSwapchain() || !createImageViews() || !createDepthResources() ||
-        !createRenderPass() || !createFramebuffers() || !createDescriptors() ||
-        !createSampler() || !createCommandBuffers() || !createDefaultTexture() ||
-        !createPipelines() || !createSkinnedPipeline() || !createHud() ||
-        !createSyncObjects()) {
+        !createRenderPass() || !createFramebuffers() || !createShadowResources() ||
+        !createDescriptors() || !createSampler() || !createCommandBuffers() ||
+        !createDefaultTexture() || !createPipelines() || !createSkinnedPipeline() ||
+        !createShadowPipelines() || !createHud() || !createSyncObjects()) {
         return false;
     }
 
@@ -565,19 +569,90 @@ bool VulkanRenderer::createDepthResources() {
     return true;
 }
 
+bool VulkanRenderer::createShadowResources() {
+    shadowFormat_ = depthFormat_;  // тот же depth-формат, что и основной буфер
+
+    // Depth-only render pass: очистка -> сохранение, финальный layout SHADER_READ,
+    // чтобы основной проход мог сэмплить карту теней.
+    VkAttachmentDescription depth{};
+    depth.format = shadowFormat_;
+    depth.samples = VK_SAMPLE_COUNT_1_BIT;
+    depth.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    depth.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depth.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depth.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    depth.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkAttachmentReference depthRef{};
+    depthRef.attachment = 0;
+    depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 0;
+    subpass.pDepthStencilAttachment = &depthRef;
+
+    // Вход: защита от чтения прошлого кадра (fragment read) перед depth-write.
+    // Выход: depth-write доступен фрагментной выборке основного прохода.
+    VkSubpassDependency deps[2]{};
+    deps[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+    deps[0].dstSubpass = 0;
+    deps[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    deps[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    deps[0].dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    deps[0].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    deps[1].srcSubpass = 0;
+    deps[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+    deps[1].srcStageMask = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    deps[1].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    deps[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    deps[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    VkRenderPassCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    ci.attachmentCount = 1;
+    ci.pAttachments = &depth;
+    ci.subpassCount = 1;
+    ci.pSubpasses = &subpass;
+    ci.dependencyCount = 2;
+    ci.pDependencies = deps;
+    VK_CHECK(vkCreateRenderPass(device_, &ci, nullptr, &shadowRenderPass_), "shadowRenderPass");
+
+    // Compare-сэмплер: LINEAR + compareOp LESS_OR_EQUAL -> аппаратный PCF 2x2.
+    VkSamplerCreateInfo si{};
+    si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    si.magFilter = VK_FILTER_LINEAR;
+    si.minFilter = VK_FILTER_LINEAR;
+    si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    si.compareEnable = VK_TRUE;
+    si.compareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    si.maxLod = 0.0f;
+    VK_CHECK(vkCreateSampler(device_, &si, nullptr, &shadowSampler_), "shadowSampler");
+    return true;
+}
+
 bool VulkanRenderer::createDescriptors() {
     constexpr uint32_t kMaxMaterials = 64;  // запас дескрипторов на материалы
 
-    // set 0: binding 0 = uniform buffer (Frame), vertex + fragment.
-    VkDescriptorSetLayoutBinding b0{};
-    b0.binding = 0;
-    b0.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    b0.descriptorCount = 1;
-    b0.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    // set 0: binding 0 = uniform buffer (Frame), vertex+fragment;
+    //        binding 1 = combined image sampler (карта теней), fragment.
+    VkDescriptorSetLayoutBinding b0[2]{};
+    b0[0].binding = 0;
+    b0[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    b0[0].descriptorCount = 1;
+    b0[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    b0[1].binding = 1;
+    b0[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    b0[1].descriptorCount = 1;
+    b0[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo l0{};
     l0.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    l0.bindingCount = 1;
-    l0.pBindings = &b0;
+    l0.bindingCount = 2;
+    l0.pBindings = b0;
     VK_CHECK(vkCreateDescriptorSetLayout(device_, &l0, nullptr, &setLayout0_), "setLayout0");
 
     // set 1: binding 0 = combined image sampler (albedo), fragment.
@@ -607,8 +682,9 @@ bool VulkanRenderer::createDescriptors() {
     VkDescriptorPoolSize ps[3]{};
     ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     ps[0].descriptorCount = kMaxFramesInFlight;
+    // +kMaxFramesInFlight: карта теней (set0 binding1) на каждый кадровый set.
     ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps[1].descriptorCount = kMaxMaterials;
+    ps[1].descriptorCount = kMaxMaterials + kMaxFramesInFlight;
     ps[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     ps[2].descriptorCount = kMaxFramesInFlight;
     VkDescriptorPoolCreateInfo pi{};
@@ -661,13 +737,57 @@ bool VulkanRenderer::createDescriptors() {
         frames_[i].set = sets[0];
         frames_[i].bonesSet = sets[1];
 
+        // Карта теней этого кадра: depth-образ (attachment + sampled) + view + framebuffer.
+        VkImageCreateInfo sii{};
+        sii.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        sii.imageType = VK_IMAGE_TYPE_2D;
+        sii.format = shadowFormat_;
+        sii.extent = {kShadowSize, kShadowSize, 1};
+        sii.mipLevels = 1;
+        sii.arrayLayers = 1;
+        sii.samples = VK_SAMPLE_COUNT_1_BIT;
+        sii.tiling = VK_IMAGE_TILING_OPTIMAL;
+        sii.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        sii.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        VK_CHECK(vkCreateImage(device_, &sii, nullptr, &frames_[i].shadowImage), "shadowImage");
+        VkMemoryRequirements sreq{};
+        vkGetImageMemoryRequirements(device_, frames_[i].shadowImage, &sreq);
+        VkMemoryAllocateInfo sai{};
+        sai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        sai.allocationSize = sreq.size;
+        sai.memoryTypeIndex = findMemoryType(sreq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        VK_CHECK(vkAllocateMemory(device_, &sai, nullptr, &frames_[i].shadowMem), "shadowMem");
+        vkBindImageMemory(device_, frames_[i].shadowImage, frames_[i].shadowMem, 0);
+        VkImageViewCreateInfo svi{};
+        svi.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        svi.image = frames_[i].shadowImage;
+        svi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        svi.format = shadowFormat_;
+        svi.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        svi.subresourceRange.levelCount = 1;
+        svi.subresourceRange.layerCount = 1;
+        VK_CHECK(vkCreateImageView(device_, &svi, nullptr, &frames_[i].shadowView), "shadowView");
+        VkFramebufferCreateInfo sfi{};
+        sfi.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        sfi.renderPass = shadowRenderPass_;
+        sfi.attachmentCount = 1;
+        sfi.pAttachments = &frames_[i].shadowView;
+        sfi.width = kShadowSize;
+        sfi.height = kShadowSize;
+        sfi.layers = 1;
+        VK_CHECK(vkCreateFramebuffer(device_, &sfi, nullptr, &frames_[i].shadowFb), "shadowFb");
+
         VkDescriptorBufferInfo uboInfo{};
         uboInfo.buffer = frames_[i].ubo;
         uboInfo.range = sizeof(FrameUBOData);
         VkDescriptorBufferInfo bonesInfo{};
         bonesInfo.buffer = frames_[i].bones;
         bonesInfo.range = bonesSize;
-        VkWriteDescriptorSet w[2]{};
+        VkDescriptorImageInfo shadowInfo{};
+        shadowInfo.sampler = shadowSampler_;
+        shadowInfo.imageView = frames_[i].shadowView;
+        shadowInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkWriteDescriptorSet w[3]{};
         w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         w[0].dstSet = frames_[i].set;
         w[0].dstBinding = 0;
@@ -680,7 +800,13 @@ bool VulkanRenderer::createDescriptors() {
         w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
         w[1].descriptorCount = 1;
         w[1].pBufferInfo = &bonesInfo;
-        vkUpdateDescriptorSets(device_, 2, w, 0, nullptr);
+        w[2].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        w[2].dstSet = frames_[i].set;
+        w[2].dstBinding = 1;
+        w[2].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        w[2].descriptorCount = 1;
+        w[2].pImageInfo = &shadowInfo;
+        vkUpdateDescriptorSets(device_, 3, w, 0, nullptr);
     }
     return true;
 }
@@ -958,6 +1084,119 @@ bool VulkanRenderer::createSkinnedPipeline() {
         return false;
     }
     return true;
+}
+
+bool VulkanRenderer::createShadowPipelines() {
+    // Depth-only пайплайны прохода теней: только вершинный стейдж (нет цвета),
+    // рендерят в shadowRenderPass_. Переиспользуют существующие layout'ы
+    // (pipelineLayout_ для инстансного, skinnedPipelineLayout_ для скиннинга).
+    VkShaderModule instVs = loadShaderModule("shaders/vk/shadow_depth.vert.spv");
+    VkShaderModule skinVs = loadShaderModule("shaders/vk/shadow_skin.vert.spv");
+    if (instVs == VK_NULL_HANDLE || skinVs == VK_NULL_HANDLE) return false;
+
+    // Общие стейджи (кроме vertex-input) для обоих пайплайнов.
+    auto buildDepthPipeline = [&](VkShaderModule vs, const VkPipelineVertexInputStateCreateInfo& vin,
+                                  VkPipelineLayout layout, VkPipeline& out) -> bool {
+        VkPipelineShaderStageCreateInfo stage{};
+        stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stage.stage = VK_SHADER_STAGE_VERTEX_BIT;
+        stage.module = vs;
+        stage.pName = "main";
+
+        VkPipelineInputAssemblyStateCreateInfo ia{};
+        ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+        ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+        VkPipelineViewportStateCreateInfo vp{};
+        vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+        vp.viewportCount = 1;
+        vp.scissorCount = 1;
+
+        VkPipelineRasterizationStateCreateInfo rs{};
+        rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+        rs.polygonMode = VK_POLYGON_MODE_FILL;
+        rs.cullMode = VK_CULL_MODE_NONE;
+        rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rs.lineWidth = 1.0f;
+
+        VkPipelineMultisampleStateCreateInfo ms{};
+        ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+        VkPipelineDepthStencilStateCreateInfo ds{};
+        ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+        ds.depthTestEnable = VK_TRUE;
+        ds.depthWriteEnable = VK_TRUE;
+        ds.depthCompareOp = VK_COMPARE_OP_LESS;
+
+        VkPipelineColorBlendStateCreateInfo cb{};  // без color-attachment
+        cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+        cb.attachmentCount = 0;
+
+        VkDynamicState dyn[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo dynState{};
+        dynState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+        dynState.dynamicStateCount = 2;
+        dynState.pDynamicStates = dyn;
+
+        VkGraphicsPipelineCreateInfo gp{};
+        gp.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+        gp.stageCount = 1;
+        gp.pStages = &stage;
+        gp.pVertexInputState = &vin;
+        gp.pInputAssemblyState = &ia;
+        gp.pViewportState = &vp;
+        gp.pRasterizationState = &rs;
+        gp.pMultisampleState = &ms;
+        gp.pDepthStencilState = &ds;
+        gp.pColorBlendState = &cb;
+        gp.pDynamicState = &dynState;
+        gp.layout = layout;
+        gp.renderPass = shadowRenderPass_;
+        gp.subpass = 0;
+        VkResult r = vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &gp, nullptr, &out);
+        if (r != VK_SUCCESS) { LOGE("Vulkan: shadow pipeline (VkResult=%d)", (int)r); return false; }
+        return true;
+    };
+
+    // Инстансный: те же binding'и, что у lit (вершина 8 float + инстанс-матрица 16).
+    // depth-шейдер читает только pos (loc 0) и iModel (loc 3..6) — normal/uv не объявляем
+    // (иначе валидация ругается "attribute not consumed").
+    VkVertexInputBindingDescription ibinds[2]{};
+    ibinds[0].binding = 0; ibinds[0].stride = sizeof(float) * 8; ibinds[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    ibinds[1].binding = 1; ibinds[1].stride = sizeof(float) * 16; ibinds[1].inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
+    VkVertexInputAttributeDescription iattrs[5]{};
+    iattrs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0};
+    iattrs[1] = {3, 1, VK_FORMAT_R32G32B32A32_SFLOAT, 0};
+    iattrs[2] = {4, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(float) * 4};
+    iattrs[3] = {5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(float) * 8};
+    iattrs[4] = {6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(float) * 12};
+    VkPipelineVertexInputStateCreateInfo ivin{};
+    ivin.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    ivin.vertexBindingDescriptionCount = 2;
+    ivin.pVertexBindingDescriptions = ibinds;
+    ivin.vertexAttributeDescriptionCount = 5;
+    ivin.pVertexAttributeDescriptions = iattrs;
+
+    // Скиннинг: SkinnedVertex = 16 float; depth-шейдер читает pos(0), joints(3), weights(4).
+    VkVertexInputBindingDescription sbind{};
+    sbind.binding = 0; sbind.stride = sizeof(float) * 16; sbind.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    VkVertexInputAttributeDescription sattrs[3]{};
+    sattrs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0};
+    sattrs[1] = {3, 0, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(float) * 8};
+    sattrs[2] = {4, 0, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(float) * 12};
+    VkPipelineVertexInputStateCreateInfo svin{};
+    svin.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    svin.vertexBindingDescriptionCount = 1;
+    svin.pVertexBindingDescriptions = &sbind;
+    svin.vertexAttributeDescriptionCount = 3;
+    svin.pVertexAttributeDescriptions = sattrs;
+
+    bool ok = buildDepthPipeline(instVs, ivin, pipelineLayout_, shadowPipeline_) &&
+              buildDepthPipeline(skinVs, svin, skinnedPipelineLayout_, shadowSkinPipeline_);
+    vkDestroyShaderModule(device_, instVs, nullptr);
+    vkDestroyShaderModule(device_, skinVs, nullptr);
+    return ok;
 }
 
 bool VulkanRenderer::createHud() {
@@ -1473,16 +1712,34 @@ void VulkanRenderer::renderFrame(const RenderFrame& frame) {
 
     vkResetFences(device_, 1, &inFlight_[currentFrame_]);
 
-    // Обновить кадровый UBO (viewProj с коррекцией клипа, свет, позиция камеры).
+    // Обновить кадровый UBO (viewProj с коррекцией клипа, свет, позиция камеры,
+    // матрица света для теней, туман).
     FrameUBOData ubo{};
     Mat4 vp = vulkanClipFix() * (frame.proj * frame.view);
     std::memcpy(ubo.viewProj, vp.m, sizeof(ubo.viewProj));
-    ubo.lightDir[0] = frame.lightDir.x;
-    ubo.lightDir[1] = frame.lightDir.y;
-    ubo.lightDir[2] = frame.lightDir.z;
+
+    // Матрица глазами света (directional): орто-коробка вокруг центра арены.
+    // Как в GL-бэкенде, но с коррекцией клипа Vulkan (глубина [0,1], Y вниз).
+    const Vec3 L = normalize(frame.lightDir);
+    const float R = frame.shadowRadius > 1.0f ? frame.shadowRadius : 14.0f;
+    const float sdist = R * 2.5f;
+    const Vec3 center{0.0f, 0.0f, 0.0f};
+    const Vec3 up = (std::fabs(L.y) > 0.99f) ? Vec3{0.0f, 0.0f, 1.0f} : Vec3{0.0f, 1.0f, 0.0f};
+    const Mat4 lightVP = vulkanClipFix() * Mat4::ortho(-R, R, -R, R, 0.1f, sdist + R) *
+                         Mat4::lookAt(center + L * sdist, center, up);
+    std::memcpy(ubo.lightVP, lightVP.m, sizeof(ubo.lightVP));
+
+    ubo.lightDir[0] = L.x;
+    ubo.lightDir[1] = L.y;
+    ubo.lightDir[2] = L.z;
+    ubo.lightDir[3] = frame.shadowBias;
     ubo.viewPos[0] = frame.cameraPos.x;
     ubo.viewPos[1] = frame.cameraPos.y;
     ubo.viewPos[2] = frame.cameraPos.z;
+    ubo.fogColor[0] = frame.fogColor.x;
+    ubo.fogColor[1] = frame.fogColor.y;
+    ubo.fogColor[2] = frame.fogColor.z;
+    ubo.fogColor[3] = frame.fogDensity;
     std::memcpy(frames_[currentFrame_].uboMapped, &ubo, sizeof(ubo));
 
     VkCommandBuffer cmd = commandBuffers_[currentFrame_];
@@ -1491,8 +1748,113 @@ void VulkanRenderer::renderFrame(const RenderFrame& frame) {
     bi.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     vkBeginCommandBuffer(cmd, &bi);
 
+    // --- Предзаливка инстансов и костей (нужны обоим проходам: теневому и основному) ---
+    struct Batch { MeshHandle mesh; MaterialHandle material; uint32_t first; uint32_t count; };
+    std::vector<Batch> batches;
+    {
+        struct Acc { MeshHandle mesh; MaterialHandle material; std::vector<const Mat4*> models; };
+        std::vector<Acc> accs;
+        for (const RenderItem& it : frame.items) {
+            if (it.mesh == 0 || it.mesh > meshes_.size()) continue;
+            if (it.material == 0 || it.material > materials_.size()) continue;
+            Acc* a = nullptr;
+            for (Acc& c : accs) if (c.mesh == it.mesh && c.material == it.material) { a = &c; break; }
+            if (a == nullptr) { accs.push_back({it.mesh, it.material, {}}); a = &accs.back(); }
+            a->models.push_back(&it.model);
+        }
+        char* instBase = (char*)frames_[currentFrame_].instMapped;
+        uint32_t total = 0;
+        for (Acc& a : accs) {
+            uint32_t first = total;
+            for (const Mat4* mm : a.models) {
+                if (total >= kMaxInstances) break;
+                std::memcpy(instBase + (size_t)total * 16 * sizeof(float), mm->m, 16 * sizeof(float));
+                ++total;
+            }
+            uint32_t count = total - first;
+            if (count > 0) batches.push_back({a.mesh, a.material, first, count});
+        }
+    }
+    struct SkinDraw { const SkinnedItem* item; uint32_t boneOffset; };
+    std::vector<SkinDraw> skinDraws;
+    {
+        char* bonesBase = (char*)frames_[currentFrame_].bonesMapped;
+        uint32_t boneTotal = 0;
+        for (const SkinnedItem& it : frame.skinned) {
+            if (it.mesh == 0 || it.mesh > skinnedMeshes_.size()) continue;
+            uint32_t nb = (uint32_t)it.joints.size();
+            if (boneTotal + nb > kMaxBones) break;
+            uint32_t off = boneTotal;
+            for (uint32_t j = 0; j < nb; ++j)
+                std::memcpy(bonesBase + (size_t)(off + j) * 16 * sizeof(float), it.joints[j].m, 16 * sizeof(float));
+            boneTotal += nb;
+            skinDraws.push_back({&it, off});
+        }
+    }
+
+    // --- Проход 1: карта теней (глазами света) в per-frame depth-образ ---
+    {
+        VkClearValue sclear{};
+        sclear.depthStencil = {1.0f, 0};
+        VkRenderPassBeginInfo srp{};
+        srp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+        srp.renderPass = shadowRenderPass_;
+        srp.framebuffer = frames_[currentFrame_].shadowFb;
+        srp.renderArea.extent = {kShadowSize, kShadowSize};
+        srp.clearValueCount = 1;
+        srp.pClearValues = &sclear;
+        vkCmdBeginRenderPass(cmd, &srp, VK_SUBPASS_CONTENTS_INLINE);
+        VkViewport sv{};
+        sv.width = (float)kShadowSize; sv.height = (float)kShadowSize; sv.maxDepth = 1.0f;
+        vkCmdSetViewport(cmd, 0, 1, &sv);
+        VkRect2D ss{}; ss.extent = {kShadowSize, kShadowSize};
+        vkCmdSetScissor(cmd, 0, 1, &ss);
+        if (frame.shadowsEnabled) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowPipeline_);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1,
+                                    &frames_[currentFrame_].set, 0, nullptr);
+            for (const Batch& b : batches) {
+                const VkMesh& m = meshes_[b.mesh - 1];
+                VkBuffer vb[2] = {m.vbuf, frames_[currentFrame_].inst};
+                VkDeviceSize of[2] = {0, 0};
+                vkCmdBindVertexBuffers(cmd, 0, 2, vb, of);
+                vkCmdBindIndexBuffer(cmd, m.ibuf, 0, VK_INDEX_TYPE_UINT32);
+                vkCmdDrawIndexed(cmd, m.indexCount, b.count, 0, 0, b.first);
+            }
+            if (!skinDraws.empty() && shadowSkinPipeline_ != VK_NULL_HANDLE) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, shadowSkinPipeline_);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skinnedPipelineLayout_, 0, 1,
+                                        &frames_[currentFrame_].set, 0, nullptr);
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skinnedPipelineLayout_, 2, 1,
+                                        &frames_[currentFrame_].bonesSet, 0, nullptr);
+                for (const SkinDraw& sd : skinDraws) {
+                    const VkMesh& m = skinnedMeshes_[sd.item->mesh - 1];
+                    SkinnedPushData push{};
+                    std::memcpy(push.model, sd.item->model.m, sizeof(push.model));
+                    push.boneOffset = (int)sd.boneOffset;
+                    vkCmdPushConstants(cmd, skinnedPipelineLayout_,
+                                       VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                                       sizeof(SkinnedPushData), &push);
+                    VkDeviceSize of = 0;
+                    vkCmdBindVertexBuffers(cmd, 0, 1, &m.vbuf, &of);
+                    vkCmdBindIndexBuffer(cmd, m.ibuf, 0, VK_INDEX_TYPE_UINT32);
+                    vkCmdDrawIndexed(cmd, m.indexCount, 1, 0, 0, 0);
+                }
+            }
+        }
+        vkCmdEndRenderPass(cmd);
+    }
+
+    // --- Проход 2: основной кадр ---
     VkClearValue clears[2]{};
-    clears[0].color = {{0.10f, 0.12f, 0.15f, 1.0f}};  // фон
+    // При тумане фон — его цвет (gamma), чтобы дальняя геометрия сливалась с горизонтом.
+    if (frame.fogDensity > 0.0f) {
+        const float ig = 1.0f / 2.2f;
+        clears[0].color = {{std::pow(frame.fogColor.x, ig), std::pow(frame.fogColor.y, ig),
+                            std::pow(frame.fogColor.z, ig), 1.0f}};
+    } else {
+        clears[0].color = {{0.10f, 0.12f, 0.15f, 1.0f}};
+    }
     clears[1].depthStencil = {1.0f, 0};               // дальняя плоскость
     VkRenderPassBeginInfo rp{};
     rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -1512,46 +1874,13 @@ void VulkanRenderer::renderFrame(const RenderFrame& frame) {
     scissor.extent = swapchainExtent_;
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    // set 0 (кадровый UBO) — общий для всех объектов, привязываем один раз.
+    // set 0 (кадровый UBO + карта теней binding1) — общий, привязываем один раз.
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout_, 0, 1,
                             &frames_[currentFrame_].set, 0, nullptr);
 
-    // Батчинг: объекты с одинаковыми (mesh, material) рисуем одним инстансным
-    // draw. Их матрицы модели раскладываем подряд в инстанс-буфер кадра.
-    struct Batch {
-        MeshHandle mesh;
-        MaterialHandle material;
-        std::vector<const Mat4*> models;
-    };
-    std::vector<Batch> batches;
-    for (const RenderItem& it : frame.items) {
-        if (it.mesh == 0 || it.mesh > meshes_.size()) continue;
-        if (it.material == 0 || it.material > materials_.size()) continue;
-        Batch* b = nullptr;
-        for (Batch& cand : batches) {
-            if (cand.mesh == it.mesh && cand.material == it.material) { b = &cand; break; }
-        }
-        if (b == nullptr) {
-            batches.push_back({it.mesh, it.material, {}});
-            b = &batches.back();
-        }
-        b->models.push_back(&it.model);
-    }
-
-    // Разложить матрицы в инстанс-буфер; запомнить смещение (firstInstance) каждого батча.
-    char* instBase = (char*)frames_[currentFrame_].instMapped;
-    uint32_t total = 0;
+    // Окружение: инстансные draw'ы по предзаготовленным батчам (инстансы уже залиты).
     uint32_t curPipeline = 0xFFFFFFFFu;
-    for (Batch& b : batches) {
-        uint32_t first = total;
-        for (const Mat4* mm : b.models) {
-            if (total >= kMaxInstances) break;  // защита от переполнения буфера
-            std::memcpy(instBase + (size_t)total * 16 * sizeof(float), mm->m, 16 * sizeof(float));
-            ++total;
-        }
-        uint32_t count = total - first;
-        if (count == 0) continue;
-
+    for (const Batch& b : batches) {
         const VkMesh& m = meshes_[b.mesh - 1];
         const VkMaterial& mat = materials_[b.material - 1];
         uint32_t sh = (mat.shader < 3) ? mat.shader : 0;
@@ -1568,57 +1897,37 @@ void VulkanRenderer::renderFrame(const RenderFrame& frame) {
         push.color[3] = 1.0f;
         vkCmdPushConstants(cmd, pipelineLayout_, VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                            sizeof(PushData), &push);
-
-        // binding 0 — меш, binding 1 — инстанс-буфер (адресуем через firstInstance).
         VkBuffer vbufs[2] = {m.vbuf, frames_[currentFrame_].inst};
         VkDeviceSize offsets[2] = {0, 0};
         vkCmdBindVertexBuffers(cmd, 0, 2, vbufs, offsets);
         vkCmdBindIndexBuffer(cmd, m.ibuf, 0, VK_INDEX_TYPE_UINT32);
-        vkCmdDrawIndexed(cmd, m.indexCount, count, 0, 0, first);  // firstInstance = first
+        vkCmdDrawIndexed(cmd, m.indexCount, b.count, 0, 0, b.first);  // firstInstance = first
     }
-    // --- Скиннинг: анимированные модели (лиса + удалённые игроки) ---
-    if (!frame.skinned.empty() && skinnedPipeline_ != VK_NULL_HANDLE) {
-        char* bonesBase = (char*)frames_[currentFrame_].bonesMapped;
-        uint32_t boneTotal = 0;
-
+    // --- Скиннинг: анимированные модели (кости уже залиты в предзаготовке) ---
+    if (!skinDraws.empty() && skinnedPipeline_ != VK_NULL_HANDLE) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skinnedPipeline_);
-        // set0 (Frame) и set2 (кости) — общие; layout скиннинга несовместим с
-        // окружением (другой push), поэтому биндим заново.
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skinnedPipelineLayout_, 0, 1,
                                 &frames_[currentFrame_].set, 0, nullptr);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skinnedPipelineLayout_, 2, 1,
                                 &frames_[currentFrame_].bonesSet, 0, nullptr);
-
-        for (const SkinnedItem& it : frame.skinned) {
-            if (it.mesh == 0 || it.mesh > skinnedMeshes_.size()) continue;
-            uint32_t nb = (uint32_t)it.joints.size();
-            if (boneTotal + nb > kMaxBones) break;  // защита от переполнения SSBO
-            uint32_t off = boneTotal;
-            for (uint32_t j = 0; j < nb; ++j) {
-                std::memcpy(bonesBase + (size_t)(off + j) * 16 * sizeof(float),
-                            it.joints[j].m, 16 * sizeof(float));
-            }
-            boneTotal += nb;
-
-            const VkMesh& m = skinnedMeshes_[it.mesh - 1];
+        for (const SkinDraw& sd : skinDraws) {
+            const VkMesh& m = skinnedMeshes_[sd.item->mesh - 1];
             VkDescriptorSet texSet = whiteSet_;
-            if (it.texture >= 1 && it.texture <= textureSets_.size()) {
-                texSet = textureSets_[it.texture - 1];
+            if (sd.item->texture >= 1 && sd.item->texture <= textureSets_.size()) {
+                texSet = textureSets_[sd.item->texture - 1];
             }
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skinnedPipelineLayout_, 1, 1,
                                     &texSet, 0, nullptr);
-
             SkinnedPushData push{};
-            std::memcpy(push.model, it.model.m, sizeof(push.model));
-            push.color[0] = it.color.x;
-            push.color[1] = it.color.y;
-            push.color[2] = it.color.z;
+            std::memcpy(push.model, sd.item->model.m, sizeof(push.model));
+            push.color[0] = sd.item->color.x;
+            push.color[1] = sd.item->color.y;
+            push.color[2] = sd.item->color.z;
             push.color[3] = 1.0f;
-            push.boneOffset = (int)off;
+            push.boneOffset = (int)sd.boneOffset;
             vkCmdPushConstants(cmd, skinnedPipelineLayout_,
                                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                                sizeof(SkinnedPushData), &push);
-
             VkDeviceSize offset = 0;
             vkCmdBindVertexBuffers(cmd, 0, 1, &m.vbuf, &offset);
             vkCmdBindIndexBuffer(cmd, m.ibuf, 0, VK_INDEX_TYPE_UINT32);
@@ -1780,6 +2089,10 @@ void VulkanRenderer::cleanup() {
         if (f.bonesMem) vkFreeMemory(device_, f.bonesMem, nullptr);
         if (f.hud) vkDestroyBuffer(device_, f.hud, nullptr);
         if (f.hudMem) vkFreeMemory(device_, f.hudMem, nullptr);
+        if (f.shadowFb) vkDestroyFramebuffer(device_, f.shadowFb, nullptr);
+        if (f.shadowView) vkDestroyImageView(device_, f.shadowView, nullptr);
+        if (f.shadowImage) vkDestroyImage(device_, f.shadowImage, nullptr);
+        if (f.shadowMem) vkFreeMemory(device_, f.shadowMem, nullptr);
     }
     frames_.clear();
     materials_.clear();
@@ -1793,6 +2106,8 @@ void VulkanRenderer::cleanup() {
         pl = VK_NULL_HANDLE;
     }
     if (skinnedPipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, skinnedPipeline_, nullptr);
+    if (shadowPipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, shadowPipeline_, nullptr);
+    if (shadowSkinPipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, shadowSkinPipeline_, nullptr);
     if (hudPipeline_ != VK_NULL_HANDLE) vkDestroyPipeline(device_, hudPipeline_, nullptr);
     if (pipelineLayout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, pipelineLayout_, nullptr);
     if (skinnedPipelineLayout_ != VK_NULL_HANDLE) vkDestroyPipelineLayout(device_, skinnedPipelineLayout_, nullptr);
@@ -1822,6 +2137,12 @@ void VulkanRenderer::cleanup() {
     inFlight_.clear();
     imagesInFlight_.clear();  // не владеем этими fence (копии inFlight_)
     if (renderPass_ != VK_NULL_HANDLE) vkDestroyRenderPass(device_, renderPass_, nullptr);
+    if (shadowRenderPass_ != VK_NULL_HANDLE) vkDestroyRenderPass(device_, shadowRenderPass_, nullptr);
+    if (shadowSampler_ != VK_NULL_HANDLE) vkDestroySampler(device_, shadowSampler_, nullptr);
+    shadowPipeline_ = VK_NULL_HANDLE;
+    shadowSkinPipeline_ = VK_NULL_HANDLE;
+    shadowRenderPass_ = VK_NULL_HANDLE;
+    shadowSampler_ = VK_NULL_HANDLE;
     if (commandPool_ != VK_NULL_HANDLE) vkDestroyCommandPool(device_, commandPool_, nullptr);
     if (device_ != VK_NULL_HANDLE) vkDestroyDevice(device_, nullptr);
     if (surface_ != VK_NULL_HANDLE && instance_ != VK_NULL_HANDLE)

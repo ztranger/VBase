@@ -96,7 +96,7 @@ set(GLSLC "C:/VulkanSDK/1.4.350.0/Bin/glslc.exe" CACHE FILEPATH "Путь к gls
 set(VK_SHADER_SRC "${APP}/shaders")
 set(VK_SHADER_OUT "${APP}/../assets/shaders/vk")
 file(MAKE_DIRECTORY "${VK_SHADER_OUT}")
-set(VK_SHADERS lit.vert lit.frag unlit.frag phong.vert phong.frag skin.vert skin.frag hud.vert hud.frag)
+set(VK_SHADERS lit.vert lit.frag unlit.frag phong.vert phong.frag skin.vert skin.frag hud.vert hud.frag shadow_depth.vert shadow_skin.vert)
 set(VK_SPV "")
 foreach(s ${VK_SHADERS})
     add_custom_command(

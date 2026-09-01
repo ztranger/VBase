@@ -12,8 +12,10 @@ layout(location = 4) in vec4 aWeights;  // веса
 
 layout(set = 0, binding = 0) uniform Frame {
     mat4 uViewProj;
+    mat4 uLightVP;
     vec4 uLightDir;
     vec4 uViewPos;
+    vec4 uFogColor;
 } frame;
 
 layout(set = 2, binding = 0) readonly buffer Bones {
@@ -28,6 +30,8 @@ layout(push_constant) uniform Push {
 
 layout(location = 0) out vec3 vNormal;
 layout(location = 1) out vec2 vUV;
+layout(location = 2) out vec3 vWorldPos;
+layout(location = 3) out vec4 vLightClip;
 
 mat4 boneMat(int j) { return bones[pc.uBoneOffset + j]; }
 
@@ -37,7 +41,10 @@ void main() {
               + aWeights.z * boneMat(int(aJoints.z))
               + aWeights.w * boneMat(int(aJoints.w));
     mat4 world = pc.uModel * skin;
-    gl_Position = frame.uViewProj * world * vec4(aPos, 1.0);
+    vec4 worldPos = world * vec4(aPos, 1.0);
+    gl_Position = frame.uViewProj * worldPos;
     vNormal = mat3(world) * aNormal;
     vUV = aUV;
+    vWorldPos = worldPos.xyz;
+    vLightClip = frame.uLightVP * worldPos;
 }

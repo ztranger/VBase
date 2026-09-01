@@ -10,13 +10,16 @@ layout(location = 3) in mat4 iModel;  // per-instance (локации 3,4,5,6)
 
 layout(set = 0, binding = 0) uniform Frame {
     mat4 uViewProj;
+    mat4 uLightVP;
     vec4 uLightDir;
     vec4 uViewPos;
+    vec4 uFogColor;
 } frame;
 
 layout(location = 0) out vec3 vNormal;
 layout(location = 1) out vec2 vUV;
 layout(location = 2) out vec3 vWorldPos;
+layout(location = 3) out vec4 vLightClip;
 
 void main() {
     vec4 world = iModel * vec4(aPos, 1.0);
@@ -24,4 +27,5 @@ void main() {
     gl_Position = frame.uViewProj * world;
     vNormal = mat3(iModel) * aNormal;
     vUV = aUV;
+    vLightClip = frame.uLightVP * world;
 }

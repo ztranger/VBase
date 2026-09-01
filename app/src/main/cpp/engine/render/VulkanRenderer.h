@@ -43,11 +43,13 @@ private:
     bool createDepthResources();
     bool createRenderPass();
     bool createFramebuffers();
+    bool createShadowResources();  // depth render pass + compare-сэмплер для теней
     bool createDescriptors();
     bool createSampler();
     bool createDefaultTexture();
     bool createPipelines();
     bool createSkinnedPipeline();  // отдельный пайплайн/лейаут для скиннинга
+    bool createShadowPipelines();  // depth-пайплайны прохода теней (инстанс + скиннинг)
     bool createHud();              // шрифт-атлас, сэмплер, HUD-пайплайн, буферы
     bool createCommandBuffers();
     bool createSyncObjects();
@@ -98,6 +100,15 @@ private:
 
     VkRenderPass renderPass_ = VK_NULL_HANDLE;
 
+    // Карта теней (directional). Per-frame depth-образы (по одному на кадр «в полёте»,
+    // чтобы не ловить cross-frame hazard), общий depth render pass + compare-сэмплер.
+    static constexpr uint32_t kShadowSize = 1024;
+    VkFormat shadowFormat_ = VK_FORMAT_D32_SFLOAT;
+    VkRenderPass shadowRenderPass_ = VK_NULL_HANDLE;
+    VkSampler shadowSampler_ = VK_NULL_HANDLE;   // compareEnable -> аппаратный PCF
+    VkPipeline shadowPipeline_ = VK_NULL_HANDLE;      // инстансный depth (переисп. pipelineLayout_)
+    VkPipeline shadowSkinPipeline_ = VK_NULL_HANDLE;  // скиннинг depth (переисп. skinnedPipelineLayout_)
+
     // Раскладка и пайплайны. set 0 = кадровый UBO, set 1 = albedo-текстура.
     // Пайплайны индексируются по ShaderType (Lit/Unlit/Phong) — Фаза 2.
     VkDescriptorSetLayout setLayout0_ = VK_NULL_HANDLE;  // Frame UBO
@@ -147,6 +158,11 @@ private:
         VkBuffer hud = VK_NULL_HANDLE;       // динамический вершинный буфер HUD (x,y,u,v)
         VkDeviceMemory hudMem = VK_NULL_HANDLE;
         void* hudMapped = nullptr;
+        // Карта теней этого кадра: depth-образ + view + framebuffer (set0 binding1).
+        VkImage shadowImage = VK_NULL_HANDLE;
+        VkDeviceMemory shadowMem = VK_NULL_HANDLE;
+        VkImageView shadowView = VK_NULL_HANDLE;
+        VkFramebuffer shadowFb = VK_NULL_HANDLE;
     };
     std::vector<FrameRes> frames_;
 

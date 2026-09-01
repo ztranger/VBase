@@ -11,15 +11,22 @@ layout(location = 3) in mat4 iModel;  // per-instance (локации 3,4,5,6)
 
 layout(set = 0, binding = 0) uniform Frame {
     mat4 uViewProj;
-    vec4 uLightDir;
-    vec4 uViewPos;
+    mat4 uLightVP;    // проекция глазами света (для теней)
+    vec4 uLightDir;   // xyz = направление НА свет, w = shadow bias
+    vec4 uViewPos;    // xyz = позиция камеры
+    vec4 uFogColor;   // xyz = цвет тумана (линейный), w = плотность
 } frame;
 
 layout(location = 0) out vec3 vNormal;
 layout(location = 1) out vec2 vUV;
+layout(location = 2) out vec3 vWorldPos;
+layout(location = 3) out vec4 vLightClip;
 
 void main() {
-    gl_Position = frame.uViewProj * iModel * vec4(aPos, 1.0);
+    vec4 world = iModel * vec4(aPos, 1.0);
+    gl_Position = frame.uViewProj * world;
     vNormal = mat3(iModel) * aNormal;
     vUV = aUV;
+    vWorldPos = world.xyz;
+    vLightClip = frame.uLightVP * world;
 }
