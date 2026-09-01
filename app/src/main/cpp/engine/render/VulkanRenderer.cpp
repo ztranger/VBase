@@ -655,16 +655,22 @@ bool VulkanRenderer::createDescriptors() {
     l0.pBindings = b0;
     VK_CHECK(vkCreateDescriptorSetLayout(device_, &l0, nullptr, &setLayout0_), "setLayout0");
 
-    // set 1: binding 0 = combined image sampler (albedo), fragment.
-    VkDescriptorSetLayoutBinding b1{};
-    b1.binding = 0;
-    b1.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    b1.descriptorCount = 1;
-    b1.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    // set 1: binding 0 = albedo, binding 1 = нормал-карта (оба combined image sampler,
+    // fragment). Делят: материалы, скиннинг-текстуры, белая заглушка, HUD-шрифт —
+    // все они пишут ОБА binding'а (нормаль по умолчанию — плоская 1x1).
+    VkDescriptorSetLayoutBinding b1[2]{};
+    b1[0].binding = 0;
+    b1[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    b1[0].descriptorCount = 1;
+    b1[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    b1[1].binding = 1;
+    b1[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    b1[1].descriptorCount = 1;
+    b1[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     VkDescriptorSetLayoutCreateInfo l1{};
     l1.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    l1.bindingCount = 1;
-    l1.pBindings = &b1;
+    l1.bindingCount = 2;
+    l1.pBindings = b1;
     VK_CHECK(vkCreateDescriptorSetLayout(device_, &l1, nullptr, &setLayout1_), "setLayout1");
 
     // set 2: binding 0 = storage buffer (кости скиннинга), vertex.
@@ -682,9 +688,10 @@ bool VulkanRenderer::createDescriptors() {
     VkDescriptorPoolSize ps[3]{};
     ps[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     ps[0].descriptorCount = kMaxFramesInFlight;
+    // set1 теперь 2 сэмплера (albedo+normal) на материал -> 2*kMaxMaterials;
     // +kMaxFramesInFlight: карта теней (set0 binding1) на каждый кадровый set.
     ps[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ps[1].descriptorCount = kMaxMaterials + kMaxFramesInFlight;
+    ps[1].descriptorCount = 2 * kMaxMaterials + kMaxFramesInFlight;
     ps[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     ps[2].descriptorCount = kMaxFramesInFlight;
     VkDescriptorPoolCreateInfo pi{};
@@ -832,7 +839,16 @@ bool VulkanRenderer::createDefaultTexture() {
     whiteImage_ = t.image;
     whiteMem_ = t.mem;
     whiteView_ = t.view;
-    whiteSet_ = allocMaterialSet(whiteView_);  // set 1 для объектов без текстуры
+
+    // Плоская нормаль 1x1 (0,0,1) для материалов без нормал-карты.
+    const uint8_t flat[4] = {128, 128, 255, 255};
+    VkTexture ft;
+    if (!uploadTexture(1, 1, flat, ft)) return false;
+    flatNormalImage_ = ft.image;
+    flatNormalMem_ = ft.mem;
+    flatNormalView_ = ft.view;
+
+    whiteSet_ = allocMaterialSet(whiteView_, flatNormalView_);  // set 1 для объектов без текстуры
     return true;
 }
 
@@ -891,7 +907,7 @@ bool VulkanRenderer::createGraphicsPipeline(VkShaderModule vs, VkShaderModule fs
     binds[1].binding = 1;
     binds[1].stride = sizeof(float) * 16;
     binds[1].inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
-    VkVertexInputAttributeDescription attrs[7]{};
+    VkVertexInputAttributeDescription attrs[8]{};
     attrs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0};
     attrs[1] = {1, 0, VK_FORMAT_R32G32B32_SFLOAT, sizeof(float) * 3};
     attrs[2] = {2, 0, VK_FORMAT_R32G32_SFLOAT, sizeof(float) * 6};
@@ -900,11 +916,12 @@ bool VulkanRenderer::createGraphicsPipeline(VkShaderModule vs, VkShaderModule fs
     attrs[4] = {4, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(float) * 4};
     attrs[5] = {5, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(float) * 8};
     attrs[6] = {6, 1, VK_FORMAT_R32G32B32A32_SFLOAT, sizeof(float) * 12};
+    attrs[7] = {7, 0, VK_FORMAT_R32G32B32_SFLOAT, sizeof(float) * 8};  // тангент (binding 0)
     VkPipelineVertexInputStateCreateInfo vin{};
     vin.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vin.vertexBindingDescriptionCount = 2;
     vin.pVertexBindingDescriptions = binds;
-    vin.vertexAttributeDescriptionCount = 7;
+    vin.vertexAttributeDescriptionCount = 8;
     vin.pVertexAttributeDescriptions = attrs;
 
     VkPipelineInputAssemblyStateCreateInfo ia{};
@@ -1227,18 +1244,27 @@ bool VulkanRenderer::createHud() {
     dai.descriptorSetCount = 1;
     dai.pSetLayouts = &setLayout1_;
     VK_CHECK(vkAllocateDescriptorSets(device_, &dai, &fontSet_), "fontSet");
-    VkDescriptorImageInfo img{};
-    img.sampler = fontSampler_;
-    img.imageView = fontView_;
-    img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    VkWriteDescriptorSet ws{};
-    ws.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    ws.dstSet = fontSet_;
-    ws.dstBinding = 0;
-    ws.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    ws.descriptorCount = 1;
-    ws.pImageInfo = &img;
-    vkUpdateDescriptorSets(device_, 1, &ws, 0, nullptr);
+    VkDescriptorImageInfo fimgs[2]{};
+    fimgs[0].sampler = fontSampler_;
+    fimgs[0].imageView = fontView_;
+    fimgs[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    fimgs[1].sampler = sampler_;               // binding1 не используется HUD-шейдером;
+    fimgs[1].imageView = flatNormalView_;      // пишем плоскую нормаль для полного сета
+    fimgs[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet ws[2]{};
+    ws[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    ws[0].dstSet = fontSet_;
+    ws[0].dstBinding = 0;
+    ws[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    ws[0].descriptorCount = 1;
+    ws[0].pImageInfo = &fimgs[0];
+    ws[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    ws[1].dstSet = fontSet_;
+    ws[1].dstBinding = 1;
+    ws[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    ws[1].descriptorCount = 1;
+    ws[1].pImageInfo = &fimgs[1];
+    vkUpdateDescriptorSets(device_, 2, ws, 0, nullptr);
 
     // Per-frame динамический вершинный буфер HUD (x,y,u,v на вершину).
     const VkDeviceSize hudSize = (VkDeviceSize)kMaxHudVerts * 4 * sizeof(float);
@@ -1559,7 +1585,7 @@ bool VulkanRenderer::uploadTexture(uint32_t w, uint32_t h, const void* rgba, VkT
     return true;
 }
 
-VkDescriptorSet VulkanRenderer::allocMaterialSet(VkImageView albedo) {
+VkDescriptorSet VulkanRenderer::allocMaterialSet(VkImageView albedo, VkImageView normal) {
     VkDescriptorSetAllocateInfo ai{};
     ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     ai.descriptorPool = descriptorPool_;
@@ -1570,18 +1596,27 @@ VkDescriptorSet VulkanRenderer::allocMaterialSet(VkImageView albedo) {
         LOGE("Vulkan: не удалось выделить дескриптор материала (пул исчерпан?)");
         return VK_NULL_HANDLE;
     }
-    VkDescriptorImageInfo img{};
-    img.sampler = sampler_;
-    img.imageView = albedo;
-    img.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    VkWriteDescriptorSet w{};
-    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    w.dstSet = set;
-    w.dstBinding = 0;
-    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    w.descriptorCount = 1;
-    w.pImageInfo = &img;
-    vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
+    VkDescriptorImageInfo imgs[2]{};
+    imgs[0].sampler = sampler_;
+    imgs[0].imageView = albedo;
+    imgs[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imgs[1].sampler = sampler_;
+    imgs[1].imageView = normal;
+    imgs[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet w[2]{};
+    w[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w[0].dstSet = set;
+    w[0].dstBinding = 0;
+    w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w[0].descriptorCount = 1;
+    w[0].pImageInfo = &imgs[0];
+    w[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w[1].dstSet = set;
+    w[1].dstBinding = 1;
+    w[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    w[1].descriptorCount = 1;
+    w[1].pImageInfo = &imgs[1];
+    vkUpdateDescriptorSets(device_, 2, w, 0, nullptr);
     return set;
 }
 
@@ -1618,7 +1653,8 @@ TextureHandle VulkanRenderer::createTexture(const TextureData& data, bool /*clam
     VkTexture t;
     if (!uploadTexture(data.width, data.height, data.rgba.data(), t)) return 0;
     textures_.push_back(t);
-    textureSets_.push_back(allocMaterialSet(t.view));  // set 1 (для скиннинг-объектов)
+    // Скиннинг-объекты нормал-карты пока не используют -> плоская нормаль по умолчанию.
+    textureSets_.push_back(allocMaterialSet(t.view, flatNormalView_));  // set 1
     imguiTextureSets_.push_back(VK_NULL_HANDLE);       // лениво в getImGuiTexture
     return (TextureHandle)textures_.size();  // handle = индекс + 1
 }
@@ -1652,10 +1688,14 @@ MaterialHandle VulkanRenderer::createMaterial(const MaterialDesc& desc) {
     if (desc.albedo >= 1 && desc.albedo <= textures_.size()) {
         view = textures_[desc.albedo - 1].view;
     }
+    VkImageView normalView = flatNormalView_;  // без нормал-карты -> плоская нормаль
+    if (desc.normal >= 1 && desc.normal <= textures_.size()) {
+        normalView = textures_[desc.normal - 1].view;
+    }
     VkMaterial mat;
     mat.shader = (uint32_t)desc.shader;
     mat.color = desc.baseColor;
-    mat.set = allocMaterialSet(view);
+    mat.set = allocMaterialSet(view, normalView);
     materials_.push_back(mat);
     return (MaterialHandle)materials_.size();
 }
@@ -2061,10 +2101,16 @@ void VulkanRenderer::cleanup() {
     if (whiteView_) vkDestroyImageView(device_, whiteView_, nullptr);
     if (whiteImage_) vkDestroyImage(device_, whiteImage_, nullptr);
     if (whiteMem_) vkFreeMemory(device_, whiteMem_, nullptr);
+    if (flatNormalView_) vkDestroyImageView(device_, flatNormalView_, nullptr);
+    if (flatNormalImage_) vkDestroyImage(device_, flatNormalImage_, nullptr);
+    if (flatNormalMem_) vkFreeMemory(device_, flatNormalMem_, nullptr);
     if (sampler_) vkDestroySampler(device_, sampler_, nullptr);
     whiteView_ = VK_NULL_HANDLE;
     whiteImage_ = VK_NULL_HANDLE;
     whiteMem_ = VK_NULL_HANDLE;
+    flatNormalView_ = VK_NULL_HANDLE;
+    flatNormalImage_ = VK_NULL_HANDLE;
+    flatNormalMem_ = VK_NULL_HANDLE;
     sampler_ = VK_NULL_HANDLE;
 
     // Меши (вершинные/индексные буферы) — обычные и скиннинг.

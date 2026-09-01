@@ -68,7 +68,7 @@ private:
     bool createGraphicsPipeline(VkShaderModule vs, VkShaderModule fs, VkPipeline& out);
     VkCommandBuffer beginOneTime();          // разовый командный буфер (загрузки)
     void endOneTime(VkCommandBuffer cmd);    // submit + wait + free
-    VkDescriptorSet allocMaterialSet(VkImageView albedo);  // set 1 для материала
+    VkDescriptorSet allocMaterialSet(VkImageView albedo, VkImageView normal);  // set 1 (albedo+normal)
     // Создать GPU-текстуру RGBA8 из пикселей (staging + барьеры + view).
     bool uploadTexture(uint32_t w, uint32_t h, const void* rgba, VkTexture& out);
 
@@ -126,6 +126,11 @@ private:
     VkDeviceMemory whiteMem_ = VK_NULL_HANDLE;
     VkImageView whiteView_ = VK_NULL_HANDLE;
     VkDescriptorSet whiteSet_ = VK_NULL_HANDLE;  // set 1 для белой (скиннинг без текстуры)
+
+    // Плоская нормаль 1x1 (128,128,255) = (0,0,1): материалы без нормал-карты (set1 binding1).
+    VkImage flatNormalImage_ = VK_NULL_HANDLE;
+    VkDeviceMemory flatNormalMem_ = VK_NULL_HANDLE;
+    VkImageView flatNormalView_ = VK_NULL_HANDLE;
 
     static constexpr uint32_t kMaxBones = 512;      // суммарно костей на кадр
     static constexpr uint32_t kMaxHudVerts = 8192;  // вершин HUD-текста на кадр

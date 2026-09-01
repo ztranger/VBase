@@ -6,6 +6,7 @@ layout(location = 0) in vec3 vNormal;
 layout(location = 1) in vec2 vUV;
 layout(location = 2) in vec3 vWorldPos;
 layout(location = 3) in vec4 vLightClip;
+layout(location = 4) in vec3 vTangent;
 
 layout(set = 0, binding = 0) uniform Frame {
     mat4 uViewProj;
@@ -18,6 +19,7 @@ layout(set = 0, binding = 0) uniform Frame {
 layout(set = 0, binding = 1) uniform sampler2DShadow uShadowMap;
 
 layout(set = 1, binding = 0) uniform sampler2D uAlbedo;
+layout(set = 1, binding = 1) uniform sampler2D uNormalMap;
 
 layout(push_constant) uniform Push {
     vec4 uColor;
@@ -50,8 +52,16 @@ float shadowFactor(vec4 lightClip, float ndotl) {
     return texture(uShadowMap, vec3(uv, p.z - bias));
 }
 
+vec3 mapNormal(vec3 N, vec3 T, vec2 uv) {
+    N = normalize(N);
+    T = normalize(T - N * dot(N, T));
+    vec3 B = cross(N, T);
+    vec3 nTS = texture(uNormalMap, uv).rgb * 2.0 - 1.0;
+    return normalize(mat3(T, B, N) * nTS);
+}
+
 void main() {
-    vec3 N = normalize(vNormal);
+    vec3 N = mapNormal(vNormal, vTangent, vUV);
     vec3 L = normalize(frame.uLightDir.xyz);
     vec3 V = normalize(frame.uViewPos.xyz - vWorldPos);
     vec3 R = reflect(-L, N);
