@@ -55,6 +55,8 @@ private:
     bool createSyncObjects();
 
     bool recreateSwapchain();
+    // true, если swapchain пересоздан (кадр с уже acquired-образом бросаем).
+    bool maybeRecreateSwapchain(VkResult reason);
     void cleanupSwapchain();
     void cleanup();
 

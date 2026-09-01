@@ -97,6 +97,35 @@ struct SkinnedPushData {
     int boneOffset;
 };
 
+// Extent swapchain: currentExtent, если драйвер его диктует; иначе — заданный извне.
+VkExtent2D chooseSwapchainExtent(const VkSurfaceCapabilitiesKHR& caps, int desiredW, int desiredH) {
+    if (caps.currentExtent.width != 0xFFFFFFFFu) {
+        return caps.currentExtent;
+    }
+    VkExtent2D e;
+    e.width = (uint32_t)(desiredW > 0 ? desiredW : 1);
+    e.height = (uint32_t)(desiredH > 0 ? desiredH : 1);
+    if (e.width < caps.minImageExtent.width) e.width = caps.minImageExtent.width;
+    if (e.height < caps.minImageExtent.height) e.height = caps.minImageExtent.height;
+    if (caps.maxImageExtent.width > 0 && e.width > caps.maxImageExtent.width) {
+        e.width = caps.maxImageExtent.width;
+    }
+    if (caps.maxImageExtent.height > 0 && e.height > caps.maxImageExtent.height) {
+        e.height = caps.maxImageExtent.height;
+    }
+    return e;
+}
+
+// IDENTITY, если поддерживается: композитор сам поворачивает буфер под ориентацию
+// окна (как EGL для GLES). preTransform = currentTransform (ROTATE_90 на Android
+// landscape) без поворота MVP/HUD/ImGui = картинка «стоя» растянута на экран.
+VkSurfaceTransformFlagBitsKHR choosePreTransform(const VkSurfaceCapabilitiesKHR& caps) {
+    if (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) {
+        return VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    }
+    return caps.currentTransform;
+}
+
 // Коррекция клип-пространства GL -> Vulkan: Y вниз + глубина [-1,1] -> [0,1].
 // column-major (m[col*4+row]); умножается слева: viewProj_vk = C * proj * view.
 Mat4 vulkanClipFix() {
@@ -336,19 +365,15 @@ bool VulkanRenderer::createSwapchain() {
     }
     swapchainFormat_ = chosen.format;
 
-    // Размер: обычно surface диктует currentExtent; иначе — заданный извне.
-    if (caps.currentExtent.width != 0xFFFFFFFFu) {
-        swapchainExtent_ = caps.currentExtent;
-    } else {
-        swapchainExtent_.width = (uint32_t)(desiredW_ > 0 ? desiredW_ : 1);
-        swapchainExtent_.height = (uint32_t)(desiredH_ > 0 ? desiredH_ : 1);
-    }
+    swapchainExtent_ = chooseSwapchainExtent(caps, desiredW_, desiredH_);
     if (swapchainExtent_.width == 0 || swapchainExtent_.height == 0) {
         return false;  // окно свёрнуто — попробуем позже
     }
 
     uint32_t imageCount = caps.minImageCount + 1;
     if (caps.maxImageCount > 0 && imageCount > caps.maxImageCount) imageCount = caps.maxImageCount;
+
+    const VkSurfaceTransformFlagBitsKHR preTransform = choosePreTransform(caps);
 
     VkSwapchainCreateInfoKHR ci{};
     ci.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
@@ -360,10 +385,15 @@ bool VulkanRenderer::createSwapchain() {
     ci.imageArrayLayers = 1;
     ci.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     ci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;  // одна очередь (graphics+present)
-    ci.preTransform = caps.currentTransform;
+    ci.preTransform = preTransform;
     ci.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
     ci.presentMode = VK_PRESENT_MODE_FIFO_KHR;  // гарантированный (vsync)
     ci.clipped = VK_TRUE;
+
+    LOGI("Vulkan swapchain %ux%u preTransform=0x%x (current=0x%x supported=0x%x)",
+         swapchainExtent_.width, swapchainExtent_.height,
+         (unsigned)preTransform, (unsigned)caps.currentTransform,
+         (unsigned)caps.supportedTransforms);
 
     VK_CHECK(vkCreateSwapchainKHR(device_, &ci, nullptr, &swapchain_), "vkCreateSwapchainKHR");
 
@@ -1464,6 +1494,24 @@ bool VulkanRenderer::recreateSwapchain() {
     return true;
 }
 
+bool VulkanRenderer::maybeRecreateSwapchain(VkResult reason) {
+    if (reason == VK_ERROR_OUT_OF_DATE_KHR) {
+        recreateSwapchain();
+        return true;
+    }
+    if (reason != VK_SUBOPTIMAL_KHR) return false;
+    // IDENTITY при currentTransform=ROTATE_90 на Android даёт SUBOPTIMAL каждый кадр:
+    // композитор сам крутит буфер. Пересоздавать swapchain бессмысленно, пока extent
+    // тот же (иначе — бесконечный recreate и мерцание).
+    VkSurfaceCapabilitiesKHR caps{};
+    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice_, surface_, &caps);
+    if (caps.currentExtent.width == 0 || caps.currentExtent.height == 0) return false;
+    const VkExtent2D e = chooseSwapchainExtent(caps, desiredW_, desiredH_);
+    if (e.width == swapchainExtent_.width && e.height == swapchainExtent_.height) return false;
+    recreateSwapchain();
+    return true;
+}
+
 void VulkanRenderer::setSurfaceSize(int width, int height) {
     desiredW_ = width > 0 ? width : 1;
     desiredH_ = height > 0 ? height : 1;
@@ -1734,9 +1782,9 @@ void VulkanRenderer::renderFrame(const RenderFrame& frame) {
     VkResult acq = vkAcquireNextImageKHR(device_, swapchain_, UINT64_MAX,
                                          imageAvailable_[currentFrame_], VK_NULL_HANDLE,
                                          &imageIndex);
-    if (acq == VK_ERROR_OUT_OF_DATE_KHR) {
-        recreateSwapchain();
-        return;
+    if (acq == VK_ERROR_OUT_OF_DATE_KHR || acq == VK_SUBOPTIMAL_KHR) {
+        // Пересозданный swapchain несовместим с уже acquired imageIndex — кадр бросаем.
+        if (maybeRecreateSwapchain(acq) || acq == VK_ERROR_OUT_OF_DATE_KHR) return;
     }
     if (acq != VK_SUCCESS && acq != VK_SUBOPTIMAL_KHR) {
         LOGE("Vulkan: vkAcquireNextImageKHR (VkResult=%d)", (int)acq);
@@ -2070,7 +2118,7 @@ void VulkanRenderer::renderFrame(const RenderFrame& frame) {
     pi.pImageIndices = &imageIndex;
     VkResult pres = vkQueuePresentKHR(queue_, &pi);
     if (pres == VK_ERROR_OUT_OF_DATE_KHR || pres == VK_SUBOPTIMAL_KHR) {
-        recreateSwapchain();
+        maybeRecreateSwapchain(pres);
     }
 
     currentFrame_ = (currentFrame_ + 1) % kMaxFramesInFlight;

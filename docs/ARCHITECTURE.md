@@ -317,6 +317,14 @@ OBJ-загрузчика). Директивы:
   ЗАПОМИНАЕТ его в `Engine`, а диспатч в геймплей (`onPointer`/`onClick`) — ПОСЛЕ
   `renderFrame`, когда `WantCaptureMouse` уже посчитан по этому касанию. Релиз отдаём
   всегда (чтобы джойстик не залипал). Десктоп не затронут — там мышь наводится до клика.
+- **Android Vulkan `preTransform`.** На телефоне в landscape `currentTransform` =
+  `ROTATE_90`/`270`. Если отдать его в `VkSwapchainCreateInfoKHR::preTransform`, не
+  повернув рендер (MVP, HUD, ImGui), композитор считает картинку уже повёрнутой и
+  растягивает портретный буфер на горизонтальный экран (круги стиков → овалы). GLES
+  этого не видно: EGL сам выставляет буфер под окно. Решение: `preTransform = IDENTITY`
+  (композитор крутит сам, как EGL); `VK_SUBOPTIMAL_KHR` при этом штатный — не
+  пересоздавать swapchain, пока `currentExtent` не сменился. Полный pre-rotate
+  (матрица + swap extent) — опциональная оптимизация, без extra blit композитора.
 - **INTERNET permission** в манифесте нужен для сокетов.
 - Сборка Android из консоли конфликтует с блокировкой `~/.gradle` (Unity/AS-демоны)
   — собирать в Android Studio.

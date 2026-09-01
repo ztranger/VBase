@@ -96,6 +96,8 @@ ARCHITECTURE §3). Осталось по желанию: своя `assets/textur
 
   **Проверено на устройстве:** запуск Vulkan-пути, переключение GL↔Vulkan из панели
   (пересоздание рендера на живом ANativeWindow) и ImGui-панель под Vulkan — работают.
+  **Ориентация:** `preTransform` на Android — IDENTITY (не `currentTransform`), иначе
+  landscape растягивается «стоя»; см. ARCHITECTURE §6.
 
 **⚠️ Сборка (важно):** инкрементальный NMake-билд НЕ пересобирает `desktop/main.cpp`
 при изменении заголовка `VulkanRenderer.h`. Т.к. `main.cpp` создаёт `VulkanRenderer`
