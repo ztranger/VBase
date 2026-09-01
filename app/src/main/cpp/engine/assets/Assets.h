@@ -12,6 +12,10 @@
 // Процедурная шахматная текстура (без файла): size x size, cells клеток.
 TextureData makeCheckerboard(uint32_t size, uint32_t cells);
 
+// Процедурная нормал-карта (tangent-space): бампы синусом, freq волн по стороне.
+// RGB = закодированная нормаль ((n*0.5+0.5)*255), пригодна для uNormalMap.
+TextureData makeBumpNormal(uint32_t size, uint32_t freq);
+
 // Декодировать изображение (PNG/JPG/...) из assets через stb_image.
 bool loadImageAsset(AssetSource& src, const char* path, TextureData& out);
 

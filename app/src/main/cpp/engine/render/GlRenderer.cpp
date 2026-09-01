@@ -121,6 +121,15 @@ bool GlRenderer::initGlResources() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
+    // Плоская нормаль 1x1 (128,128,255) = (0,0,1) в тангент-пространстве: материалы
+    // без нормал-карты дают невозмущённую нормаль (без ветвлений в шейдере).
+    const uint8_t flatNormal[4] = {128, 128, 255, 255};
+    glGenTextures(1, &flatNormalTexture_);
+    glBindTexture(GL_TEXTURE_2D, flatNormalTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, flatNormal);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
     // UBO с кадровыми данными, привязанный к общей точке kFrameBinding.
     glGenBuffers(1, &frameUbo_);
     glBindBuffer(GL_UNIFORM_BUFFER, frameUbo_);
@@ -302,6 +311,7 @@ bool GlRenderer::buildShader(const char* vsPath, const char* fsPath, GlShader& o
     out.uColor = glGetUniformLocation(out.program, "uColor");
     out.uAlbedo = glGetUniformLocation(out.program, "uAlbedo");
     out.uShadowMap = glGetUniformLocation(out.program, "uShadowMap");
+    out.uNormalMap = glGetUniformLocation(out.program, "uNormalMap");
 
     // Привязываем блок Frame программы к общей точке связывания kFrameBinding.
     GLuint block = glGetUniformBlockIndex(out.program, "Frame");
@@ -309,11 +319,12 @@ bool GlRenderer::buildShader(const char* vsPath, const char* fsPath, GlShader& o
         glUniformBlockBinding(out.program, block, kFrameBinding);
     }
     // Сэмплеры -> текстурные юниты (константы, ставятся один раз, не в цикле кадра):
-    // albedo = юнит 0, карта теней = юнит 2 (юнит 1 занят bone-текстурой скиннинга).
-    if (out.uAlbedo >= 0 || out.uShadowMap >= 0) {
+    // albedo = 0, bone-текстура = 1 (скиннинг), карта теней = 2, нормал-карта = 3.
+    if (out.uAlbedo >= 0 || out.uShadowMap >= 0 || out.uNormalMap >= 0) {
         glUseProgram(out.program);
         if (out.uAlbedo >= 0) glUniform1i(out.uAlbedo, 0);
         if (out.uShadowMap >= 0) glUniform1i(out.uShadowMap, 2);
+        if (out.uNormalMap >= 0) glUniform1i(out.uNormalMap, 3);
     }
     return true;
 }
@@ -672,6 +683,9 @@ MeshHandle GlRenderer::createMesh(const MeshData& data) {
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, stride, (const void*)(6 * sizeof(float)));
     glEnableVertexAttribArray(2);
+    // Тангент (локация 7): локации 3..6 заняты инстансной матрицей iModel.
+    glVertexAttribPointer(7, 3, GL_FLOAT, GL_FALSE, stride, (const void*)(8 * sizeof(float)));
+    glEnableVertexAttribArray(7);
 
     // Инстансный mat4 iModel: локации 3..6, по одному значению на инстанс
     // (divisor = 1), читается из общего instanceVbo_. Пишется в VAO меша.
@@ -726,6 +740,11 @@ MaterialHandle GlRenderer::createMaterial(const MaterialDesc& desc) {
         mat.texture = textures_[desc.albedo - 1];
     } else {
         mat.texture = whiteTexture_;
+    }
+    if (desc.normal != 0 && desc.normal <= textures_.size()) {
+        mat.normalTexture = textures_[desc.normal - 1];
+    } else {
+        mat.normalTexture = flatNormalTexture_;  // без нормал-карты — плоская нормаль
     }
     materials_.push_back(mat);
     return (MaterialHandle)materials_.size();
@@ -838,7 +857,10 @@ void GlRenderer::renderFrame(const RenderFrame& frame) {
             curShader = (int)mat.shader;
         }
         glUniform3f(shader->uColor, mat.baseColor.x, mat.baseColor.y, mat.baseColor.z);
-        glBindTexture(GL_TEXTURE_2D, mat.texture);
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_2D, mat.normalTexture);  // нормал-карта на юнит 3
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, mat.texture);        // albedo на юнит 0 (активный)
 
         const GlMesh& mesh = meshes_[first.mesh - 1];
         glBindVertexArray(mesh.vao);
@@ -936,6 +958,7 @@ void GlRenderer::shutdown() {
         glDeleteTextures((GLsizei)textures_.size(), textures_.data());
     }
     if (whiteTexture_) glDeleteTextures(1, &whiteTexture_);
+    if (flatNormalTexture_) glDeleteTextures(1, &flatNormalTexture_);
     if (fontTexture_) glDeleteTextures(1, &fontTexture_);
     if (frameUbo_) glDeleteBuffers(1, &frameUbo_);
     if (instanceVbo_) glDeleteBuffers(1, &instanceVbo_);
@@ -970,6 +993,7 @@ void GlRenderer::shutdown() {
     textures_.clear();
     materials_.clear();
     whiteTexture_ = 0;
+    flatNormalTexture_ = 0;
     frameUbo_ = 0;
     instanceVbo_ = 0;
     hudProgram_ = 0;

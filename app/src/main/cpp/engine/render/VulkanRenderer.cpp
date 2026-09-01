@@ -886,7 +886,7 @@ bool VulkanRenderer::createGraphicsPipeline(VkShaderModule vs, VkShaderModule fs
     // binding 1 — инстансная матрица iModel (mat4 = 64 байта, per-instance).
     VkVertexInputBindingDescription binds[2]{};
     binds[0].binding = 0;
-    binds[0].stride = sizeof(float) * 8;
+    binds[0].stride = sizeof(Vertex);  // pos3+normal3+uv2+tangent3 (тангент читает только GL пока)
     binds[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
     binds[1].binding = 1;
     binds[1].stride = sizeof(float) * 16;
@@ -1163,7 +1163,7 @@ bool VulkanRenderer::createShadowPipelines() {
     // depth-шейдер читает только pos (loc 0) и iModel (loc 3..6) — normal/uv не объявляем
     // (иначе валидация ругается "attribute not consumed").
     VkVertexInputBindingDescription ibinds[2]{};
-    ibinds[0].binding = 0; ibinds[0].stride = sizeof(float) * 8; ibinds[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    ibinds[0].binding = 0; ibinds[0].stride = sizeof(Vertex); ibinds[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
     ibinds[1].binding = 1; ibinds[1].stride = sizeof(float) * 16; ibinds[1].inputRate = VK_VERTEX_INPUT_RATE_INSTANCE;
     VkVertexInputAttributeDescription iattrs[5]{};
     iattrs[0] = {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0};

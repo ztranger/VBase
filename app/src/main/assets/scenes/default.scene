@@ -7,13 +7,14 @@
 # --- Текстуры ---
 texture checker procedural 256 8            # процедурная шахматка
 texture crate   image textures/crate.png    # если файла нет -> материал станет белым
+texture bumps   procnormal 256 8            # процедурная нормал-карта (бампы)
 
-# --- Материалы: <name> <shader> [color r g b] [tex <ref>] ---
-material floor lit   color 1 1 1            tex checker
+# --- Материалы: <name> <shader> [color r g b] [tex <ref>] [normal <ref>] ---
+material floor lit   color 1 1 1            tex checker  normal bumps
 material crate lit   color 1 1 1            tex crate
-material red   phong color 0.90 0.35 0.30
+material red   phong color 0.90 0.35 0.30                normal bumps
 material green unlit  color 0.30 0.85 0.45
-material blue  phong color 0.35 0.55 0.95
+material blue  phong color 0.35 0.55 0.95                normal bumps
 material gold  phong color 0.95 0.80 0.25
 material edge  lit   color 0.55 0.65 0.85   tex checker
 

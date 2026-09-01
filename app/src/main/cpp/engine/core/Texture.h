@@ -31,4 +31,5 @@ struct MaterialDesc {
     ShaderType shader = ShaderType::Lit;
     Vec3 baseColor{1.0f, 1.0f, 1.0f};
     TextureHandle albedo = 0;  // 0 -> рендер подставит белую 1x1 (без ветвлений в шейдере)
+    TextureHandle normal = 0;  // 0 -> плоская нормаль 1x1 (0,0,1): без нормал-мэппинга
 };

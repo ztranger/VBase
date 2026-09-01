@@ -108,6 +108,8 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
         TextureHandle h = 0;
         if (ts.kind == TextureSpec::Checker) {
             h = renderer.createTexture(makeCheckerboard((uint32_t)ts.size, (uint32_t)ts.cells));
+        } else if (ts.kind == TextureSpec::Bump) {
+            h = renderer.createTexture(makeBumpNormal((uint32_t)ts.size, (uint32_t)ts.cells));
         } else {
             TextureData img;
             if (loadImageAsset(assets, ts.path.c_str(), img)) h = renderer.createTexture(img);
@@ -133,6 +135,7 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
         md.shader = ms.shader;
         md.baseColor = ms.color;
         md.albedo = resolveTex(ms.tex);
+        md.normal = resolveTex(ms.normal);
         matMap[ms.name] = renderer.createMaterial(md);
     }
 

@@ -24,9 +24,9 @@ struct MeshSpec {
 
 struct TextureSpec {
     std::string name;
-    enum Kind { Checker, Image } kind = Checker;
-    int size = 256;         // checker: сторона
-    int cells = 8;          // checker: клеток
+    enum Kind { Checker, Image, Bump } kind = Checker;
+    int size = 256;         // checker/bump: сторона
+    int cells = 8;          // checker: клеток; bump: частота волн
     std::string path;       // image: путь к файлу-картинке
 };
 
@@ -34,7 +34,8 @@ struct MaterialSpec {
     std::string name;
     ShaderType shader = ShaderType::Lit;
     Vec3 color{1.0f, 1.0f, 1.0f};
-    std::string tex;  // ссылка: имя текстуры ИЛИ путь к картинке; пусто -> без текстуры
+    std::string tex;     // albedo: имя текстуры ИЛИ путь к картинке; пусто -> без текстуры
+    std::string normal;  // нормал-карта: имя текстуры/путь; пусто -> плоская нормаль
 };
 
 struct ObjectSpec {

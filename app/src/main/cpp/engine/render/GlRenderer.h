@@ -52,12 +52,14 @@ private:
         GLint uColor = -1;
         GLint uAlbedo = -1;
         GLint uShadowMap = -1;  // сэмплер карты теней (текстурный юнит 2)
+        GLint uNormalMap = -1;  // сэмплер нормал-карты (текстурный юнит 3)
         // uModel'а нет: матрица модели приходит инстансным атрибутом iModel.
     };
     struct GlMaterial {
         uint32_t shader = 0;  // индекс в shaders_
         Vec3 baseColor{1.0f, 1.0f, 1.0f};
-        GLuint texture = 0;   // разрешённый GL-идентификатор (albedo или белая)
+        GLuint texture = 0;         // разрешённый GL-идентификатор (albedo или белая)
+        GLuint normalTexture = 0;   // нормал-карта (или плоская 1x1)
     };
 
     bool initGlResources();  // общая GL-инициализация (шейдеры/UBO/текстуры/...)
@@ -94,6 +96,7 @@ private:
 #endif
 
     GLuint whiteTexture_ = 0;  // 1x1 белая — материалы без текстуры используют её
+    GLuint flatNormalTexture_ = 0;  // 1x1 (128,128,255) = нормаль (0,0,1): без нормал-мэппинга
     GLuint frameUbo_ = 0;      // кадровые данные (Frame block), общие для всех программ
     GLuint instanceVbo_ = 0;   // общий буфер матриц модели для инстансинга
 

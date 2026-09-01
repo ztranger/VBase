@@ -4,12 +4,13 @@
 in vec3 vNormal;
 in vec3 vWorldPos;
 in vec2 vUV;
+in vec3 vTangent;
 in highp vec4 vLightClip;
 uniform vec3 uColor;
 uniform sampler2D uAlbedo;
 out vec4 fragColor;
 void main() {
-    vec3 N = normalize(vNormal);
+    vec3 N = mapNormal(vNormal, vTangent, vUV);  // нормаль из нормал-карты (TBN)
     vec3 L = normalize(uLightDir);
     vec3 V = normalize(uViewPos - vWorldPos);
     vec3 R = reflect(-L, N);

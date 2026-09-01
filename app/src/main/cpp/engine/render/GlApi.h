@@ -56,6 +56,9 @@ typedef ptrdiff_t GLintptr;
 #ifndef GL_TEXTURE2
 #define GL_TEXTURE2 0x84C2
 #endif
+#ifndef GL_TEXTURE3
+#define GL_TEXTURE3 0x84C3
+#endif
 #ifndef GL_UNIFORM_BUFFER
 #define GL_UNIFORM_BUFFER 0x8A11
 #endif

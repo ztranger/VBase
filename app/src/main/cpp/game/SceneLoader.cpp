@@ -111,6 +111,11 @@ bool loadSceneDesc(AssetSource& assets, const char* path, SceneDesc& out) {
                 if (t.size() < 5) { LOGE("scene: строка %d: procedural <size> <cells>", line); return false; }
                 tx.size = toI(t[3]);
                 tx.cells = toI(t[4]);
+            } else if (kind == "procnormal") {
+                tx.kind = TextureSpec::Bump;
+                if (t.size() < 5) { LOGE("scene: строка %d: procnormal <size> <freq>", line); return false; }
+                tx.size = toI(t[3]);
+                tx.cells = toI(t[4]);  // частота волн
             } else if (kind == "image") {
                 tx.kind = TextureSpec::Image;
                 if (t.size() < 4) { LOGE("scene: строка %d: image <path>", line); return false; }
@@ -132,6 +137,7 @@ bool loadSceneDesc(AssetSource& assets, const char* path, SceneDesc& out) {
                 std::string k = t[i++];
                 if (k == "color") { if (!readVec3(t, i, line, m.color)) return false; }
                 else if (k == "tex") { if (!readStr(t, i, line, m.tex)) return false; }
+                else if (k == "normal") { if (!readStr(t, i, line, m.normal)) return false; }
                 else { LOGE("scene: строка %d: неизвестный ключ material '%s'", line, k.c_str()); return false; }
             }
             out.materials.push_back(m);

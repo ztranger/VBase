@@ -19,6 +19,20 @@ vec3 hemiAmbient(vec3 N) {
 // Directional (sun) intensity. Kept below 1 so ambient+sun rarely blows out.
 const vec3 kSunColor = vec3(0.85);
 
+// Normal map (tangent-space). Flat 1x1 (0,0,1) for materials without one -> the
+// perturbed normal equals the geometric normal (no visible change).
+uniform sampler2D uNormalMap;
+
+// Perturbed WORLD normal from the normal map. N,T come world-space from the vertex
+// shader; bitangent = cross(N,T). Gram-Schmidt keeps T perpendicular to N.
+vec3 mapNormal(vec3 N, vec3 T, vec2 uv) {
+    N = normalize(N);
+    T = normalize(T - N * dot(N, T));
+    vec3 B = cross(N, T);
+    vec3 nTS = texture(uNormalMap, uv).rgb * 2.0 - 1.0;  // [0,1] -> [-1,1]
+    return normalize(mat3(T, B, N) * nTS);               // tangent -> world
+}
+
 // Shadow map (directional light). Hardware PCF via sampler2DShadow: LINEAR filter
 // + COMPARE_REF_TO_TEXTURE gives a free 2x2 soft edge on mobile tilers.
 // highp: depth math needs full precision on GLES, else acne/swimming.

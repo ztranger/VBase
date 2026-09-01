@@ -4,6 +4,7 @@
 #define STBI_NO_STDIO
 #include "stb_image.h"
 
+#include <cmath>
 #include <cstring>
 #include <sstream>
 #include <string>
@@ -41,6 +42,34 @@ TextureData makeCheckerboard(uint32_t size, uint32_t cells) {
             tex.rgba[i + 0] = c;
             tex.rgba[i + 1] = c;
             tex.rgba[i + 2] = c;
+            tex.rgba[i + 3] = 255;
+        }
+    }
+    return tex;
+}
+
+TextureData makeBumpNormal(uint32_t size, uint32_t freq) {
+    TextureData tex;
+    tex.width = size;
+    tex.height = size;
+    tex.rgba.resize((size_t)size * size * 4);
+    const float pi = 3.14159265358979323846f;
+    const float f = (float)(freq == 0 ? 1u : freq);
+    const float amp = 0.7f;  // крутизна бампов (больше -> резче нормали)
+    for (uint32_t y = 0; y < size; ++y) {
+        for (uint32_t x = 0; x < size; ++x) {
+            float u = (float)x / (float)size;
+            float v = (float)y / (float)size;
+            // высота h = sin(u)*sin(v); нормаль = normalize(-dh/du, -dh/dv, 1).
+            float du = amp * std::cos(u * f * 2.0f * pi) * std::sin(v * f * 2.0f * pi);
+            float dv = amp * std::sin(u * f * 2.0f * pi) * std::cos(v * f * 2.0f * pi);
+            float nx = -du, ny = -dv, nz = 1.0f;
+            float len = std::sqrt(nx * nx + ny * ny + nz * nz);
+            nx /= len; ny /= len; nz /= len;
+            size_t i = ((size_t)y * size + x) * 4;
+            tex.rgba[i + 0] = (uint8_t)((nx * 0.5f + 0.5f) * 255.0f);
+            tex.rgba[i + 1] = (uint8_t)((ny * 0.5f + 0.5f) * 255.0f);
+            tex.rgba[i + 2] = (uint8_t)((nz * 0.5f + 0.5f) * 255.0f);
             tex.rgba[i + 3] = 255;
         }
     }
@@ -171,6 +200,15 @@ bool loadObjAsset(AssetSource& src, const char* path, MeshData& out) {
                 out.vertices[idx].nz = nrm.z;
             }
         }
+    }
+
+    // Тангент по умолчанию: устойчивый перпендикуляр к нормали. OBJ-меши обычно без
+    // нормал-карты, точный тангент не нужен — важна лишь валидность TBN в шейдере.
+    for (Vertex& v : out.vertices) {
+        Vec3 N{v.nx, v.ny, v.nz};
+        Vec3 ref = (std::fabs(N.y) < 0.99f) ? Vec3{0.0f, 1.0f, 0.0f} : Vec3{1.0f, 0.0f, 0.0f};
+        Vec3 T = normalize(cross(ref, N));
+        v.tx = T.x; v.ty = T.y; v.tz = T.z;
     }
 
     LOGI("OBJ загружен: %s — %u вершин, %u индексов", path,

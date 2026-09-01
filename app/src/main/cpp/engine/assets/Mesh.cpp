@@ -6,12 +6,12 @@ MeshData makePlane(float size, float uvTiles) {
     float h = size * 0.5f;
     float t = uvTiles;
     MeshData mesh;
-    // Четыре угла на y=0, нормаль вверх. UV тайлятся uvTiles раз (для чекера).
+    // Четыре угла на y=0, нормаль вверх, тангент вдоль +X (рост U). UV тайлятся.
     mesh.vertices = {
-        {-h, 0.0f, -h, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f},
-        { h, 0.0f, -h, 0.0f, 1.0f, 0.0f, t,    0.0f},
-        { h, 0.0f,  h, 0.0f, 1.0f, 0.0f, t,    t   },
-        {-h, 0.0f,  h, 0.0f, 1.0f, 0.0f, 0.0f, t   },
+        {-h, 0.0f, -h, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f},
+        { h, 0.0f, -h, 0.0f, 1.0f, 0.0f, t,    0.0f, 1.0f, 0.0f, 0.0f},
+        { h, 0.0f,  h, 0.0f, 1.0f, 0.0f, t,    t,    1.0f, 0.0f, 0.0f},
+        {-h, 0.0f,  h, 0.0f, 1.0f, 0.0f, 0.0f, t,    1.0f, 0.0f, 0.0f},
     };
     mesh.indices = {0, 2, 1, 0, 3, 2};
     return mesh;
@@ -39,12 +39,19 @@ MeshData makeCube(float size) {
     const float uv[4][2] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
 
     for (int f = 0; f < 6; ++f) {
+        // Тангент грани = направление роста U = ребро corner[1]-corner[0] (U идёт 0->1).
+        float tx = corners[f][1][0] - corners[f][0][0];
+        float ty = corners[f][1][1] - corners[f][0][1];
+        float tz = corners[f][1][2] - corners[f][0][2];
+        float tl = std::sqrt(tx * tx + ty * ty + tz * tz);
+        if (tl > 0.0f) { tx /= tl; ty /= tl; tz /= tl; }
         uint32_t base = (uint32_t)mesh.vertices.size();
         for (int v = 0; v < 4; ++v) {
             mesh.vertices.push_back({
                 corners[f][v][0], corners[f][v][1], corners[f][v][2],
                 n[f][0], n[f][1], n[f][2],
-                uv[v][0], uv[v][1]});
+                uv[v][0], uv[v][1],
+                tx, ty, tz});
         }
         mesh.indices.push_back(base + 0);
         mesh.indices.push_back(base + 1);
@@ -71,8 +78,10 @@ MeshData makeSphere(float radius, int stacks, int slices) {
             float nz = sinPhi * sinTheta;
             float uu = (float)j / (float)slices;
             float vv = (float)i / (float)stacks;
+            // Тангент = d(pos)/d(theta), нормированный: (-sinTheta, 0, cosTheta).
             mesh.vertices.push_back({nx * radius, ny * radius, nz * radius,
-                                     nx, ny, nz, uu, vv});
+                                     nx, ny, nz, uu, vv,
+                                     -sinTheta, 0.0f, cosTheta});
         }
     }
 
