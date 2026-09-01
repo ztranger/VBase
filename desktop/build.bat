@@ -35,12 +35,16 @@ if defined GLSLC (
     echo WARNING: glslc not found - install the Vulkan SDK ^(sets VULKAN_SDK^) or the build will fail compiling Vulkan shaders.
 )
 
+REM Build type: RelWithDebInfo (optimized /O2 + debug symbols). Deliberately NOT plain
+REM Release: a pre-existing optimization-sensitive UB heisenbug in the client crashes only
+REM under Release's full inlining (/Ob2); RelWithDebInfo (/Ob1) does not trigger it and also
+REM ships a PDB for debugging. See docs/NEXT_STEPS. (ASCII comments only in .bat.)
 REM Wipe a build dir configured by a different generator (old NMake) so CMake won't error.
 if exist "%~dp0build\CMakeCache.txt" (
     findstr /C:"CMAKE_GENERATOR:INTERNAL=Ninja" "%~dp0build\CMakeCache.txt" >nul
     if errorlevel 1 rmdir /s /q "%~dp0build"
 )
 
-"%CMAKE%" -S "%~dp0." -B "%~dp0build" -G "Ninja" -DCMAKE_MAKE_PROGRAM="%NINJA%" -DCMAKE_BUILD_TYPE=Release %GLSLCARG% || exit /b 1
+"%CMAKE%" -S "%~dp0." -B "%~dp0build" -G "Ninja" -DCMAKE_MAKE_PROGRAM="%NINJA%" -DCMAKE_BUILD_TYPE=RelWithDebInfo %GLSLCARG% || exit /b 1
 "%CMAKE%" --build "%~dp0build" || exit /b 1
 echo BUILD_OK

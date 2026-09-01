@@ -199,6 +199,14 @@ public:
     Vec3 lightDir() const { return lightDir_; }
     void setLightDir(Vec3 d) { lightDir_ = d; }
 
+    // Тени (directional shadow map). Правятся слайдерами в DebugPanel, уходят в RenderFrame.
+    bool shadowsEnabled() const { return shadowsEnabled_; }
+    void setShadowsEnabled(bool e) { shadowsEnabled_ = e; }
+    float shadowBias() const { return shadowBias_; }
+    void setShadowBias(float b) { shadowBias_ = b; }
+    float shadowRadius() const { return shadowRadius_; }
+    void setShadowRadius(float r) { shadowRadius_ = r; }
+
 private:
     FollowCamera camera_;
     std::vector<GameObject> objects_;
@@ -272,6 +280,9 @@ private:
     bool attackQueued_ = false;        // запрошена атака/каст (сбрасывается в fixedUpdate)
     float uiScale_ = 1.0f;
     Vec3 lightDir_{0.4f, 1.0f, 0.6f};  // направление НА свет (из файла сцены)
+    bool shadowsEnabled_ = true;       // тени (directional shadow map)
+    float shadowBias_ = 0.0025f;       // сдвиг глубины против self-shadow acne
+    float shadowRadius_ = 14.0f;       // полуширина орто-коробки света (охват арены)
 
     // Построить отрисовочный предмет модели reg[index] по состоянию (клиентский рендер).
     // reg — chars_ (герои) или mobs_ (враги). oneShotClip>=0 — проиграть конкретный клип в

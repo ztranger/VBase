@@ -89,6 +89,20 @@ struct Mat4 {
         return r;
     }
 
+    // Ортографическая проекция (для directional-света / карты теней). NDC z в [-1, 1].
+    static Mat4 ortho(float l, float r, float b, float t, float nearZ, float farZ) {
+        Mat4 m;
+        for (int i = 0; i < 16; ++i) m.m[i] = 0.0f;
+        m.m[0] = 2.0f / (r - l);
+        m.m[5] = 2.0f / (t - b);
+        m.m[10] = -2.0f / (farZ - nearZ);
+        m.m[12] = -(r + l) / (r - l);
+        m.m[13] = -(t + b) / (t - b);
+        m.m[14] = -(farZ + nearZ) / (farZ - nearZ);
+        m.m[15] = 1.0f;
+        return m;
+    }
+
     static Mat4 lookAt(Vec3 eye, Vec3 center, Vec3 up) {
         Vec3 f = normalize(center - eye);
         Vec3 s = normalize(cross(f, up));

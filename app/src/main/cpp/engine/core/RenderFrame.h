@@ -42,6 +42,12 @@ struct RenderFrame {
     Mat4 proj;
     Vec3 cameraPos;                   // позиция камеры (нужна Phong-шейдеру для блика)
     Vec3 lightDir{0.4f, 1.0f, 0.6f};  // направление НА источник света
+
+    // Тени (directional shadow map). Правятся слайдерами в DebugPanel.
+    bool shadowsEnabled = true;
+    float shadowBias = 0.0025f;   // сдвиг глубины против self-shadow acne
+    float shadowRadius = 14.0f;   // полуширина орто-коробки света (охват арены)
+
     std::vector<RenderItem> items;
     std::vector<SkinnedItem> skinned; // анимированные модели (скиннинг)
     std::vector<HudText> hud;         // оверлей-текст (рисуется после 3D)

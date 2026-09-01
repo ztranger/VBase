@@ -429,6 +429,9 @@ RenderFrame Scene::renderCharacterPreview(float alpha, float aspect, float rende
     frame.proj = Mat4::perspective(0.9f, aspect, 0.1f, 100.0f);
     frame.cameraPos = eye;
     frame.lightDir = normalize(lightDir_);
+    frame.shadowsEnabled = shadowsEnabled_;
+    frame.shadowBias = shadowBias_;
+    frame.shadowRadius = shadowRadius_;
 
     float yaw = previewSpin_ * 0.6f;                    // медленный оборот
     frame.skinned.push_back(
@@ -444,6 +447,9 @@ RenderFrame Scene::renderMenuBackdrop(float aspect) {
     frame.proj = Mat4::perspective(0.9f, aspect, 0.1f, 100.0f);
     frame.cameraPos = eye;
     frame.lightDir = normalize(lightDir_);
+    frame.shadowsEnabled = shadowsEnabled_;
+    frame.shadowBias = shadowBias_;
+    frame.shadowRadius = shadowRadius_;
     return frame;
 }
 
@@ -750,6 +756,9 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
     frame.proj = camera_.proj(aspect);
     frame.cameraPos = camera_.eye();
     frame.lightDir = normalize(lightDir_);  // из файла сцены; правится в GUI
+    frame.shadowsEnabled = shadowsEnabled_;
+    frame.shadowBias = shadowBias_;
+    frame.shadowRadius = shadowRadius_;
 
     for (const GameObject& obj : objects_) {
         Transform t = obj.transform;

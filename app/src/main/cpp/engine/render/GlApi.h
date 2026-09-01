@@ -53,6 +53,9 @@ typedef ptrdiff_t GLintptr;
 #ifndef GL_TEXTURE1
 #define GL_TEXTURE1 0x84C1
 #endif
+#ifndef GL_TEXTURE2
+#define GL_TEXTURE2 0x84C2
+#endif
 #ifndef GL_UNIFORM_BUFFER
 #define GL_UNIFORM_BUFFER 0x8A11
 #endif
@@ -67,6 +70,28 @@ typedef ptrdiff_t GLintptr;
 #endif
 #ifndef GL_INVALID_INDEX
 #define GL_INVALID_INDEX 0xFFFFFFFFu
+#endif
+// --- Карта теней: FBO с depth-текстурой + аппаратный PCF (sampler2DShadow) ---
+#ifndef GL_FRAMEBUFFER
+#define GL_FRAMEBUFFER 0x8D40
+#endif
+#ifndef GL_DEPTH_ATTACHMENT
+#define GL_DEPTH_ATTACHMENT 0x8D00
+#endif
+#ifndef GL_FRAMEBUFFER_COMPLETE
+#define GL_FRAMEBUFFER_COMPLETE 0x8CD5
+#endif
+#ifndef GL_DEPTH_COMPONENT24
+#define GL_DEPTH_COMPONENT24 0x81A6
+#endif
+#ifndef GL_TEXTURE_COMPARE_MODE
+#define GL_TEXTURE_COMPARE_MODE 0x884C
+#endif
+#ifndef GL_TEXTURE_COMPARE_FUNC
+#define GL_TEXTURE_COMPARE_FUNC 0x884D
+#endif
+#ifndef GL_COMPARE_REF_TO_TEXTURE
+#define GL_COMPARE_REF_TO_TEXTURE 0x884E
 #endif
 
 // Современные функции (2.0+/3.x), которых нет в opengl32 1.1 — грузим вручную.
@@ -106,7 +131,13 @@ typedef ptrdiff_t GLintptr;
     X(void, glVertexAttribDivisor, (GLuint, GLuint)) \
     X(void, glGenerateMipmap, (GLenum)) \
     X(void, glActiveTexture, (GLenum)) \
-    X(void, glDrawElementsInstanced, (GLenum, GLsizei, GLenum, const void*, GLsizei))
+    X(void, glDrawElementsInstanced, (GLenum, GLsizei, GLenum, const void*, GLsizei)) \
+    X(void, glGenFramebuffers, (GLsizei, GLuint*)) \
+    X(void, glBindFramebuffer, (GLenum, GLuint)) \
+    X(void, glFramebufferTexture2D, (GLenum, GLenum, GLenum, GLuint, GLint)) \
+    X(GLenum, glCheckFramebufferStatus, (GLenum)) \
+    X(void, glDeleteFramebuffers, (GLsizei, const GLuint*)) \
+    X(void, glDrawBuffers, (GLsizei, const GLenum*))
 
 #define X(ret, name, args) typedef ret (*PFN_##name) args;
 GL_API_FUNCS

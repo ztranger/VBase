@@ -34,13 +34,14 @@ constexpr GLuint kFrameBinding = 0;
 constexpr int kBoneTexRows = 1024;
 
 // Раскладка std140 блока Frame. vec3 в std140 выравнивается на 16 байт,
-// поэтому явные паддинги. Размер = 96 байт.
+// поэтому явные паддинги. Размер = 160 байт. ОБЯЗАНА совпадать с common.glsl.
 struct FrameUBO {
     float viewProj[16];  // 0
-    float lightDir[3];   // 64
-    float pad0;          // 76
-    float viewPos[3];    // 80
-    float pad1;          // 92
+    float lightVP[16];   // 64  проекция глазами света (для выборки теней)
+    float lightDir[3];   // 128
+    float pad0;          // 140
+    float viewPos[3];    // 144
+    float shadowBias;    // 156 (последний скаляр в 16-байтном слоте viewPos)
 };
 
 // Тела шейдеров вынесены в ассеты shaders/*.vert|frag и грузятся через
@@ -104,7 +105,7 @@ bool GlRenderer::init(void* nativeWindow, AssetSource& assets) {
 
 // Общая GL-инициализация (одинаково на обеих платформах, контекст уже текущий).
 bool GlRenderer::initGlResources() {
-    if (!initShaders() || !initSkin() || !initHud()) {
+    if (!initShaders() || !initSkin() || !initShadow() || !initHud()) {
         return false;
     }
     glEnable(GL_DEPTH_TEST);
@@ -298,16 +299,19 @@ bool GlRenderer::buildShader(const char* vsPath, const char* fsPath, GlShader& o
 
     out.uColor = glGetUniformLocation(out.program, "uColor");
     out.uAlbedo = glGetUniformLocation(out.program, "uAlbedo");
+    out.uShadowMap = glGetUniformLocation(out.program, "uShadowMap");
 
     // Привязываем блок Frame программы к общей точке связывания kFrameBinding.
     GLuint block = glGetUniformBlockIndex(out.program, "Frame");
     if (block != GL_INVALID_INDEX) {
         glUniformBlockBinding(out.program, block, kFrameBinding);
     }
-    // Сэмплер -> текстурный юнит 0. Ставится один раз (константа), не в цикле кадра.
-    if (out.uAlbedo >= 0) {
+    // Сэмплеры -> текстурные юниты (константы, ставятся один раз, не в цикле кадра):
+    // albedo = юнит 0, карта теней = юнит 2 (юнит 1 занят bone-текстурой скиннинга).
+    if (out.uAlbedo >= 0 || out.uShadowMap >= 0) {
         glUseProgram(out.program);
-        glUniform1i(out.uAlbedo, 0);
+        if (out.uAlbedo >= 0) glUniform1i(out.uAlbedo, 0);
+        if (out.uShadowMap >= 0) glUniform1i(out.uShadowMap, 2);
     }
     return true;
 }
@@ -332,6 +336,11 @@ bool GlRenderer::initSkin() {
     uSkinAlbedo_ = glGetUniformLocation(skinProgram_, "uAlbedo");
     uBoneTex_ = glGetUniformLocation(skinProgram_, "uBones");
     uBoneOffset_ = glGetUniformLocation(skinProgram_, "uBoneOffset");
+    uSkinShadowMap_ = glGetUniformLocation(skinProgram_, "uShadowMap");
+    if (uSkinShadowMap_ >= 0) {
+        glUseProgram(skinProgram_);
+        glUniform1i(uSkinShadowMap_, 2);  // карта теней на юните 2
+    }
 
     // Bone-текстура: ширина 4 texel (4 столбца mat4), высота = лимит строк-костей.
     glGenTextures(1, &boneTexture_);
@@ -381,26 +390,31 @@ SkinnedHandle GlRenderer::createSkinnedMesh(const SkinnedModel& model) {
     return (SkinnedHandle)skinnedMeshes_.size();
 }
 
-void GlRenderer::drawSkinned(const std::vector<SkinnedItem>& items) {
-    // Собираем кости ВСЕХ моделей в один буфер и запоминаем смещение каждой.
+// Кости ВСЕХ моделей кадра -> один буфер + заливка в bone-текстуру (юнит 1).
+// Смещения запоминаем в skinOffsets_. Зовётся ОДИН раз до всех проходов (теневой
+// и основной используют одни и те же кости), поэтому вынесено из drawSkinned.
+void GlRenderer::uploadBones(const std::vector<SkinnedItem>& items) {
     boneData_.clear();
-    std::vector<int> offsets(items.size(), 0);
+    skinOffsets_.assign(items.size(), 0);
     for (size_t i = 0; i < items.size(); ++i) {
-        offsets[i] = (int)boneData_.size();
+        skinOffsets_[i] = (int)boneData_.size();
         for (const Mat4& j : items[i].joints) {
             if ((int)boneData_.size() >= kBoneTexRows) break;  // защита от переполнения
             boneData_.push_back(j);
         }
     }
-
-    // Одна заливка костей в текстуру на весь кадр (вместо uniform'ов на каждый draw).
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, boneTexture_);
     if (!boneData_.empty()) {
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 4, (GLsizei)boneData_.size(),
                         GL_RGBA, GL_FLOAT, boneData_[0].m);
     }
+}
 
+void GlRenderer::drawSkinned(const std::vector<SkinnedItem>& items) {
+    // Кости уже залиты uploadBones (до теневого прохода); здесь только рисуем.
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, boneTexture_);  // юнит 1 мог перебиться в др. проходе
     glUseProgram(skinProgram_);
     glUniform1i(uSkinAlbedo_, 0);
     glUniform1i(uBoneTex_, 1);
@@ -412,7 +426,7 @@ void GlRenderer::drawSkinned(const std::vector<SkinnedItem>& items) {
 
         glUniformMatrix4fv(uSkinModel_, 1, GL_FALSE, item.model.m);
         glUniform3f(uSkinColor_, item.color.x, item.color.y, item.color.z);
-        glUniform1i(uBoneOffset_, offsets[i]);  // где кости этой модели в текстуре
+        glUniform1i(uBoneOffset_, skinOffsets_[i]);  // где кости этой модели в текстуре
 
         glActiveTexture(GL_TEXTURE0);
         GLuint tex = (item.texture != 0 && item.texture <= textures_.size())
@@ -423,6 +437,106 @@ void GlRenderer::drawSkinned(const std::vector<SkinnedItem>& items) {
         glDrawElements(GL_TRIANGLES, mesh.indexCount, GL_UNSIGNED_INT, nullptr);
     }
     glBindVertexArray(0);
+}
+
+// depth-FBO карты теней + программы depth-прохода. Depth-текстура с COMPARE_REF
+// даёт аппаратный PCF при выборке sampler2DShadow (LINEAR-фильтр -> мягкий край).
+bool GlRenderer::initShadow() {
+    glGenTextures(1, &shadowTex_);
+    glBindTexture(GL_TEXTURE_2D, shadowTex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, kShadowSize, kShadowSize, 0,
+                 GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);  // LINEAR -> HW PCF 2x2
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+
+    glGenFramebuffers(1, &shadowFbo_);
+    glBindFramebuffer(GL_FRAMEBUFFER, shadowFbo_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, shadowTex_, 0);
+    GLenum none = GL_NONE;  // без color-attachment: только глубина
+    glDrawBuffers(1, &none);
+    glReadBuffer(GL_NONE);
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        LOGE("Shadow FBO неполон: 0x%x", status);
+        return false;
+    }
+
+    // Программы depth-прохода. Frame-блок (uLightVP) привязывается в buildShader.
+    if (!buildShader("shaders/shadow_depth.vert", "shaders/shadow_depth.frag", shadowShader_)) {
+        return false;
+    }
+    GlShader ss;
+    if (!buildShader("shaders/shadow_skin.vert", "shaders/shadow_depth.frag", ss)) {
+        return false;
+    }
+    shadowSkinProgram_ = ss.program;
+    uShadowSkinModel_ = glGetUniformLocation(shadowSkinProgram_, "uModel");
+    uShadowSkinBones_ = glGetUniformLocation(shadowSkinProgram_, "uBones");
+    uShadowSkinBoneOffset_ = glGetUniformLocation(shadowSkinProgram_, "uBoneOffset");
+    return true;
+}
+
+// Проход глазами света: рисуем касторов (окружение + скиннинг) в depth-текстуру.
+// Frame-UBO (с uLightVP) уже залит в renderFrame ДО вызова. Если тени выключены,
+// только чистим карту в 1.0 (везде «на свету»), чтобы выборка давала свет.
+void GlRenderer::renderShadowPass(const RenderFrame& frame) {
+    glBindFramebuffer(GL_FRAMEBUFFER, shadowFbo_);
+    glViewport(0, 0, kShadowSize, kShadowSize);
+    glClear(GL_DEPTH_BUFFER_BIT);
+
+    if (frame.shadowsEnabled) {
+        // Окружение: батчим по мешу (материал/цвет не нужны), матрицы -> instanceVbo_.
+        glUseProgram(shadowShader_.program);
+        std::vector<uint32_t> order(frame.items.size());
+        for (uint32_t i = 0; i < order.size(); ++i) order[i] = i;
+        std::sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) {
+            return frame.items[a].mesh < frame.items[b].mesh;
+        });
+        size_t i = 0;
+        while (i < order.size()) {
+            const RenderItem& first = frame.items[order[i]];
+            if (first.mesh == 0 || first.mesh > meshes_.size()) { ++i; continue; }
+            size_t j = i + 1;
+            while (j < order.size() && frame.items[order[j]].mesh == first.mesh) ++j;
+
+            const GlMesh& mesh = meshes_[first.mesh - 1];
+            glBindVertexArray(mesh.vao);
+            instanceData_.clear();
+            for (size_t k = i; k < j; ++k) instanceData_.push_back(frame.items[order[k]].model);
+            glBindBuffer(GL_ARRAY_BUFFER, instanceVbo_);
+            glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(instanceData_.size() * sizeof(Mat4)),
+                         instanceData_.data(), GL_DYNAMIC_DRAW);
+            glDrawElementsInstanced(GL_TRIANGLES, mesh.indexCount, GL_UNSIGNED_INT,
+                                    nullptr, (GLsizei)instanceData_.size());
+            i = j;
+        }
+        glBindVertexArray(0);
+
+        // Скиннинг-касторы (кости уже в текстуре на юните 1 через uploadBones).
+        if (!frame.skinned.empty()) {
+            glUseProgram(shadowSkinProgram_);
+            glUniform1i(uShadowSkinBones_, 1);
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, boneTexture_);
+            for (size_t s = 0; s < frame.skinned.size(); ++s) {
+                const SkinnedItem& it = frame.skinned[s];
+                if (it.mesh == 0 || it.mesh > skinnedMeshes_.size()) continue;
+                const GlMesh& mesh = skinnedMeshes_[it.mesh - 1];
+                glUniformMatrix4fv(uShadowSkinModel_, 1, GL_FALSE, it.model.m);
+                glUniform1i(uShadowSkinBoneOffset_, skinOffsets_[s]);
+                glBindVertexArray(mesh.vao);
+                glDrawElements(GL_TRIANGLES, mesh.indexCount, GL_UNSIGNED_INT, nullptr);
+            }
+            glBindVertexArray(0);
+        }
+    }
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
 bool GlRenderer::initHud() {
@@ -624,25 +738,45 @@ void GlRenderer::renderFrame(const RenderFrame& frame) {
 
     int width = 0, height = 0;
     surfaceSize(width, height);
-    glViewport(0, 0, width, height);
 
-    glClearColor(0.07f, 0.07f, 0.12f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    glActiveTexture(GL_TEXTURE0);
+    // Матрица глазами света (directional): орто-коробка вокруг центра арены.
+    // Прототип: центр в начале координат, охват = shadowRadius (правится слайдером).
+    // Свет отодвигаем на 2.5R, дальняя плоскость покрывает всю коробку.
+    const Vec3 L = normalize(frame.lightDir);
+    const float R = frame.shadowRadius > 1.0f ? frame.shadowRadius : 14.0f;
+    const float dist = R * 2.5f;
+    const Vec3 center{0.0f, 0.0f, 0.0f};
+    const Vec3 up = (std::fabs(L.y) > 0.99f) ? Vec3{0.0f, 0.0f, 1.0f} : Vec3{0.0f, 1.0f, 0.0f};
+    const Mat4 lightVP = Mat4::ortho(-R, R, -R, R, 0.1f, dist + R) *
+                         Mat4::lookAt(center + L * dist, center, up);
 
-    // Кадровые данные -> в UBO один раз. Все программы видят их сразу через
-    // блок Frame, поэтому при смене шейдера ничего до-устанавливать не нужно.
+    // Кадровые данные -> в UBO один раз. Все программы видят их сразу через блок
+    // Frame. Заполняем ДО теневого прохода (depth-шейдеры читают uLightVP отсюда).
     const Mat4 viewProj = frame.proj * frame.view;
     FrameUBO fd;
     std::memcpy(fd.viewProj, viewProj.m, sizeof(fd.viewProj));
-    fd.lightDir[0] = frame.lightDir.x;
-    fd.lightDir[1] = frame.lightDir.y;
-    fd.lightDir[2] = frame.lightDir.z;
+    std::memcpy(fd.lightVP, lightVP.m, sizeof(fd.lightVP));
+    fd.lightDir[0] = L.x; fd.lightDir[1] = L.y; fd.lightDir[2] = L.z;
     fd.viewPos[0] = frame.cameraPos.x;
     fd.viewPos[1] = frame.cameraPos.y;
     fd.viewPos[2] = frame.cameraPos.z;
+    fd.shadowBias = frame.shadowBias;
     glBindBuffer(GL_UNIFORM_BUFFER, frameUbo_);
     glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(FrameUBO), &fd);
+
+    // Кости кадра -> bone-текстура ОДИН раз (используют и теневой, и основной проход).
+    if (!frame.skinned.empty()) uploadBones(frame.skinned);
+
+    // Проход 1 — карта теней (рендер в depth-FBO глазами света).
+    renderShadowPass(frame);
+
+    // Проход 2 — основной кадр. Возврат на экранный фреймбуфер, карта теней на юнит 2.
+    glViewport(0, 0, width, height);
+    glClearColor(0.07f, 0.07f, 0.12f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, shadowTex_);
+    glActiveTexture(GL_TEXTURE0);
 
     // Сортируем по (шейдер, материал, меш): смена программы — самая дорогая,
     // поэтому она первичный ключ; одинаковые состояния идут подряд.
@@ -780,6 +914,10 @@ void GlRenderer::shutdown() {
     }
     if (skinProgram_) glDeleteProgram(skinProgram_);
     if (boneTexture_) glDeleteTextures(1, &boneTexture_);
+    if (shadowShader_.program) glDeleteProgram(shadowShader_.program);
+    if (shadowSkinProgram_) glDeleteProgram(shadowSkinProgram_);
+    if (shadowFbo_) glDeleteFramebuffers(1, &shadowFbo_);
+    if (shadowTex_) glDeleteTextures(1, &shadowTex_);
     if (!textures_.empty()) {
         glDeleteTextures((GLsizei)textures_.size(), textures_.data());
     }
@@ -811,6 +949,10 @@ void GlRenderer::shutdown() {
     skinnedMeshes_.clear();
     skinProgram_ = 0;
     boneTexture_ = 0;
+    shadowShader_.program = 0;
+    shadowSkinProgram_ = 0;
+    shadowFbo_ = 0;
+    shadowTex_ = 0;
     textures_.clear();
     materials_.clear();
     whiteTexture_ = 0;

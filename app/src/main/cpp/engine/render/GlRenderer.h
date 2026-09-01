@@ -51,6 +51,7 @@ private:
         GLuint program = 0;
         GLint uColor = -1;
         GLint uAlbedo = -1;
+        GLint uShadowMap = -1;  // сэмплер карты теней (текстурный юнит 2)
         // uModel'а нет: матрица модели приходит инстансным атрибутом iModel.
     };
     struct GlMaterial {
@@ -71,6 +72,10 @@ private:
     bool assembleShaderSource(GLenum type, const char* path, std::string& out);
     bool initSkin();
     void drawSkinned(const std::vector<SkinnedItem>& items);
+    // Карта теней: depth-FBO + depth-программы; проход глазами света перед основным.
+    bool initShadow();
+    void uploadBones(const std::vector<SkinnedItem>& items);  // кости кадра -> bone-текстура
+    void renderShadowPass(const RenderFrame& frame);
     bool initHud();
     void drawHud(const std::vector<HudText>& texts, int screenW, int screenH);
     void surfaceSize(int& w, int& h) const;  // размер поверхности (EGL/сохранённый)
@@ -107,7 +112,19 @@ private:
     GLint uBoneOffset_ = -1;  // строка начала костей текущей модели
     GLuint boneTexture_ = 0;  // RGBA32F: все матрицы костей кадра (кость = 1 строка)
     std::vector<Mat4> boneData_;         // CPU-накопитель костей на кадр
+    std::vector<int> skinOffsets_;       // строка начала костей каждой модели (кадр)
     std::vector<GlMesh> skinnedMeshes_;  // handle = индекс + 1
+
+    // Карта теней (directional shadow map).
+    static constexpr int kShadowSize = 1024;  // 1024 хватает на арену; на моб не давит
+    GLuint shadowFbo_ = 0;
+    GLuint shadowTex_ = 0;            // depth-текстура (COMPARE_REF -> аппаратный PCF)
+    GlShader shadowShader_;          // инстансный depth-проход (окружение)
+    GLuint shadowSkinProgram_ = 0;   // depth-проход скиннинга
+    GLint uShadowSkinModel_ = -1;
+    GLint uShadowSkinBones_ = -1;
+    GLint uShadowSkinBoneOffset_ = -1;
+    GLint uSkinShadowMap_ = -1;      // сэмплер карты теней в skin-программе (юнит 2)
 
     // HUD: 2D-текст растровым шрифтом поверх сцены.
     GLuint hudProgram_ = 0;

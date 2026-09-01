@@ -38,6 +38,16 @@ void draw(UiShell::Ctx& ctx) {
         ctx.scene.setLightDir(Vec3{dir[0], dir[1], dir[2]});
     }
 
+    ImGui::SeparatorText("Shadows");
+    bool sh = ctx.scene.shadowsEnabled();
+    if (ImGui::Checkbox("Enabled", &sh)) ctx.scene.setShadowsEnabled(sh);
+    ImGui::BeginDisabled(!sh);
+    float sb = ctx.scene.shadowBias();
+    if (ImGui::SliderFloat("Bias", &sb, 0.0002f, 0.010f, "%.4f")) ctx.scene.setShadowBias(sb);
+    float sr = ctx.scene.shadowRadius();
+    if (ImGui::SliderFloat("Area", &sr, 5.0f, 40.0f, "%.1f")) ctx.scene.setShadowRadius(sr);
+    ImGui::EndDisabled();
+
     ImGui::SeparatorText("Renderer");
     bool isGl = (ctx.state.backend == 0);
     ImGui::BeginDisabled(isGl);
