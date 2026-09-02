@@ -166,8 +166,10 @@ public:
     // проецируя мировые точки через view/proj. Чистая клиентская косметика — протокол не трогает.
     struct CombatMarker { Vec3 pos; float hpFrac; Vec3 color; };       // полоска HP над сущностью
     struct DamageNumber { Vec3 pos; float amount; float age; Vec3 color; };  // всплывающее число
+    struct ImpactSpark { Vec3 pos; float age; float maxAge; uint32_t seed; };  // вспышка-искры в точке хита
     const std::vector<CombatMarker>& combatMarkers() const { return markers_; }
     const std::vector<DamageNumber>& damageNumbers() const { return damageNumbers_; }
+    const std::vector<ImpactSpark>& impactSparks() const { return sparks_; }
     const Mat4& viewMatrix() const { return lastView_; }  // матрицы последнего кадра боя
     const Mat4& projMatrix() const { return lastProj_; }
 
@@ -336,9 +338,15 @@ private:
     std::vector<CombatMarker> markers_;              // пересобирается каждый render() из интерп. позиций
     std::vector<DamageNumber> damageNumbers_;        // всплывающие числа урона (живут ~kDmgLife, копятся в applySnapshot)
     std::unordered_map<uint32_t, float> maxHpSeen_;  // id -> наблюдаемый максимум hp (доля бара)
-    std::unordered_map<uint32_t, float> flash_;      // id -> остаток hit-flash, сек
-    float localFlash_ = 0.0f;                        // hit-flash своего героя
+    std::unordered_map<uint32_t, float> flash_;      // id -> остаток hit-flash/scale-punch, сек
+    float localFlash_ = 0.0f;                        // hit-flash/punch своего героя
     Mat4 lastView_, lastProj_;                       // матрицы последнего кадра боя (проекция маркеров в GameUi)
+
+    // Джус/impact (клиентская косметика): искры в точке хита + тряска камеры на крупный урон.
+    std::vector<ImpactSpark> sparks_;  // искры-вспышки (живут ~kSparkLife, рисует GameUi)
+    uint32_t sparkSeed_ = 0x9e3779b9;  // накопитель для псевдослучайных направлений искр
+    float shakeTime_ = 0.0f;           // остаток тряски камеры, сек
+    float shakeAmp_ = 0.0f;            // пиковая амплитуда тряски (world units)
 
     // Стройка: активный режим + выбранный тип + материалы призрака (валид/невалид).
     bool buildActive_ = false;

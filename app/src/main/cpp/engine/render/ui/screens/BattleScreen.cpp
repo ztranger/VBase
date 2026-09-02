@@ -1,6 +1,7 @@
 #include "engine/render/ui/screens/BattleScreen.h"
 
 #include <cfloat>
+#include <cmath>
 #include <cstdio>
 #include <string>
 
@@ -96,7 +97,8 @@ void drawCombatOverlay(Scene& scene) {
     if (!scene.netConnected()) return;
     const std::vector<Scene::CombatMarker>& markers = scene.combatMarkers();
     const std::vector<Scene::DamageNumber>& numbers = scene.damageNumbers();
-    if (markers.empty() && numbers.empty()) return;
+    const std::vector<Scene::ImpactSpark>& sparks = scene.impactSparks();
+    if (markers.empty() && numbers.empty() && sparks.empty()) return;
 
     ImGuiIO& io = ImGui::GetIO();
     const float W = io.DisplaySize.x, H = io.DisplaySize.y;
@@ -126,6 +128,27 @@ void drawCombatOverlay(Scene& scene) {
         dl->AddRectFilled(ImVec2(xmid, a.y), b, IM_COL32(30, 30, 30, 170), 2.0f);  // пустой остаток
         ImU32 col = IM_COL32((int)(mk.color.x * 255), (int)(mk.color.y * 255), (int)(mk.color.z * 255), 235);
         dl->AddRectFilled(a, ImVec2(xmid, b.y), col, 2.0f);  // заполнение по доле hp
+    }
+
+    // Искры в точке хита: радиальный разлёт коротких линий, растёт и гаснет.
+    for (const Scene::ImpactSpark& sp : sparks) {
+        float sx, sy;
+        if (!project(sp.pos, sx, sy)) continue;
+        float t = sp.maxAge > 0.0f ? sp.age / sp.maxAge : 1.0f;
+        if (t > 1.0f) t = 1.0f;
+        int alpha = (int)(235.0f * (1.0f - t));
+        if (alpha <= 0) continue;
+        ImU32 col = IM_COL32(255, 226, 150, alpha);  // тёплый бело-жёлтый
+        const int N = 7;
+        float inner = 2.0f + t * 12.0f;              // разлёт наружу со временем
+        float outer = inner + 8.0f * (1.0f - t) + 2.0f;
+        float base = (float)(sp.seed % 6283) * 0.001f;  // фаза направлений из seed (стабильна на кадрах)
+        for (int i = 0; i < N; ++i) {
+            float ang = base + (float)i * (6.2831853f / (float)N);
+            float ca = std::cos(ang), sa = std::sin(ang);
+            dl->AddLine(ImVec2(sx + ca * inner, sy + sa * inner),
+                        ImVec2(sx + ca * outer, sy + sa * outer), col, 2.0f);
+        }
     }
 
     ImFont* font = ImGui::GetFont();

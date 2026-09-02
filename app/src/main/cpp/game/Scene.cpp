@@ -595,10 +595,13 @@ void Scene::fixedUpdate(float dt) {
     simClock_ += dt;
 }
 
-// --- Читаемость боя (клиентская косметика) ---
-static constexpr float kFlashDur = 0.12f;     // длительность hit-flash, сек
+// --- Читаемость боя + джус (клиентская косметика) ---
+static constexpr float kFlashDur = 0.12f;     // длительность hit-flash / scale-punch, сек
 static constexpr float kDmgLife = 0.9f;       // время жизни всплывающего числа урона, сек
-static constexpr float kDmgMinAmount = 0.5f;  // порог урона, ниже — число не показываем
+static constexpr float kDmgMinAmount = 0.5f;  // порог урона, ниже — число/искры не показываем
+static constexpr float kSparkLife = 0.28f;    // время жизни искр в точке хита, сек
+static constexpr float kPunch = 0.12f;        // амплитуда scale-punch модели при уроне (доля)
+static constexpr float kShakeDur = 0.35f;     // длительность тряски камеры, сек
 
 // Есть ли у типа боевая полоска HP (враги/герои/башни/ядро). Здания-экономика (hp=0) — нет.
 static bool isCombatType(EntityType t) {
@@ -621,6 +624,14 @@ static Vec3 flashMix(Vec3 base, float t) {
     const Vec3 hot{2.4f, 2.0f, 1.7f};
     return base + (hot - base) * t;
 }
+// Применить hit-fx к скиннинг-модели: белая вспышка + scale-punch (t = flash/kFlashDur).
+static void applyHitFx(SkinnedItem& it, float t) {
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    it.color = flashMix(it.color, t);
+    const float s = 1.0f + kPunch * t;                 // короткий «тычок» масштаба (вокруг ног)
+    it.model = it.model * Mat4::scale({s, s, s});
+}
 
 void Scene::applySnapshot() {
     uint32_t myId = client_.myId();
@@ -639,9 +650,15 @@ void Scene::applySnapshot() {
             localRespawn_ = s.aux;  // отсчёт респауна (сервер шлёт в aux при поверженном)
             // Читаемость: свой герой получил урон — вспышка + красное число (респаун = рост hp, не в счёт).
             if (prevLocalHp > 0.0f && s.hp < prevLocalHp - kDmgMinAmount) {
-                damageNumbers_.push_back({{s.x, s.y + combatHeadHeight(EntityType::Hero), s.z},
-                                          prevLocalHp - s.hp, 0.0f, {1.0f, 0.45f, 0.40f}});
+                const float dmg = prevLocalHp - s.hp;
+                Vec3 hit{s.x, s.y + combatHeadHeight(EntityType::Hero), s.z};
+                damageNumbers_.push_back({hit, dmg, 0.0f, {1.0f, 0.45f, 0.40f}});
+                sparks_.push_back({hit, 0.0f, kSparkLife, sparkSeed_ += 0x9e3779b9u});
                 localFlash_ = kFlashDur;
+                // Джус: свой герой под ударом — тряска (по урону, скромнее, чем у ядра).
+                float amp = dmg * 0.006f;
+                if (amp > 0.20f) amp = 0.20f;
+                if (amp > 0.03f) { shakeTime_ = kShakeDur; if (amp > shakeAmp_) shakeAmp_ = amp; }
             }
             player_.position = {s.x, s.y, s.z};
             player_.facingYaw = s.yaw;
@@ -694,11 +711,20 @@ void Scene::applySnapshot() {
             if (s.hp > mx) mx = s.hp;  // спавн на полном → первое значение = максимум
         }
         if (isCombatType(cet) && prevHp > 0.0f && s.hp < prevHp - kDmgMinAmount) {
+            const float dmg = prevHp - s.hp;
             const bool friendly = (cet != EntityType::Enemy) && (s.team == localTeam_);
             Vec3 dcol = friendly ? Vec3{1.0f, 0.55f, 0.45f}    // урон союзнику/своему ядру — красноватый
                                  : Vec3{1.0f, 0.92f, 0.55f};   // урон врагу — жёлтый (я нанёс)
-            damageNumbers_.push_back({{s.x, s.y + combatHeadHeight(cet), s.z}, prevHp - s.hp, 0.0f, dcol});
-            flash_[s.id] = kFlashDur;
+            Vec3 hit{s.x, s.y + combatHeadHeight(cet), s.z};
+            damageNumbers_.push_back({hit, dmg, 0.0f, dcol});
+            sparks_.push_back({hit, 0.0f, kSparkLife, sparkSeed_ += 0x9e3779b9u});  // искры в точке хита
+            flash_[s.id] = kFlashDur;                                               // вспышка + scale-punch
+            // Джус: удар по ядру — тряска камеры (амплитуда по урону).
+            if (cet == EntityType::Core) {
+                float amp = dmg * 0.012f;
+                if (amp > 0.45f) amp = 0.45f;
+                if (amp > 0.05f) { shakeTime_ = kShakeDur; if (amp > shakeAmp_) shakeAmp_ = amp; }
+            }
         }
         r->buffer.push_back({simClock_, {s.x, s.y, s.z}, s.yaw, s.animParam, s.attackT});
         // Ограничиваем историю (~1 сек), чтобы буфер не рос.
@@ -856,7 +882,20 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
     frame.fogColor = fogColor_;
     frame.fogDensity = fogDensity_;
 
-    // Читаемость боя: матрицы кадра для проекции маркеров (GameUi рисует бары/числа),
+    // Джус: тряска камеры на крупный урон — затухающий сдвиг в экранной плоскости (нудж по
+    // translation view-матрицы). Применяем ДО сохранения lastView_, чтобы HUD-оверлей (бары/
+    // числа/искры) трясся ВМЕСТЕ с миром, а не разъезжался с ним.
+    if (shakeTime_ > 0.0f) {
+        shakeTime_ = (shakeTime_ > renderDt) ? shakeTime_ - renderDt : 0.0f;
+        float env = shakeTime_ / kShakeDur;          // 1 -> 0
+        float amp = shakeAmp_ * env * env;           // квадратичный спад — резче гаснет
+        float ph = kShakeDur - shakeTime_;           // растущая фаза
+        frame.view.m[12] += amp * std::sin(ph * 78.0f);        // гориз. дрожь
+        frame.view.m[13] += amp * std::sin(ph * 61.0f + 1.7f); // верт. дрожь (иная частота)
+        if (shakeTime_ <= 0.0f) shakeAmp_ = 0.0f;
+    }
+
+    // Читаемость боя: матрицы кадра для проекции маркеров (GameUi рисует бары/числа/искры),
     // сброс списка маркеров (пересобираем ниже) и продвижение косметических таймеров.
     lastView_ = frame.view;
     lastProj_ = frame.proj;
@@ -870,6 +909,11 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
     for (size_t i = 0; i < damageNumbers_.size();) {
         damageNumbers_[i].age += renderDt;
         if (damageNumbers_[i].age >= kDmgLife) damageNumbers_.erase(damageNumbers_.begin() + (long)i);
+        else ++i;
+    }
+    for (size_t i = 0; i < sparks_.size();) {
+        sparks_[i].age += renderDt;
+        if (sparks_[i].age >= sparks_[i].maxAge) sparks_.erase(sparks_.begin() + (long)i);
         else ++i;
     }
 
@@ -887,7 +931,7 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
         float lp = player_.prevLocoPhase + (player_.locoPhase - player_.prevLocoPhase) * alpha;
         float atk = player_.prevAttackTime + (player_.attackTime - player_.prevAttackTime) * alpha;
         SkinnedItem hi = makeSkinnedItem(chars_, localCharIndex_, p, yaw, ap, at, atk, -1, 0.0f, lp);
-        if (localFlash_ > 0.0f) hi.color = flashMix(hi.color, localFlash_ / kFlashDur);  // вспышка при уроне
+        if (localFlash_ > 0.0f) applyHitFx(hi, localFlash_ / kFlashDur);  // вспышка + punch при уроне
         frame.skinned.push_back(hi);
     }
 
@@ -933,8 +977,8 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
                                 r.ch.animTime, r.ch.attackTime, -1, 0.0f, r.ch.locoPhase);
             it.color = (r.team == localTeam_) ? Vec3{0.55f, 0.75f, 1.0f}   // союзник
                                               : Vec3{1.0f, 0.45f, 0.45f};  // враг
-            auto fh = flash_.find(r.id);  // вспышка при уроне поверх командного оттенка
-            if (fh != flash_.end()) it.color = flashMix(it.color, fh->second / kFlashDur);
+            auto fh = flash_.find(r.id);  // вспышка + punch при уроне поверх командного оттенка
+            if (fh != flash_.end()) applyHitFx(it, fh->second / kFlashDur);
             frame.skinned.push_back(it);
         } else if (et == EntityType::Enemy && !mobs_.empty()) {
             // Моб-скелет: тип по charType (сервер выставляет). attackTime>0 (флаг с сервера) —
@@ -950,8 +994,8 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
                 it = makeSkinnedItem(mobs_, mi, r.ch.position, r.ch.facingYaw, 1.0f /*walk*/,
                                      r.ch.animTime, 0.0f);
             }
-            auto fe = flash_.find(r.id);  // вспышка врага при попадании
-            if (fe != flash_.end()) it.color = flashMix(it.color, fe->second / kFlashDur);
+            auto fe = flash_.find(r.id);  // вспышка + punch врага при попадании
+            if (fe != flash_.end()) applyHitFx(it, fe->second / kFlashDur);
             frame.skinned.push_back(it);
         } else if (et == EntityType::Projectile && projMesh_ != 0) {
             // Снаряд башни (серверная сущность): тонкий вытянутый болт вдоль полёта (yaw с сервера).
