@@ -22,18 +22,9 @@ call "%VSDIR%\VC\Auxiliary\Build\vcvars64.bat" >nul
 set "CMAKE=%VSDIR%\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
 set "NINJA=%VSDIR%\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe"
 
-REM Locate glslc (GLSL -> SPIR-V for the Vulkan backend). Prefer the Vulkan SDK pointed to
-REM by the VULKAN_SDK env var; fall back to the old hard-coded SDK path. Without it the
-REM Vulkan shaders cannot be built and the desktop build will fail at the shader step.
-set "GLSLC="
-if defined VULKAN_SDK if exist "%VULKAN_SDK%\Bin\glslc.exe" set "GLSLC=%VULKAN_SDK%\Bin\glslc.exe"
-if not defined GLSLC if exist "C:\VulkanSDK\1.4.350.0\Bin\glslc.exe" set "GLSLC=C:\VulkanSDK\1.4.350.0\Bin\glslc.exe"
-set "GLSLCARG="
-if defined GLSLC (
-    set "GLSLCARG=-DGLSLC=%GLSLC%"
-) else (
-    echo WARNING: glslc not found - install the Vulkan SDK ^(sets VULKAN_SDK^) or the build will fail compiling Vulkan shaders.
-)
+REM Vulkan shaders (SPIR-V) are NOT compiled by this build: the .spv are committed in
+REM app/src/main/assets/shaders/vk/ and loaded from assets at runtime. So the desktop build
+REM needs no Vulkan SDK / glslc. Regenerate shaders via app/src/main/cpp/shaders/gen_vk_shaders.py.
 
 REM Build type: RelWithDebInfo (optimized /O2 + debug symbols). Deliberately NOT plain
 REM Release: a pre-existing optimization-sensitive UB heisenbug in the client crashes only
@@ -45,6 +36,6 @@ if exist "%~dp0build\CMakeCache.txt" (
     if errorlevel 1 rmdir /s /q "%~dp0build"
 )
 
-"%CMAKE%" -S "%~dp0." -B "%~dp0build" -G "Ninja" -DCMAKE_MAKE_PROGRAM="%NINJA%" -DCMAKE_BUILD_TYPE=RelWithDebInfo %GLSLCARG% || exit /b 1
+"%CMAKE%" -S "%~dp0." -B "%~dp0build" -G "Ninja" -DCMAKE_MAKE_PROGRAM="%NINJA%" -DCMAKE_BUILD_TYPE=RelWithDebInfo || exit /b 1
 "%CMAKE%" --build "%~dp0build" || exit /b 1
 echo BUILD_OK

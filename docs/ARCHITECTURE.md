@@ -113,8 +113,12 @@
 даже в комментариях принимают не все GL-драйверы).
 
 NB: не путать с `app/src/main/cpp/shaders/` — там GLSL-исходники **Vulkan**
-(`*.vert/.frag`, glslc→SPIR-V в `assets/shaders/vk/`, git-ignored); используются
-`VulkanRenderer`.
+(`*.vert/.frag`), которые компилируются в SPIR-V в `assets/shaders/vk/*.spv` и используются
+`VulkanRenderer`. **`.spv` коммитятся в репо** (не git-ignored) — чистый clone собирает рабочий
+Vulkan и на Android (пакуются как ассеты), и на десктопе, БЕЗ внешнего Vulkan SDK. Единый список —
+`cpp/shaders/vk_shaders.txt`. Регенерация: `python app/src/main/cpp/shaders/gen_vk_shaders.py`
+(канонический glslc — bundled в NDK; разные glslc дают разные байты, поэтому одна точка сборки);
+`--check` сверяет актуальность для CI. Сборки шейдеры НЕ компилируют — грузят коммитнутые.
 
 ## 4. Неткод
 

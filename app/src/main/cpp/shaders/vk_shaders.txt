@@ -1,0 +1,17 @@
+# Единый список GLSL-шейдеров, компилируемых в SPIR-V (по одному имени в строке).
+# ЕДИНСТВЕННЫЙ источник правды: читается и десктопным CMake (desktop/CMakeLists.txt), и
+# скриптом регенерации (gen_vk_shaders.py). Выход — app/src/main/assets/shaders/vk/<name>.spv
+# (закоммичен в репо, чтобы чистый clone собирал рабочий Vulkan без внешнего Vulkan SDK).
+# При правке GLSL: перегенерировать (`python gen_vk_shaders.py`) и закоммитить .spv;
+# CI проверяет актуальность (`gen_vk_shaders.py --check`). Пустые строки и '#'-комментарии игнорируются.
+lit.vert
+lit.frag
+unlit.frag
+phong.vert
+phong.frag
+skin.vert
+skin.frag
+hud.vert
+hud.frag
+shadow_depth.vert
+shadow_skin.vert

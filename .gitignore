@@ -49,5 +49,6 @@ google-services.json
 
 .kotlin/
 
-# Скомпилированные SPIR-V шейдеры (генерируются glslc из cpp/shaders/*.vert|frag)
-app/src/main/assets/shaders/vk/
+# SPIR-V шейдеры (app/src/main/assets/shaders/vk/*.spv) НАМЕРЕННО коммитятся — чтобы чистый
+# clone собирал рабочий Vulkan без внешнего Vulkan SDK (Android пакует их как ассеты). Регенерация
+# и проверка актуальности — app/src/main/cpp/shaders/gen_vk_shaders.py (+ --check в CI). Не игнорим.
