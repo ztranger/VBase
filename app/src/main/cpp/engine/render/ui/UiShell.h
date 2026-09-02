@@ -22,8 +22,22 @@ struct Ctx {
     bool btn(const char* label, const ImVec2& size = ImVec2(0, 0)) const;
     bool beginPanel(const char* name, bool* p_open = nullptr,
                     ImGuiWindowFlags flags = 0) const;
+    // «Нормальное» окно: приклеено к прямоугольнику (пиксели), без драга/ресайза/сейва.
+    // Для игровых панелей — чтобы не таскались как debug-окна. extraFlags — доп. флаги
+    // (напр. AlwaysAutoResize, тогда size задаёт только позицию/ширину).
+    bool beginPanelRect(const char* name, const ImVec2& pos, const ImVec2& size,
+                        bool* p_open = nullptr, ImGuiWindowFlags extraFlags = 0) const;
     void endPanel() const;
 };
+
+// Метрики UI в единицах шрифта — масштабируются под DPI (платформа масштабирует шрифт).
+// Звать только внутри кадра ImGui (нужен активный шрифт). ~54/16 px на десктопе (font 18).
+float navBarHeight();  // высота нижнего нав-бара главного меню (общая для бара и раскладки)
+float uiMargin();      // стандартное поле от краёв экрана и между окнами
+
+// Прямоугольник контент-области меню (над нав-баром, с полями). Панели разделов
+// (Главная/Инвентарь/…) якорятся сюда — заполняют область, а не висят коробочкой в углу.
+void menuContentRect(ImVec2& pos, ImVec2& size);
 
 void setMode(UiMode mode);
 UiMode mode();

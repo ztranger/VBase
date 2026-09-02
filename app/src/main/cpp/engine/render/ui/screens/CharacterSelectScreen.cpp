@@ -9,11 +9,12 @@
 namespace CharacterSelectScreen {
 
 void draw(UiShell::Ctx& ctx) {
-    // Панель слева; 3D-превью выбранного персонажа рисует Scene по центру (за панелью).
-    ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(340, 520), ImGuiCond_FirstUseEver);
-
-    if (!ctx.beginPanel("Выбор персонажа###uiCharSelect")) {
+    // Панель — левая колонка на всю высоту (заякорена); 3D-превью выбранного персонажа
+    // рисует Scene по центру/справа за ней. Метрики в единицах шрифта — под DPI.
+    const ImVec2 disp = ImGui::GetIO().DisplaySize;
+    const float m = UiShell::uiMargin();
+    if (!ctx.beginPanelRect("Выбор персонажа###uiCharSelect", ImVec2(m, m),
+                            ImVec2(ImGui::GetFontSize() * 20.0f, disp.y - m * 2.0f))) {
         ctx.endPanel();
         return;
     }

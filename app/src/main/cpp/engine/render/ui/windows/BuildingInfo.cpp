@@ -1,6 +1,5 @@
 #include "engine/render/ui/windows/BuildingInfo.h"
 
-#include <cfloat>
 #include <string>
 
 #include "imgui.h"
@@ -15,12 +14,14 @@ void draw(UiShell::Ctx& ctx) {
     const BuildingInfo* info = ctx.scene.selectedInfo();
     if (selType < 0 || info == nullptr) return;
 
-    ImGui::SetNextWindowPos(ImVec2(400, 90), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(440, 320), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(280, 180), ImVec2(FLT_MAX, FLT_MAX));
+    // Заякорено в правом верхнем углу (не таскается): панель инфо о выбранном здании.
+    // Метрики в единицах шрифта — масштабируются под DPI.
+    const float font = ImGui::GetFontSize();
+    const float w = font * 20.0f, h = font * 13.0f;
+    const ImVec2 pos(ImGui::GetIO().DisplaySize.x - w - UiShell::uiMargin(), font * 5.5f);
     std::string title = (info->name.empty() ? "Здание" : info->name) + "###buildInfoPanel";
     bool open = true;
-    if (!ctx.beginPanel(title.c_str(), &open)) {
+    if (!ctx.beginPanelRect(title.c_str(), pos, ImVec2(w, h), &open)) {
         ctx.endPanel();
         if (!open) ctx.scene.clearSelection();
         return;

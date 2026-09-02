@@ -12,7 +12,9 @@
 namespace {
 
 void drawStubBody(UiShell::Ctx& ctx, const char* title, const char* tip) {
-    if (!ctx.beginPanel(title)) {
+    ImVec2 pos, size;
+    UiShell::menuContentRect(pos, size);  // заякорить на всю область над нав-баром
+    if (!ctx.beginPanelRect(title, pos, size)) {
         ctx.endPanel();
         return;
     }
@@ -28,10 +30,9 @@ void drawStubBody(UiShell::Ctx& ctx, const char* title, const char* tip) {
 namespace HomePanel {
 
 void draw(UiShell::Ctx& ctx) {
-    ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(480, 520), ImGuiCond_FirstUseEver);
-
-    if (!ctx.beginPanel("VBase###uiHomePanel")) {
+    ImVec2 pos, size;
+    UiShell::menuContentRect(pos, size);  // заякорить на всю область над нав-баром
+    if (!ctx.beginPanelRect("VBase###uiHomePanel", pos, size)) {
         ctx.endPanel();
         return;
     }
@@ -171,26 +172,18 @@ void draw(UiShell::Ctx& ctx) {
 namespace MenuStubPanels {
 
 void drawInventory(UiShell::Ctx& ctx) {
-    ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(480, 360), ImGuiCond_FirstUseEver);
     drawStubBody(ctx, "Инвентарь###uiInvPanel", "Инвентарь героя и расходники.");
 }
 
 void drawQuests(UiShell::Ctx& ctx) {
-    ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(480, 360), ImGuiCond_FirstUseEver);
     drawStubBody(ctx, "Квесты###uiQuestsPanel", "Журнал заданий и наград.");
 }
 
 void drawShop(UiShell::Ctx& ctx) {
-    ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(480, 360), ImGuiCond_FirstUseEver);
     drawStubBody(ctx, "Магазин###uiShopPanel", "Покупка построек и улучшений.");
 }
 
 void drawEvents(UiShell::Ctx& ctx) {
-    ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(480, 360), ImGuiCond_FirstUseEver);
     drawStubBody(ctx, "События###uiEventsPanel", "Временные ивенты и награды.");
 }
 

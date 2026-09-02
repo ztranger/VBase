@@ -38,6 +38,26 @@ UiShell::pushYesNo("Выход", "Покинуть бой?", [](DialogResult r){
 Десктопный флаг `--loading` зовёт `GameUi::requestLoadingScreen()` один раз при
 старте (`UiShell::setMode(UiMode::Loading)`); дальше режимом рулит только shell.
 
+## Окна: заякоренные, не таскаются (не debug-залипухи)
+
+Игровые панели — **«нормальные» окна**: приклеены к прямоугольнику, без свободного
+перетаскивания/ресайза/сейва позиции. Открывать через `Ctx::beginPanelRect(name, pos, size,
+p_open=nullptr, extraFlags=0)` — он ставит `SetNextWindowPos/Size(..., Always)` и флаги
+`NoMove|NoResize|NoCollapse|NoSavedSettings`. Скин уважает `NoMove` (drag за title выключается).
+НЕ ставить панели через `beginPanel` + `SetNextWindowPos(..., FirstUseEver)` — так они плавают
+коробочкой в углу и таскаются. Исключение — **`DebugPanel`**: это дебаг-инструмент, ему
+перетаскивание оставлено намеренно.
+
+- **Главное меню** (Home + стабы): панель заполняет область над нав-баром —
+  `UiShell::menuContentRect(pos, size)`. Метрики — в **единицах шрифта** (масштаб под DPI, т.к.
+  платформа ставит `style.FontScaleDpi`): `UiShell::navBarHeight()` (≈3× шрифта) и
+  `UiShell::uiMargin()` (≈0.9× шрифта); прочие панели считают позиции/размеры от `ImGui::GetFontSize()`.
+- **Выбор персонажа**: левая колонка на всю высоту (превью справа за ней).
+- **Бой**: HUD — верх-лево (`NoMove`), панель стройки — лево под HUD (авто-высота,
+  `AlwaysAutoResize`), инфо о здании — верх-право.
+- Авто-высота под контент: передать `extraFlags=ImGuiWindowFlags_AlwaysAutoResize` (тогда
+  `size` задаёт только позицию/ширину-хинт).
+
 ## Как добавить раздел главного меню
 
 1. Добавить значение в `enum class MainMenuPanel` (`UiTypes.h`).

@@ -229,10 +229,13 @@ bool BeginPanel(const char* name, const Assets& skin, bool* p_open, ImGuiWindowF
                     ImVec2(titleR - pad * 0.5f, titleBot - 1.0f),
                     IM_COL32(196, 165, 116, 180), 1.5f);  // copper underline
 
-        // Перетаскивание окна за title.
+        // Перетаскивание окна за title — только для перемещаемых окон. С флагом NoMove
+        // (заякоренные «нормальные» панели) drag выключен, но InvisibleButton оставляем:
+        // он глотает клики по title-бару, чтобы они не проваливались в мир/контент.
         ImGui::SetCursorPos(ImVec2(frame, frame));
         ImGui::InvisibleButton("##uiskin_title_drag", ImVec2(wsz.x - frame * 2.0f, titleH));
-        if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+        if ((flags & ImGuiWindowFlags_NoMove) == 0 && ImGui::IsItemActive() &&
+            ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
             const ImVec2 d = ImGui::GetIO().MouseDelta;
             ImGui::SetWindowPos(ImVec2(p0.x + d.x, p0.y + d.y));
         }

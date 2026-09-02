@@ -10,10 +10,11 @@ namespace {
 
 void drawChrome(UiShell::Ctx& ctx) {
     ImGuiIO& io = ImGui::GetIO();
-    const float barH = 56.0f;
+    const float font = ImGui::GetFontSize();
+    const float barH = UiShell::navBarHeight();
     ImGui::SetNextWindowPos(ImVec2(0, io.DisplaySize.y - barH), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, barH), ImGuiCond_Always);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 8));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(font * 0.45f, font * 0.45f));
     ImGui::Begin("##mainMenuChrome", nullptr,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
@@ -22,7 +23,7 @@ void drawChrome(UiShell::Ctx& ctx) {
     auto nav = [&](const char* label, MainMenuPanel id) {
         const bool active = UiShell::panel() == id;
         if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.72f, 0.45f, 0.14f, 1.0f));
-        if (ctx.btn(label, ImVec2(0, barH - 16))) UiShell::setPanel(id);
+        if (ctx.btn(label, ImVec2(0, barH - font))) UiShell::setPanel(id);
         if (active) ImGui::PopStyleColor();
         ImGui::SameLine();
     };

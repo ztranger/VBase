@@ -17,12 +17,13 @@ namespace BattleScreen {
 namespace {
 
 void drawHud(UiShell::Ctx& ctx) {
-    ImGui::SetNextWindowPos(ImVec2(16, 16), ImGuiCond_Always);
+    const float m = UiShell::uiMargin();
+    ImGui::SetNextWindowPos(ImVec2(m, m), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.72f);
     if (ImGui::Begin("##battleHud", nullptr,
                      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
-                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
-                         ImGuiWindowFlags_NoNav)) {
+                         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                         ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav)) {
         ImGui::Text("Ресурс: %.0f / %.0f", (double)ctx.scene.resourceCurrent(),
                     (double)ctx.scene.resourceCap());
         if (ctx.scene.netConnected()) {
@@ -43,9 +44,10 @@ void drawHud(UiShell::Ctx& ctx) {
 void drawBuild(UiShell::Ctx& ctx) {
     if (!ctx.scene.netConnected()) return;
 
-    ImGui::SetNextWindowPos(ImVec2(16, 90), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(360, 280), ImGuiCond_FirstUseEver);
-    if (!ctx.beginPanel("Строительство###uiBuildPanel")) {
+    // Заякорена слева под HUD (метрики в единицах шрифта — под DPI), авто-высота по контенту.
+    const float font = ImGui::GetFontSize();
+    if (!ctx.beginPanelRect("Строительство###uiBuildPanel", ImVec2(UiShell::uiMargin(), font * 5.5f),
+                            ImVec2(font * 19.0f, 0.0f), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ctx.endPanel();
         return;
     }

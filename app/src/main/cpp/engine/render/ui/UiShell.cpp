@@ -27,9 +27,31 @@ bool Ctx::beginPanel(const char* name, bool* p_open, ImGuiWindowFlags flags) con
     return ImGui::Begin(name, p_open, flags);
 }
 
+bool Ctx::beginPanelRect(const char* name, const ImVec2& pos, const ImVec2& size, bool* p_open,
+                         ImGuiWindowFlags extraFlags) const {
+    ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+    const ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                                   ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings |
+                                   extraFlags;
+    return beginPanel(name, p_open, flags);
+}
+
 void Ctx::endPanel() const {
     if (skin.ready) UiSkin::EndPanel();
     else ImGui::End();
+}
+
+float navBarHeight() { return ImGui::GetFontSize() * 3.0f; }
+float uiMargin() { return ImGui::GetFontSize() * 0.9f; }
+
+void menuContentRect(ImVec2& pos, ImVec2& size) {
+    const ImVec2 disp = ImGui::GetIO().DisplaySize;
+    const float m = uiMargin();  // поля от краёв экрана и до нав-бара (в единицах шрифта)
+    pos = ImVec2(m, m);
+    size = ImVec2(disp.x - m * 2.0f, disp.y - navBarHeight() - m * 2.0f);
+    if (size.x < 200.0f) size.x = 200.0f;  // страховка на крошечном экране
+    if (size.y < 160.0f) size.y = 160.0f;
 }
 
 void setMode(UiMode mode) {
