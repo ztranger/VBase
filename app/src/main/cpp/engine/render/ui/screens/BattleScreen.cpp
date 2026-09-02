@@ -1,5 +1,7 @@
 #include "engine/render/ui/screens/BattleScreen.h"
 
+#include <cfloat>
+#include <cstdio>
 #include <string>
 
 #include "imgui.h"
@@ -87,6 +89,65 @@ void drawBuild(UiShell::Ctx& ctx) {
     ctx.endPanel();
 }
 
+// Читаемость боя: worldspace HP-бары + всплывающие числа урона. Данные производит Scene
+// (диф hp из снапшотов), здесь только проецируем мировые точки через view/proj и рисуем.
+// Фоновый draw-list — над 3D, но ПОД окнами ImGui (бары не перекрывают HUD/панели).
+void drawCombatOverlay(Scene& scene) {
+    if (!scene.netConnected()) return;
+    const std::vector<Scene::CombatMarker>& markers = scene.combatMarkers();
+    const std::vector<Scene::DamageNumber>& numbers = scene.damageNumbers();
+    if (markers.empty() && numbers.empty()) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    const float W = io.DisplaySize.x, H = io.DisplaySize.y;
+    const Mat4 vp = scene.projMatrix() * scene.viewMatrix();
+    const float* m = vp.m;  // column-major: clip = VP * (x,y,z,1)
+    auto project = [&](const Vec3& p, float& sx, float& sy) -> bool {
+        float cx = m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12];
+        float cy = m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13];
+        float cw = m[3] * p.x + m[7] * p.y + m[11] * p.z + m[15];
+        if (cw <= 0.0001f) return false;  // точка за камерой
+        float ndcx = cx / cw, ndcy = cy / cw;
+        if (ndcx < -1.3f || ndcx > 1.3f || ndcy < -1.3f || ndcy > 1.3f) return false;  // за краем
+        sx = (ndcx * 0.5f + 0.5f) * W;
+        sy = (1.0f - (ndcy * 0.5f + 0.5f)) * H;
+        return true;
+    };
+
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    for (const Scene::CombatMarker& mk : markers) {
+        float sx, sy;
+        if (!project(mk.pos, sx, sy)) continue;
+        const float bw = 46.0f, bh = 6.0f;
+        ImVec2 a(sx - bw * 0.5f, sy - bh * 0.5f), b(sx + bw * 0.5f, sy + bh * 0.5f);
+        float f = mk.hpFrac < 0.0f ? 0.0f : (mk.hpFrac > 1.0f ? 1.0f : mk.hpFrac);
+        float xmid = a.x + (b.x - a.x) * f;
+        dl->AddRectFilled(ImVec2(a.x - 1, a.y - 1), ImVec2(b.x + 1, b.y + 1), IM_COL32(0, 0, 0, 190), 2.0f);
+        dl->AddRectFilled(ImVec2(xmid, a.y), b, IM_COL32(30, 30, 30, 170), 2.0f);  // пустой остаток
+        ImU32 col = IM_COL32((int)(mk.color.x * 255), (int)(mk.color.y * 255), (int)(mk.color.z * 255), 235);
+        dl->AddRectFilled(a, ImVec2(xmid, b.y), col, 2.0f);  // заполнение по доле hp
+    }
+
+    ImFont* font = ImGui::GetFont();
+    const float fs = ImGui::GetFontSize() * 1.2f;
+    for (const Scene::DamageNumber& dn : numbers) {
+        float sx, sy;
+        if (!project(dn.pos, sx, sy)) continue;
+        float lifeT = dn.age / 0.9f;  // синхронно с kDmgLife в Scene
+        if (lifeT > 1.0f) lifeT = 1.0f;
+        int alpha = (int)(255.0f * (1.0f - lifeT * lifeT));  // держится, потом резко гаснет
+        sy -= dn.age * 42.0f;  // всплывает вверх в экранных пикселях (стабильно на любой дистанции)
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "%d", (int)(dn.amount + 0.5f));
+        ImVec2 ts = font->CalcTextSizeA(fs, FLT_MAX, 0.0f, buf);
+        ImVec2 tp(sx - ts.x * 0.5f, sy - ts.y * 0.5f);
+        dl->AddText(font, fs, ImVec2(tp.x + 1.5f, tp.y + 1.5f), IM_COL32(0, 0, 0, alpha), buf);
+        dl->AddText(font, fs, tp,
+                    IM_COL32((int)(dn.color.x * 255), (int)(dn.color.y * 255), (int)(dn.color.z * 255), alpha),
+                    buf);
+    }
+}
+
 void drawMatchBanner(Scene& scene) {
     int phase = scene.matchPhase();
     if (phase == 0) return;
@@ -118,6 +179,7 @@ void drawJoysticks(Scene& scene) {
 }  // namespace
 
 void draw(UiShell::Ctx& ctx) {
+    drawCombatOverlay(ctx.scene);  // HP-бары/числа — под окнами (фоновый draw-list)
     drawHud(ctx);
     drawBuild(ctx);
     BuildingInfoWindow::draw(ctx);

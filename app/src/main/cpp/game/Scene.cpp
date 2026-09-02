@@ -595,6 +595,33 @@ void Scene::fixedUpdate(float dt) {
     simClock_ += dt;
 }
 
+// --- Читаемость боя (клиентская косметика) ---
+static constexpr float kFlashDur = 0.12f;     // длительность hit-flash, сек
+static constexpr float kDmgLife = 0.9f;       // время жизни всплывающего числа урона, сек
+static constexpr float kDmgMinAmount = 0.5f;  // порог урона, ниже — число не показываем
+
+// Есть ли у типа боевая полоска HP (враги/герои/башни/ядро). Здания-экономика (hp=0) — нет.
+static bool isCombatType(EntityType t) {
+    return t == EntityType::Enemy || t == EntityType::Hero ||
+           t == EntityType::Tower || t == EntityType::Core;
+}
+// Высота точки «над головой» для бара/числа (грубо под визуал типа).
+static float combatHeadHeight(EntityType t) {
+    switch (t) {
+        case EntityType::Tower: return 3.0f;
+        case EntityType::Core:  return 2.6f;
+        case EntityType::Hero:  return 2.4f;
+        default:                return 2.1f;  // Enemy и пр.
+    }
+}
+// Подмешать «горячий» цвет вспышки к базовому по t∈[0..1] (overbright — uColor>1 высветляет).
+static Vec3 flashMix(Vec3 base, float t) {
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    const Vec3 hot{2.4f, 2.0f, 1.7f};
+    return base + (hot - base) * t;
+}
+
 void Scene::applySnapshot() {
     uint32_t myId = client_.myId();
     if (myId == 0) return;  // ждём Welcome, иначе примем себя за чужого
@@ -607,8 +634,15 @@ void Scene::applySnapshot() {
             // Reconciliation: ставим авторитетное состояние сервера и ПЕРЕИГРЫВАЕМ
             // все вводы, которые сервер ещё не обработал (seq > ack).
             localTeam_ = s.team;  // своя команда — для ресурса/стройки per-team
+            const float prevLocalHp = localHp_;
             localHp_ = s.hp;      // ставки: hp своего героя (<=0 = повержен)
             localRespawn_ = s.aux;  // отсчёт респауна (сервер шлёт в aux при поверженном)
+            // Читаемость: свой герой получил урон — вспышка + красное число (респаун = рост hp, не в счёт).
+            if (prevLocalHp > 0.0f && s.hp < prevLocalHp - kDmgMinAmount) {
+                damageNumbers_.push_back({{s.x, s.y + combatHeadHeight(EntityType::Hero), s.z},
+                                          prevLocalHp - s.hp, 0.0f, {1.0f, 0.45f, 0.40f}});
+                localFlash_ = kFlashDur;
+            }
             player_.position = {s.x, s.y, s.z};
             player_.facingYaw = s.yaw;
             player_.speed01 = s.speed01;
@@ -638,6 +672,7 @@ void Scene::applySnapshot() {
         for (auto& re : remoteEntities_) {
             if (re.id == s.id) { r = &re; break; }
         }
+        const float prevHp = (r != nullptr) ? r->hp : 0.0f;  // до перезаписи — для дифа урона
         if (r == nullptr) {
             RemoteEntity re;
             re.id = s.id;
@@ -651,6 +686,20 @@ void Scene::applySnapshot() {
         r->charType = s.charType;  // какой моделью рисовать чужого героя (индекс ростера)
         r->aux = s.aux;  // ресурс в хранилище и т.п. (последнее значение)
         r->hp = s.hp;    // здоровье (ядро/враг)
+
+        // Читаемость боя: наблюдаемый максимум hp (для доли бара) + число урона/вспышка по дифу.
+        const EntityType cet = (EntityType)s.type;
+        if (isCombatType(cet) && s.hp > 0.0f) {
+            float& mx = maxHpSeen_[s.id];
+            if (s.hp > mx) mx = s.hp;  // спавн на полном → первое значение = максимум
+        }
+        if (isCombatType(cet) && prevHp > 0.0f && s.hp < prevHp - kDmgMinAmount) {
+            const bool friendly = (cet != EntityType::Enemy) && (s.team == localTeam_);
+            Vec3 dcol = friendly ? Vec3{1.0f, 0.55f, 0.45f}    // урон союзнику/своему ядру — красноватый
+                                 : Vec3{1.0f, 0.92f, 0.55f};   // урон врагу — жёлтый (я нанёс)
+            damageNumbers_.push_back({{s.x, s.y + combatHeadHeight(cet), s.z}, prevHp - s.hp, 0.0f, dcol});
+            flash_[s.id] = kFlashDur;
+        }
         r->buffer.push_back({simClock_, {s.x, s.y, s.z}, s.yaw, s.animParam, s.attackT});
         // Ограничиваем историю (~1 сек), чтобы буфер не рос.
         while (r->buffer.size() > 2 && r->buffer[1].t < simClock_ - 1.0) {
@@ -676,6 +725,8 @@ void Scene::applySnapshot() {
                     dyingMobs_.push_back({mi, p, yaw, 0.0f, mobs_[mi].deathClipDur});
                 }
             }
+            maxHpSeen_.erase(re.id);  // чистим косметику боя вместе с сущностью
+            flash_.erase(re.id);
             remoteEntities_.erase(remoteEntities_.begin() + (long)i);
         } else {
             ++i;
@@ -805,6 +856,23 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
     frame.fogColor = fogColor_;
     frame.fogDensity = fogDensity_;
 
+    // Читаемость боя: матрицы кадра для проекции маркеров (GameUi рисует бары/числа),
+    // сброс списка маркеров (пересобираем ниже) и продвижение косметических таймеров.
+    lastView_ = frame.view;
+    lastProj_ = frame.proj;
+    markers_.clear();
+    if (localFlash_ > 0.0f) localFlash_ = (localFlash_ > renderDt) ? localFlash_ - renderDt : 0.0f;
+    for (auto it = flash_.begin(); it != flash_.end();) {
+        it->second -= renderDt;
+        if (it->second <= 0.0f) it = flash_.erase(it);
+        else ++it;
+    }
+    for (size_t i = 0; i < damageNumbers_.size();) {
+        damageNumbers_[i].age += renderDt;
+        if (damageNumbers_[i].age >= kDmgLife) damageNumbers_.erase(damageNumbers_.begin() + (long)i);
+        else ++i;
+    }
+
     for (const GameObject& obj : objects_) {
         Transform t = obj.transform;
         t.rotation.y = obj.prevRotY + (obj.transform.rotation.y - obj.prevRotY) * alpha;
@@ -818,8 +886,9 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
         float at = player_.prevAnimTime + (player_.animTime - player_.prevAnimTime) * alpha;
         float lp = player_.prevLocoPhase + (player_.locoPhase - player_.prevLocoPhase) * alpha;
         float atk = player_.prevAttackTime + (player_.attackTime - player_.prevAttackTime) * alpha;
-        frame.skinned.push_back(
-            makeSkinnedItem(chars_, localCharIndex_, p, yaw, ap, at, atk, -1, 0.0f, lp));
+        SkinnedItem hi = makeSkinnedItem(chars_, localCharIndex_, p, yaw, ap, at, atk, -1, 0.0f, lp);
+        if (localFlash_ > 0.0f) hi.color = flashMix(hi.color, localFlash_ / kFlashDur);  // вспышка при уроне
+        frame.skinned.push_back(hi);
     }
 
     // Удалённые игроки: рендерим «прошлое» на kInterpDelay назад, интерполируя
@@ -864,6 +933,8 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
                                 r.ch.animTime, r.ch.attackTime, -1, 0.0f, r.ch.locoPhase);
             it.color = (r.team == localTeam_) ? Vec3{0.55f, 0.75f, 1.0f}   // союзник
                                               : Vec3{1.0f, 0.45f, 0.45f};  // враг
+            auto fh = flash_.find(r.id);  // вспышка при уроне поверх командного оттенка
+            if (fh != flash_.end()) it.color = flashMix(it.color, fh->second / kFlashDur);
             frame.skinned.push_back(it);
         } else if (et == EntityType::Enemy && !mobs_.empty()) {
             // Моб-скелет: тип по charType (сервер выставляет). attackTime>0 (флаг с сервера) —
@@ -879,6 +950,8 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
                 it = makeSkinnedItem(mobs_, mi, r.ch.position, r.ch.facingYaw, 1.0f /*walk*/,
                                      r.ch.animTime, 0.0f);
             }
+            auto fe = flash_.find(r.id);  // вспышка врага при попадании
+            if (fe != flash_.end()) it.color = flashMix(it.color, fe->second / kFlashDur);
             frame.skinned.push_back(it);
         } else if (et == EntityType::Projectile && projMesh_ != 0) {
             // Снаряд башни (серверная сущность): тонкий вытянутый болт вдоль полёта (yaw с сервера).
@@ -890,6 +963,19 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
             if (v.mesh != 0)
                 frame.items.push_back({v.mesh, v.material,
                     Mat4::translation(r.ch.position + Vec3{0.0f, v.yOffset, 0.0f})});
+        }
+
+        // HP-бар над боевой сущностью (враг/герой/башня/ядро) — из интерполированной позиции.
+        if (isCombatType(et) && r.hp > 0.0f) {
+            auto mit = maxHpSeen_.find(r.id);
+            float mx = (mit != maxHpSeen_.end() && mit->second > 0.0f) ? mit->second : r.hp;
+            float frac = r.hp / mx;
+            if (frac < 0.0f) frac = 0.0f;
+            if (frac > 1.0f) frac = 1.0f;
+            Vec3 bcol = (et == EntityType::Enemy)  ? Vec3{0.90f, 0.25f, 0.20f}   // враг — красный
+                        : (r.team == localTeam_)   ? Vec3{0.40f, 0.85f, 0.40f}   // свой/союзник — зелёный
+                                                   : Vec3{0.90f, 0.25f, 0.20f};  // враг-сторона (PvP) — красный
+            markers_.push_back({r.ch.position + Vec3{0.0f, combatHeadHeight(et), 0.0f}, frac, bcol});
         }
     }
 

@@ -161,6 +161,16 @@ public:
     bool heroDead() const { return client_.connected() && localHp_ <= 0.0f; }
     float heroRespawnLeft() const { return localRespawn_; }  // секунд до респауна
 
+    // Читаемость боя: worldspace HP-бары + всплывающие числа урона. Scene (game/) только
+    // ПРОИЗВОДИТ данные (диф hp из снапшотов, без ImGui); рисует GameUi (engine/render),
+    // проецируя мировые точки через view/proj. Чистая клиентская косметика — протокол не трогает.
+    struct CombatMarker { Vec3 pos; float hpFrac; Vec3 color; };       // полоска HP над сущностью
+    struct DamageNumber { Vec3 pos; float amount; float age; Vec3 color; };  // всплывающее число
+    const std::vector<CombatMarker>& combatMarkers() const { return markers_; }
+    const std::vector<DamageNumber>& damageNumbers() const { return damageNumbers_; }
+    const Mat4& viewMatrix() const { return lastView_; }  // матрицы последнего кадра боя
+    const Mat4& projMatrix() const { return lastProj_; }
+
     float modelScale() const { return chars_.empty() ? 1.0f : chars_[localCharIndex_].scale; }
     void setModelScale(float s) { if (!chars_.empty()) chars_[localCharIndex_].scale = s; }
     float modelYawOffset() const { return chars_.empty() ? 0.0f : chars_[localCharIndex_].yawOffset; }
@@ -320,6 +330,15 @@ private:
     float localHp_ = 1.0f;      // hp своего героя (>0 = жив); из снапшота (вне сессии — «жив»)
     float localMaxHp_ = 100.0f; // макс. hp героя (из конфига)
     float localRespawn_ = 0.0f; // отсчёт респауна при поверженном (из aux сущности)
+
+    // Читаемость боя (клиентская косметика; протокол не трогает). Максимума hp в снапшоте нет —
+    // берём наблюдаемый максимум (сущности спавнятся на полном hp → первое/наибольшее = max).
+    std::vector<CombatMarker> markers_;              // пересобирается каждый render() из интерп. позиций
+    std::vector<DamageNumber> damageNumbers_;        // всплывающие числа урона (живут ~kDmgLife, копятся в applySnapshot)
+    std::unordered_map<uint32_t, float> maxHpSeen_;  // id -> наблюдаемый максимум hp (доля бара)
+    std::unordered_map<uint32_t, float> flash_;      // id -> остаток hit-flash, сек
+    float localFlash_ = 0.0f;                        // hit-flash своего героя
+    Mat4 lastView_, lastProj_;                       // матрицы последнего кадра боя (проекция маркеров в GameUi)
 
     // Стройка: активный режим + выбранный тип + материалы призрака (валид/невалид).
     bool buildActive_ = false;
