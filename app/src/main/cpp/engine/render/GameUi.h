@@ -14,6 +14,7 @@ struct AssetSource;
 struct GameUiState {
     float fps = 0.0f;
     char joinIp[64] = "127.0.0.1";
+    int joinPort = 7777;             // порт сервера для Join (kNetPort по умолчанию); персистится
 
     bool vulkanAvailable = false;
     int backend = 0;         // 0 = OpenGL, 1 = Vulkan

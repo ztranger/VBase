@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -33,19 +34,40 @@ namespace {
 
 constexpr float kTick = kTickDt;  // единый шаг симуляции (из engine/net/Net.h)
 
-// Персист выбора персонажа между запусками — маленький файл в рабочей папке (build/).
+// Персист пользовательских настроек между запусками — маленький файл в рабочей папке
+// (build/). Формат «ключ значение» построчно; неизвестные ключи игнорируются, поэтому
+// файл расширяемый. Легаси-файл (одинокое целое = charIndex) читается как раньше.
 constexpr const char* kSettingsFile = "vbase_settings.txt";
-int loadCharIndex(const char* path) {
-    int v = -1;
-    if (FILE* f = std::fopen(path, "r")) {
-        if (std::fscanf(f, "%d", &v) != 1) v = -1;
-        std::fclose(f);
+struct DesktopSettings {
+    int charIndex = -1;
+    char joinIp[64] = "127.0.0.1";
+    int joinPort = 7777;  // kNetPort
+};
+void loadSettings(const char* path, DesktopSettings& s) {
+    FILE* f = std::fopen(path, "r");
+    if (f == nullptr) return;
+    char line[128];
+    while (std::fgets(line, sizeof(line), f) != nullptr) {
+        char key[32], val[96];
+        if (std::sscanf(line, "%31s %95s", key, val) == 2) {
+            if (std::strcmp(key, "char") == 0) {
+                s.charIndex = std::atoi(val);
+            } else if (std::strcmp(key, "ip") == 0) {
+                std::snprintf(s.joinIp, sizeof(s.joinIp), "%s", val);
+            } else if (std::strcmp(key, "port") == 0) {
+                int p = std::atoi(val);
+                if (p >= 1 && p <= 65535) s.joinPort = p;
+            }
+        } else {
+            int v = 0;  // легаси: одинокое целое = сохранённый charIndex
+            if (std::sscanf(line, "%d", &v) == 1) s.charIndex = v;
+        }
     }
-    return v;
+    std::fclose(f);
 }
-void saveCharIndex(const char* path, int v) {
+void saveSettings(const char* path, const DesktopSettings& s) {
     if (FILE* f = std::fopen(path, "w")) {
-        std::fprintf(f, "%d\n", v);
+        std::fprintf(f, "char %d\nip %s\nport %d\n", s.charIndex, s.joinIp, s.joinPort);
         std::fclose(f);
     }
 }
@@ -60,7 +82,7 @@ int keyAxis(GLFWwindow* w, int pos, int neg) {
 // Запустить клиент на заданном бэкенде (0 = OpenGL, 1 = Vulkan). Создаёт своё окно
 // и рендер. Возвращает следующий бэкенд для перезапуска (по кнопке в GameUi) либо
 // -1, если окно закрыто/ESC (выход). ui переживает переключения (свет/камера/FPS).
-int runClient(int backend, GameUiState& ui, const std::string& assetsDir,
+int runClient(int backend, GameUiState& ui, DesktopSettings& saved, const std::string& assetsDir,
               const char* serverIp, const char* scenePath, bool autoJoin) {
     const bool useVk = (backend == 1);
 
@@ -114,7 +136,6 @@ int runClient(int backend, GameUiState& ui, const std::string& assetsDir,
         scene.selectCharacter(ui.charIndex);
         std::printf("Восстановлен сохранённый персонаж: индекс %d\n", ui.charIndex);
     }
-    int lastSavedChar = ui.charIndex;  // отслеживаем смену выбора для записи в файл
 
     ui.backend = backend;
     ui.requestBackend = -1;  // сбросить возможный запрос предыдущего бэкенда
@@ -232,10 +253,14 @@ int runClient(int backend, GameUiState& ui, const std::string& assetsDir,
         renderer->renderFrame(frame);
         if (!useVk) glfwSwapBuffers(window);  // Vulkan презентует сам
 
-        // Выбор персонажа сменился на экране выбора -> сохраняем в файл (персист между запусками).
-        if (ui.charIndex != lastSavedChar && ui.charIndex >= 0) {
-            saveCharIndex(kSettingsFile, ui.charIndex);
-            lastSavedChar = ui.charIndex;
+        // Персист настроек (выбор персонажа + адрес/порт сервера) при любом изменении.
+        // Диф дешёвый (strcmp + пара int) и ловит правки поля даже без захода в бой.
+        if (ui.charIndex != saved.charIndex || ui.joinPort != saved.joinPort ||
+            std::strcmp(ui.joinIp, saved.joinIp) != 0) {
+            saved.charIndex = ui.charIndex;
+            saved.joinPort = ui.joinPort;
+            std::snprintf(saved.joinIp, sizeof(saved.joinIp), "%s", ui.joinIp);
+            saveSettings(kSettingsFile, saved);
         }
 
         // Запрошено переключение бэкенда кнопкой — выходим из цикла на перезапуск.
@@ -278,6 +303,7 @@ int main(int argc, char** argv) {
     bool startLoadingPreview = false;
     bool autoJoin = false;  // --join: сразу подключиться к serverIp (для разработки/тестов)
 
+    bool serverIpGiven = false;  // задан ли serverIp позиционно (переопределяет сохранённый)
     int positional = 0;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--vk") == 0) {
@@ -288,7 +314,7 @@ int main(int argc, char** argv) {
             autoJoin = true;
         } else {
             switch (positional++) {
-                case 0: serverIp = argv[i]; break;
+                case 0: serverIp = argv[i]; serverIpGiven = true; break;
                 case 1: assetsDir = argv[i]; break;
                 case 2: scenePath = argv[i]; break;
                 default: break;  // лишние позиционные игнорируем
@@ -304,17 +330,23 @@ int main(int argc, char** argv) {
     const bool vulkanAvailable = (glfwVulkanSupported() == GLFW_TRUE);
     if (backend == 1 && !vulkanAvailable) backend = 0;  // запрошен --vk, но нет Vulkan
 
+    DesktopSettings saved;
+    loadSettings(kSettingsFile, saved);  // восстановить персонажа + адрес/порт с прошлого запуска
+
     GameUiState ui;
     ui.vulkanAvailable = vulkanAvailable;
-    std::snprintf(ui.joinIp, sizeof(ui.joinIp), "%s", serverIp);  // CLI serverIp -> префилл поля Join
-    ui.charIndex = loadCharIndex(kSettingsFile);  // восстановить сохранённый выбор персонажа
+    ui.charIndex = saved.charIndex;
+    std::snprintf(ui.joinIp, sizeof(ui.joinIp), "%s", saved.joinIp);  // сохранённый адрес -> поле Join
+    ui.joinPort = saved.joinPort;
+    // CLI serverIp (если задан позиционно) переопределяет сохранённый адрес.
+    if (serverIpGiven) std::snprintf(ui.joinIp, sizeof(ui.joinIp), "%s", serverIp);
     if (startLoadingPreview) GameUi::requestLoadingScreen();  // --loading: стартуем на лоадинге
 
     // Цикл перезапуска: runClient возвращает следующий бэкенд или -1 (выход).
     // Активная сцена может меняться в рантайме (меню -> ui.requestScenePath).
     std::string activeScene = scenePath;
     while (backend >= 0) {
-        backend = runClient(backend, ui, assetsDir, serverIp, activeScene.c_str(), autoJoin);
+        backend = runClient(backend, ui, saved, assetsDir, serverIp, activeScene.c_str(), autoJoin);
         if (ui.requestScenePath[0] != '\0') {  // меню запросило другую сцену -> перезайти с ней
             activeScene = ui.requestScenePath;
             ui.requestScenePath[0] = '\0';

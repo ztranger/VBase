@@ -130,7 +130,7 @@ public:
 
     // Сеть.
     void hostGame();
-    void joinGame(const char* ip);
+    void joinGame(const char* ip, uint16_t port = kNetPort);
     void leaveGame();
     bool netConnected() const { return client_.connected(); }
     bool netHost() const { return host_; }
@@ -138,6 +138,10 @@ public:
     int netPingMs() const { return client_.pingMs(); }        // RTT до сервера, мс (-1 нет)
     bool netConnecting() const { return client_.status() == NetStatus::Connecting; }
     bool netConnectionLost() const { return client_.status() == NetStatus::Lost; }
+    const char* netServerAddress() const { return serverIp_; }  // цель join (для UI)
+    int netServerPort() const { return (int)serverPort_; }
+    int netReconnectAttempts() const { return reconnectAttempts_; }  // попыток реконнекта
+    void netRetryNow() { reconnectTimer_ = 0.0f; }  // форсировать реконнект сейчас
     int remoteCount() const;  // число ДРУГИХ героев (без зданий/врагов)
 
     // Для ImGui/HUD.
@@ -297,7 +301,10 @@ private:
     // oneShotTime (для «трупа»: смерть), перекрывая локомоцию/атаку.
     SkinnedItem makeSkinnedItem(const std::vector<PlayerModel>& reg, int index, Vec3 pos, float yaw,
                                 float animParam, float animTime, float attackTime = 0.0f,
-                                int oneShotClip = -1, float oneShotTime = 0.0f) const;
+                                int oneShotClip = -1, float oneShotTime = 0.0f,
+                                float locoPhase = -1.0f) const;  // -1 = нет (walk<->run возьмёт animTime)
+    // Скорость набега фазы локомоции (циклов/сек) по animParam: каденс walk->run.
+    float locoRate(const std::vector<PlayerModel>& reg, int index, float animParam) const;
     // Загрузить модели ростера в GPU-реестр (клипы по имени). Используется для героев и мобов.
     void loadRosterModels(Renderer& renderer, AssetSource& assets,
                           const std::vector<CharacterDesc>& roster, std::vector<PlayerModel>& out);
@@ -329,6 +336,8 @@ private:
     // Авто-реконнект для join-сессии (host к 127.0.0.1 не переподключаем). serverIp_
     // запоминается в joinGame; при статусе Lost повторяем connect раз в kReconnectPeriod.
     char serverIp_[64] = {0};
+    uint16_t serverPort_ = kNetPort;   // порт join-сессии (для реконнекта; настраивается в UI)
+    int reconnectAttempts_ = 0;        // счётчик попыток реконнекта (для UI)
     bool wantReconnect_ = false;
     float reconnectTimer_ = 0.0f;
     uint32_t inputSeq_ = 0;

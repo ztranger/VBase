@@ -373,7 +373,8 @@ void Scene::loadRosterModels(Renderer& renderer, AssetSource& assets,
 
 SkinnedItem Scene::makeSkinnedItem(const std::vector<PlayerModel>& reg, int index, Vec3 pos,
                                    float yaw, float animParam, float animTime,
-                                   float attackTime, int oneShotClip, float oneShotTime) const {
+                                   float attackTime, int oneShotClip, float oneShotTime,
+                                   float locoPhase) const {
     SkinnedItem item;
     if (index < 0 || index >= (int)reg.size()) return item;  // нет такой модели
     const PlayerModel& pm = reg[index];
@@ -390,21 +391,52 @@ SkinnedItem Scene::makeSkinnedItem(const std::vector<PlayerModel>& reg, int inde
         // Разовый клип (смерть) перекрывает всё: проигрываем в oneShotTime, без зацикливания.
         if (oneShotClip >= 0 && oneShotClip < (int)pm.model.animations.size()) {
             pm.model.sampleAnimation(oneShotClip, oneShotTime, item.joints);
-        // Атака перекрывает локомоцию: проигрываем клип каста ОДИН раз до конца, растянув
-        // его ровно на окно kAttackDuration (сервер не знает длину клипа — масштаб здесь).
+        // Атака перекрывает локомоцию: клип каста растягивается ровно на окно kAttackDuration.
+        // Авто-бленд: attack плавно въезжает/выезжает поверх ведущего клипа локомоции (~0.15с),
+        // без резкого щелчка (событийная анимация).
         } else if (attackTime > 0.0f && pm.attackClip >= 0 && pm.attackClipDur > 0.0f) {
             float frac = 1.0f - attackTime / Character::kAttackDuration;  // 0..1 прогресс каста
             frac = frac < 0.0f ? 0.0f : (frac > 0.999f ? 0.999f : frac);  // без зацикливания
-            pm.model.sampleAnimation(pm.attackClip, frac * pm.attackClipDur, item.joints);
+            const float fade = 0.15f / Character::kAttackDuration;        // доля прогресса на фейд
+            float aw = 1.0f;                                             // вес attack (0=локомоция,1=атака)
+            if (frac < fade) aw = frac / fade;
+            else if (frac > 1.0f - fade) aw = (1.0f - frac) / fade;
+            int loco = animParam < 0.5f ? pm.idleClip : (animParam < 1.5f ? pm.walkClip : pm.runClip);
+            pm.model.sampleBlend(loco, animTime, pm.attackClip, frac * pm.attackClipDur, aw, item.joints);
         } else if (animParam <= 0.01f) {  // Клипы выбраны по имени при загрузке.
             pm.model.sampleAnimation(pm.idleClip, animTime, item.joints);
         } else if (animParam <= 1.0f) {
             pm.model.sampleBlend(pm.idleClip, animTime, pm.walkClip, animTime, animParam, item.joints);
         } else {
-            pm.model.sampleBlend(pm.walkClip, animTime, pm.runClip, animTime, animParam - 1.0f, item.joints);
+            // walk<->run: клипы РАЗНОЙ длительности. Берём оба в ОДНОЙ нормализованной фазе
+            // цикла (locoPhase) -> стопы совпадают (иначе плывут). Каденс — по скорости (locoRate).
+            float wd = pm.model.animations[pm.walkClip].duration;
+            float rd = pm.model.animations[pm.runClip].duration;
+            if (locoPhase >= 0.0f && wd > 0.0f && rd > 0.0f) {
+                float ph = locoPhase - std::floor(locoPhase);  // [0,1)
+                pm.model.sampleBlend(pm.walkClip, ph * wd, pm.runClip, ph * rd, animParam - 1.0f, item.joints);
+            } else {  // нет фазы (моб/превью) — как раньше, от общего времени
+                pm.model.sampleBlend(pm.walkClip, animTime, pm.runClip, animTime, animParam - 1.0f, item.joints);
+            }
         }
     }
     return item;
+}
+
+float Scene::locoRate(const std::vector<PlayerModel>& reg, int index, float animParam) const {
+    if (index < 0 || index >= (int)reg.size()) return 0.0f;
+    const PlayerModel& pm = reg[index];
+    if (pm.model.animations.empty()) return 0.0f;
+    auto dur = [&](int clip) {
+        return (clip >= 0 && clip < (int)pm.model.animations.size())
+                   ? pm.model.animations[clip].duration : 0.0f;
+    };
+    float wd = dur(pm.walkClip), rd = dur(pm.runClip);
+    if (wd <= 0.0f) return 0.0f;
+    // Каденс: длительность цикла = walkDur при animParam<=1, далее бленд к runDur (быстрее).
+    float t = animParam - 1.0f; t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+    float cyc = (animParam <= 1.0f || rd <= 0.0f) ? wd : wd + (rd - wd) * t;
+    return cyc > 0.0f ? 1.0f / cyc : 0.0f;
 }
 
 void Scene::selectCharacter(int i) {
@@ -523,6 +555,7 @@ void Scene::fixedUpdate(float dt) {
     player_.simulate(dt, cmd, collision_.get());  // локальное предсказание (с коллизиями)
     player_.animTime += dt;  // фаза анимации — ровно 1 раз за тик (не в simulate: реплей
                              // реконсиляции зовёт simulate многократно и ускорял бы её)
+    player_.locoPhase += dt * locoRate(chars_, localCharIndex_, player_.animParam);  // фаза локомоции
     if (player_.attackTime > 0.0f) {  // отсчёт каста — тоже 1 раз/тик (триггер — в simulate)
         player_.attackTime -= dt;
         if (player_.attackTime < 0.0f) player_.attackTime = 0.0f;
@@ -551,8 +584,9 @@ void Scene::fixedUpdate(float dt) {
             reconnectTimer_ -= dt;
             if (reconnectTimer_ <= 0.0f) {
                 reconnectTimer_ = kReconnectPeriod;
-                LOGI("Scene: переподключение к %s", serverIp_);
-                client_.connect(serverIp_, kNetPort);  // connect() сам сбросит клиент
+                ++reconnectAttempts_;
+                LOGI("Scene: переподключение #%d к %s:%d", reconnectAttempts_, serverIp_, (int)serverPort_);
+                client_.connect(serverIp_, serverPort_);  // connect() сам сбросит клиент
                 inputSeq_ = 0;
             }
         }
@@ -696,14 +730,16 @@ void Scene::hostGame() {
     }
 }
 
-void Scene::joinGame(const char* ip) {
+void Scene::joinGame(const char* ip, uint16_t port) {
     leaveGame();
     std::strncpy(serverIp_, ip, sizeof(serverIp_) - 1);
     serverIp_[sizeof(serverIp_) - 1] = '\0';
-    client_.connect(serverIp_, kNetPort);
+    serverPort_ = port > 0 ? port : kNetPort;
+    client_.connect(serverIp_, serverPort_);
     host_ = false;
     wantReconnect_ = true;  // при обрыве пытаемся вернуться на тот же сервер
     reconnectTimer_ = 0.0f;
+    reconnectAttempts_ = 0;
     inputSeq_ = 0;
 }
 
@@ -780,8 +816,10 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
         float yaw = lerpAngle(player_.prevFacingYaw, player_.facingYaw, alpha);
         float ap = player_.prevAnimParam + (player_.animParam - player_.prevAnimParam) * alpha;
         float at = player_.prevAnimTime + (player_.animTime - player_.prevAnimTime) * alpha;
+        float lp = player_.prevLocoPhase + (player_.locoPhase - player_.prevLocoPhase) * alpha;
         float atk = player_.prevAttackTime + (player_.attackTime - player_.prevAttackTime) * alpha;
-        frame.skinned.push_back(makeSkinnedItem(chars_, localCharIndex_, p, yaw, ap, at, atk));
+        frame.skinned.push_back(
+            makeSkinnedItem(chars_, localCharIndex_, p, yaw, ap, at, atk, -1, 0.0f, lp));
     }
 
     // Удалённые игроки: рендерим «прошлое» на kInterpDelay назад, интерполируя
@@ -820,9 +858,10 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
         if (et == EntityType::Hero) {
             // Чужой герой: союзник (та же команда) — синеватый, противник (PvP) — красный.
             // Свой герой рисуется отдельно (player_) обычным цветом — так их не спутать.
+            r.ch.locoPhase += renderDt * locoRate(chars_, r.charType, r.ch.animParam);  // фаза локомоции
             SkinnedItem it =
                 makeSkinnedItem(chars_, r.charType, r.ch.position, r.ch.facingYaw, r.ch.animParam,
-                                r.ch.animTime, r.ch.attackTime);
+                                r.ch.animTime, r.ch.attackTime, -1, 0.0f, r.ch.locoPhase);
             it.color = (r.team == localTeam_) ? Vec3{0.55f, 0.75f, 1.0f}   // союзник
                                               : Vec3{1.0f, 0.45f, 0.45f};  // враг
             frame.skinned.push_back(it);

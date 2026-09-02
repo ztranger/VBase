@@ -22,6 +22,8 @@ struct Character {
     float speed01 = 0.0f;
     float animParam = 0.0f;
     float animTime = 0.0f;
+    float locoPhase = 0.0f;   // нормализованная фаза локомоции (циклы) для синхронного бленда
+                              // walk<->run (клипы разной длины); ЛОКАЛЬНАЯ, не сеть/реконсиляция
     float velocityY = 0.0f;  // вертикальная скорость (гравитация/прыжок) — реконсилируется
     float attackTime = 0.0f; // остаток времени текущей атаки, сек (>0 = идёт каст) — реконсилируется
 
@@ -30,6 +32,7 @@ struct Character {
     float prevFacingYaw = 0.0f;
     float prevAnimParam = 0.0f;
     float prevAnimTime = 0.0f;
+    float prevLocoPhase = 0.0f;
     float prevAttackTime = 0.0f;
 
     // Конфиг движения.

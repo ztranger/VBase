@@ -514,9 +514,24 @@ int runHeroAttackTest() {
     // B: тот же маг, но СПЛОШНАЯ стена по линии видимости -> не бьёт -> враги копятся (LOS работает).
     int countB = runN(makeDesc(true, true, Vec3{0, 0, 8}));
 
-    std::printf("[HeroAttack] melee=%d, маг=%d, маг+стена(LOS)=%d (ждём melee/маг малы, стена >> маг)\n",
-                countA, countC, countB);
-    bool ok = countA <= 4 && countC <= 6 && countB > countC && countB >= 8;
+    // D: PvP — герой team1 и герой team2 рядом бьют ДРУГ ДРУГА (не только мобов).
+    SceneDesc dd;
+    ColliderSpec ff; ff.center = Vec3{0, -0.5f, 0}; ff.half = Vec3{50, 0.5f, 50}; dd.colliders.push_back(ff);
+    SpawnSpec sp1; sp1.team = 1; sp1.pos = Vec3{0, 0, 0}; dd.spawns.push_back(sp1);
+    SpawnSpec sp2; sp2.team = 2; sp2.pos = Vec3{2, 0, 0}; dd.spawns.push_back(sp2);  // 2 < range 3
+    CharacterDesc hd; hd.id = "h"; hd.model = "x"; hd.hp = 100.0f; hd.damage = 20.0f;
+    hd.attackInterval = 0.4f; hd.range = 3.0f; hd.ranged = false;
+    dd.heroTypes.push_back(hd);
+    GameWorld wd; wd.configure(dd);
+    uint32_t h1 = wd.addHero(1); wd.setHeroCharType(h1, 0);
+    uint32_t h2 = wd.addHero(2); wd.setHeroCharType(h2, 0);
+    (void)h2;
+    float minHp1 = 999.0f;
+    for (int i = 0; i < 200; ++i) { wd.step(kTickDt); float hp = wd.heroHp(h1); if (hp < minHp1) minHp1 = hp; }
+
+    std::printf("[HeroAttack] melee=%d, маг=%d, маг+стена(LOS)=%d; PvP герой1 min hp=%.0f (ждём <100)\n",
+                countA, countC, countB, (double)minHp1);
+    bool ok = countA <= 4 && countC <= 6 && countB > countC && countB >= 8 && minHp1 < 100.0f;
     std::printf("[HeroAttack] %s\n", ok ? "OK" : "FAIL");
     return ok ? 0 : 1;
 }

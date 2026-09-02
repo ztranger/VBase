@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -43,18 +44,39 @@ private:
 
 namespace {
 
-// Персист выбора персонажа между запусками — маленький файл в internalDataPath приложения.
-int loadCharIndex(const std::string& path) {
-    int v = -1;
-    if (FILE* f = std::fopen(path.c_str(), "r")) {
-        if (std::fscanf(f, "%d", &v) != 1) v = -1;
-        std::fclose(f);
+// Персист пользовательских настроек между запусками — маленький файл в internalDataPath
+// приложения. Формат «ключ значение» построчно; неизвестные ключи игнорируются (файл
+// расширяемый), легаси-файл (одинокое целое = charIndex) читается как раньше.
+struct AppSettings {
+    int charIndex = -1;
+    char joinIp[64] = "127.0.0.1";
+    int joinPort = 7777;  // kNetPort
+};
+void loadSettings(const std::string& path, AppSettings& s) {
+    FILE* f = std::fopen(path.c_str(), "r");
+    if (f == nullptr) return;
+    char line[128];
+    while (std::fgets(line, sizeof(line), f) != nullptr) {
+        char key[32], val[96];
+        if (std::sscanf(line, "%31s %95s", key, val) == 2) {
+            if (std::strcmp(key, "char") == 0) {
+                s.charIndex = std::atoi(val);
+            } else if (std::strcmp(key, "ip") == 0) {
+                std::snprintf(s.joinIp, sizeof(s.joinIp), "%s", val);
+            } else if (std::strcmp(key, "port") == 0) {
+                int p = std::atoi(val);
+                if (p >= 1 && p <= 65535) s.joinPort = p;
+            }
+        } else {
+            int v = 0;  // легаси: одинокое целое = сохранённый charIndex
+            if (std::sscanf(line, "%d", &v) == 1) s.charIndex = v;
+        }
     }
-    return v;
+    std::fclose(f);
 }
-void saveCharIndex(const std::string& path, int v) {
+void saveSettings(const std::string& path, const AppSettings& s) {
     if (FILE* f = std::fopen(path.c_str(), "w")) {
-        std::fprintf(f, "%d\n", v);
+        std::fprintf(f, "char %d\nip %s\nport %d\n", s.charIndex, s.joinIp, s.joinPort);
         std::fclose(f);
     }
 }
@@ -72,8 +94,8 @@ struct Engine {
     float accumulator = 0.0f; // накопитель времени для фиксированного тика
     float uiScale = 1.0f;    // масштаб UI по плотности экрана
     GameUiState ui;          // состояние панели — общее с десктопом
-    std::string settingsPath;  // файл персиста (internalDataPath/…): выбор персонажа между запусками
-    int lastSavedChar = -1;    // отслеживаем смену выбора для записи в файл
+    std::string settingsPath;  // файл персиста (internalDataPath/…): персонаж + адрес/порт сервера
+    AppSettings saved;         // снапшот записанного на диск (диф с ui для перезаписи)
     std::string scenePath = "scenes/default.scene";  // активная сцена (меняется из меню)
 
     // Мультитач кадра: pumpInput собирает события ВСЕХ пальцев, а в геймплей (twin-stick)
@@ -241,11 +263,13 @@ extern "C" void android_main(android_app* app) {
     engine.ui.vulkanAvailable = engine.vulkanSupported;  // кнопка Vulkan в GameUi
     LOGI("Vulkan supported: %s", engine.vulkanSupported ? "yes" : "no");
 
-    // Персист выбора персонажа: файл во внутреннем хранилище приложения (доступно на запись).
+    // Персист настроек: файл во внутреннем хранилище приложения (доступно на запись).
     if (app->activity && app->activity->internalDataPath) {
         engine.settingsPath = std::string(app->activity->internalDataPath) + "/vbase_settings.txt";
-        engine.ui.charIndex = loadCharIndex(engine.settingsPath);  // восстановить сохранённый выбор
-        engine.lastSavedChar = engine.ui.charIndex;
+        loadSettings(engine.settingsPath, engine.saved);  // восстановить персонажа + адрес/порт
+        engine.ui.charIndex = engine.saved.charIndex;
+        std::snprintf(engine.ui.joinIp, sizeof(engine.ui.joinIp), "%s", engine.saved.joinIp);
+        engine.ui.joinPort = engine.saved.joinPort;
     }
 
     app->userData = &engine;
@@ -326,11 +350,17 @@ extern "C" void android_main(android_app* app) {
 
             engine.renderer->renderFrame(frame);
 
-            // Выбор персонажа сменился на экране выбора -> сохраняем в файл (персист между запусками).
-            if (!engine.settingsPath.empty() && engine.ui.charIndex != engine.lastSavedChar &&
-                engine.ui.charIndex >= 0) {
-                saveCharIndex(engine.settingsPath, engine.ui.charIndex);
-                engine.lastSavedChar = engine.ui.charIndex;
+            // Персист настроек (персонаж + адрес/порт сервера) при любом изменении. Диф
+            // дешёвый (strcmp + пара int) и ловит правки поля Join даже без захода в бой.
+            if (!engine.settingsPath.empty() &&
+                (engine.ui.charIndex != engine.saved.charIndex ||
+                 engine.ui.joinPort != engine.saved.joinPort ||
+                 std::strcmp(engine.ui.joinIp, engine.saved.joinIp) != 0)) {
+                engine.saved.charIndex = engine.ui.charIndex;
+                engine.saved.joinPort = engine.ui.joinPort;
+                std::snprintf(engine.saved.joinIp, sizeof(engine.saved.joinIp), "%s",
+                              engine.ui.joinIp);
+                saveSettings(engine.settingsPath, engine.saved);
             }
 
             // Диспатч касания в геймплей ПОСЛЕ рендера: NewFrame внутри renderFrame уже

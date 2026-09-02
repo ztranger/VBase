@@ -761,12 +761,20 @@ void GameWorld::step(float dt) {
         if (h->range <= 0.0f || h->damage <= 0.0f) continue;  // авто-атака не настроена
         Entity* target = nullptr;
         float bestD2 = h->range * h->range;
-        for (Entity* enp : enemies) {
+        for (Entity* enp : enemies) {  // мобы
             if (enp->hp <= 0.0f || !hostile(h->team, enp->team)) continue;
             Vec3 d = enp->move.position - h->move.position;
             float d2 = d.x * d.x + d.z * d.z;  // горизонтальная дистанция
             if (d2 <= bestD2 && hasLineOfSight(h->move.position, enp->move.position)) {
                 bestD2 = d2; target = enp;
+            }
+        }
+        for (Entity* oh : heroes) {  // чужие герои (PvP)
+            if (oh == h || oh->hp <= 0.0f || !hostile(h->team, oh->team)) continue;
+            Vec3 d = oh->move.position - h->move.position;
+            float d2 = d.x * d.x + d.z * d.z;
+            if (d2 <= bestD2 && hasLineOfSight(h->move.position, oh->move.position)) {
+                bestD2 = d2; target = oh;
             }
         }
         float atkInt = h->rate > 0.0f ? h->rate : 1.0f;
@@ -806,7 +814,9 @@ void GameWorld::step(float dt) {
         p.timer += dt;
         Entity* tgt = entityById(p.targetId);
         Vec3 dir;
-        if (tgt != nullptr && tgt->type == EntityType::Enemy && tgt->hp > 0.0f) {
+        // Хомит по врагу (моб) ИЛИ чужому герою (PvP) — цель по id, тип проверяем для наведения.
+        if (tgt != nullptr && (tgt->type == EntityType::Enemy || tgt->type == EntityType::Hero) &&
+            tgt->hp > 0.0f) {
             Vec3 to = (tgt->move.position + Vec3{0.0f, kEnemyAimY, 0.0f}) - p.move.position;
             float d = std::sqrt(to.x * to.x + to.y * to.y + to.z * to.z);
             if (d <= kProjHitRadius) {          // попадание

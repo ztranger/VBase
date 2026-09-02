@@ -1,5 +1,6 @@
 #include "engine/render/ui/panels/HomePanel.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -54,18 +55,40 @@ void draw(UiShell::Ctx& ctx) {
         }
     } else if (ctx.scene.netConnecting() || ctx.scene.netConnectionLost()) {
         // Идёт (пере)подключение: не показываем клавиатуру ввода IP, чтобы обрыв с
-        // авто-реконнектом не выглядел как «отвалились в меню». Даём только отмену.
+        // авто-реконнектом не выглядел как «отвалились в меню». Цель + счётчик + управление.
         if (ctx.scene.netConnectionLost())
-            ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.0f), "Соединение потеряно — переподключение...");
+            ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.0f),
+                               "Соединение потеряно — переподключение к %s:%d (попытка %d)...",
+                               ctx.scene.netServerAddress(), ctx.scene.netServerPort(),
+                               ctx.scene.netReconnectAttempts());
         else
-            ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.2f, 1.0f), "Подключение...");
+            ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.2f, 1.0f), "Подключение к %s:%d...",
+                               ctx.scene.netServerAddress(), ctx.scene.netServerPort());
         if (ctx.btn("Отмена")) ctx.scene.leaveGame();
+        if (ctx.scene.netConnectionLost()) {
+            ImGui::SameLine();
+            if (ctx.btn("Повторить сейчас")) ctx.scene.netRetryNow();
+        }
     } else {
+        static int kp = 0;  // цель цифрового кейпада (для тача без системной клавиатуры): 0=IP, 1=Порт
         ImGui::InputText("IP", ctx.state.joinIp, sizeof(ctx.state.joinIp),
                          ImGuiInputTextFlags_CharsDecimal);
+        ImGui::InputInt("Порт", &ctx.state.joinPort);
+        if (ctx.state.joinPort < 1) ctx.state.joinPort = 1;
+        if (ctx.state.joinPort > 65535) ctx.state.joinPort = 65535;
+        if (ImGui::RadioButton("кейпад -> IP", kp == 0)) kp = 0;
+        ImGui::SameLine();
+        if (ImGui::RadioButton("кейпад -> Порт", kp == 1)) kp = 1;
 
         auto key = [&ctx](char c) {
-            size_t l = std::strlen(ctx.state.joinIp);
+            if (kp == 1) {  // порт: цифра как int-математика (десятичный сдвиг)
+                if (c >= '0' && c <= '9') {
+                    long v = (long)ctx.state.joinPort * 10 + (c - '0');
+                    ctx.state.joinPort = v > 65535 ? 65535 : (int)v;
+                }
+                return;
+            }
+            size_t l = std::strlen(ctx.state.joinIp);  // IP: дописать символ
             if (l + 1 < sizeof(ctx.state.joinIp)) {
                 ctx.state.joinIp[l] = c;
                 ctx.state.joinIp[l + 1] = '\0';
@@ -83,14 +106,22 @@ void draw(UiShell::Ctx& ctx) {
         }
         if (ctx.btn("0", sz)) key('0');
         ImGui::SameLine();
-        if (ctx.btn(".", sz)) key('.');
+        if (ctx.btn(".", sz)) key('.');  // точка нужна IP; для порта key() её игнорит
         ImGui::SameLine();
         if (ctx.btn("<-", sz)) {
-            size_t l = std::strlen(ctx.state.joinIp);
-            if (l > 0) ctx.state.joinIp[l - 1] = '\0';
+            if (kp == 1) {
+                ctx.state.joinPort /= 10;
+                if (ctx.state.joinPort < 1) ctx.state.joinPort = 1;
+            } else {
+                size_t l = std::strlen(ctx.state.joinIp);
+                if (l > 0) ctx.state.joinIp[l - 1] = '\0';
+            }
         }
         ImGui::SameLine();
-        if (ctx.btn("Clr", sz)) ctx.state.joinIp[0] = '\0';
+        if (ctx.btn("Clr", sz)) {
+            if (kp == 1) ctx.state.joinPort = 1;
+            else ctx.state.joinIp[0] = '\0';
+        }
 
         if (ctx.btn("Host")) {
             ctx.scene.hostGame();
@@ -98,7 +129,7 @@ void draw(UiShell::Ctx& ctx) {
         }
         ImGui::SameLine();
         if (ctx.btn("Join")) {
-            ctx.scene.joinGame(ctx.state.joinIp);
+            ctx.scene.joinGame(ctx.state.joinIp, (uint16_t)ctx.state.joinPort);
             UiShell::setMode(UiMode::CharacterSelect);
         }
     }

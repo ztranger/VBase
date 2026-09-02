@@ -13,6 +13,7 @@ void Character::snapshot() {
     prevFacingYaw = facingYaw;
     prevAnimParam = animParam;
     prevAnimTime = animTime;
+    prevLocoPhase = locoPhase;
     prevAttackTime = attackTime;
 }
 
