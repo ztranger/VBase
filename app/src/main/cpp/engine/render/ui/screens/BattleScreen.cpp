@@ -98,7 +98,10 @@ void drawCombatOverlay(Scene& scene) {
     const std::vector<Scene::CombatMarker>& markers = scene.combatMarkers();
     const std::vector<Scene::DamageNumber>& numbers = scene.damageNumbers();
     const std::vector<Scene::ImpactSpark>& sparks = scene.impactSparks();
-    if (markers.empty() && numbers.empty() && sparks.empty()) return;
+    const std::vector<Scene::BuildPoof>& poofs = scene.buildPoofs();
+    Vec3 selPos;
+    const bool hasSel = scene.selectedWorldPos(selPos);  // выделенное здание -> ринг
+    if (markers.empty() && numbers.empty() && sparks.empty() && poofs.empty() && !hasSel) return;
 
     ImGuiIO& io = ImGui::GetIO();
     const float W = io.DisplaySize.x, H = io.DisplaySize.y;
@@ -148,6 +151,37 @@ void drawCombatOverlay(Scene& scene) {
             float ca = std::cos(ang), sa = std::sin(ang);
             dl->AddLine(ImVec2(sx + ca * inner, sy + sa * inner),
                         ImVec2(sx + ca * outer, sy + sa * outer), col, 2.0f);
+        }
+    }
+
+    // «Пуф» постройки: расходящееся затухающее кольцо на месте размещения.
+    for (const Scene::BuildPoof& pf : poofs) {
+        float sx, sy;
+        if (!project(pf.pos, sx, sy)) continue;
+        float t = pf.age / 0.5f;  // синхронно с kPoofLife в Scene
+        if (t > 1.0f) t = 1.0f;
+        int alpha = (int)(200.0f * (1.0f - t));
+        if (alpha <= 0) continue;
+        float rad = 6.0f + t * 34.0f;  // расходится наружу
+        dl->AddCircle(ImVec2(sx, sy), rad, IM_COL32(180, 220, 255, alpha), 24, 2.5f);
+        dl->AddCircle(ImVec2(sx, sy), rad * 0.6f, IM_COL32(220, 240, 255, alpha / 2), 24, 1.5f);
+    }
+
+    // Ринг выделения: пульсирующее кольцо + уголки-скобки вокруг выбранного здания.
+    if (hasSel) {
+        float sx, sy;
+        if (project(selPos, sx, sy)) {
+            float pulse = 0.5f + 0.5f * std::sin((float)ImGui::GetTime() * 4.0f);
+            float rad = 26.0f + pulse * 4.0f;
+            ImU32 col = IM_COL32(120, 230, 255, 235);  // циан
+            dl->AddCircle(ImVec2(sx, sy), rad, col, 32, 2.5f);
+            const float b = rad + 6.0f, len = 8.0f;  // квадратные уголки-скобки
+            const float cs[4][2] = {{-1, -1}, {1, -1}, {-1, 1}, {1, 1}};
+            for (const auto& c : cs) {
+                float cx = sx + c[0] * b, cy = sy + c[1] * b;
+                dl->AddLine(ImVec2(cx, cy), ImVec2(cx - c[0] * len, cy), col, 2.5f);
+                dl->AddLine(ImVec2(cx, cy), ImVec2(cx, cy - c[1] * len), col, 2.5f);
+            }
         }
     }
 

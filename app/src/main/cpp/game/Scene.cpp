@@ -602,6 +602,7 @@ static constexpr float kDmgMinAmount = 0.5f;  // порог урона, ниже
 static constexpr float kSparkLife = 0.28f;    // время жизни искр в точке хита, сек
 static constexpr float kPunch = 0.12f;        // амплитуда scale-punch модели при уроне (доля)
 static constexpr float kShakeDur = 0.35f;     // длительность тряски камеры, сек
+static constexpr float kPoofLife = 0.5f;      // время жизни «пуфа» постройки, сек
 
 // Есть ли у типа боевая полоска HP (враги/герои/башни/ядро). Здания-экономика (hp=0) — нет.
 static bool isCombatType(EntityType t) {
@@ -969,6 +970,11 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
         if (sparks_[i].age >= sparks_[i].maxAge) sparks_.erase(sparks_.begin() + (long)i);
         else ++i;
     }
+    for (size_t i = 0; i < poofs_.size();) {
+        poofs_[i].age += renderDt;
+        if (poofs_[i].age >= kPoofLife) poofs_.erase(poofs_.begin() + (long)i);
+        else ++i;
+    }
 
     for (const GameObject& obj : objects_) {
         Transform t = obj.transform;
@@ -1238,6 +1244,16 @@ float Scene::selectedAux() const {
     return 0.0f;
 }
 
+bool Scene::selectedWorldPos(Vec3& out) const {
+    if (selectedId_ == 0) return false;
+    for (const RemoteEntity& r : remoteEntities_)
+        if (r.id == selectedId_) {  // центр объекта (позиция + подъём визуала) для ринга
+            out = r.ch.position + Vec3{0.0f, visual((EntityType)r.type).yOffset, 0.0f};
+            return true;
+        }
+    return false;  // выделение снято или сущность исчезла (напр. разрушена)
+}
+
 // --- Стройка (G3-B) ---
 bool Scene::computeGhost(int& cx, int& cz, Vec3& center) const {
     // Клетка перед героем (по facing, ~1.5 клетки вперёд), снап на сетку.
@@ -1286,6 +1302,7 @@ void Scene::confirmBuild() {
     Vec3 center;
     if (!computeGhost(cx, cz, center)) return;  // невалидно — не шлём запрос
     client_.sendBuild((uint8_t)buildType_, cx, cz);
-    emitSound(SoundId::Build);  // оптимистично: шлём только на валидной клетке
+    emitSound(SoundId::Build);          // оптимистично: шлём только на валидной клетке
+    poofs_.push_back({center, 0.0f});   // «пуф» размещения на центре клетки (косметика)
     // Остаёмся в режиме — можно ставить дальше (сервер авторитетно применит/отвергнет).
 }

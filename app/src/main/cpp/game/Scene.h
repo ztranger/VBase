@@ -168,9 +168,13 @@ public:
     struct CombatMarker { Vec3 pos; float hpFrac; Vec3 color; };       // полоска HP над сущностью
     struct DamageNumber { Vec3 pos; float amount; float age; Vec3 color; };  // всплывающее число
     struct ImpactSpark { Vec3 pos; float age; float maxAge; uint32_t seed; };  // вспышка-искры в точке хита
+    struct BuildPoof { Vec3 pos; float age; };  // «пуф» при постройке (расходящееся кольцо)
     const std::vector<CombatMarker>& combatMarkers() const { return markers_; }
     const std::vector<DamageNumber>& damageNumbers() const { return damageNumbers_; }
     const std::vector<ImpactSpark>& impactSparks() const { return sparks_; }
+    const std::vector<BuildPoof>& buildPoofs() const { return poofs_; }
+    // Мировая позиция выделенного кликом здания (ринг выделения в оверлее). false = нет выделения.
+    bool selectedWorldPos(Vec3& out) const;
     const Mat4& viewMatrix() const { return lastView_; }  // матрицы последнего кадра боя
     const Mat4& projMatrix() const { return lastProj_; }
 
@@ -350,6 +354,7 @@ private:
 
     // Джус/impact (клиентская косметика): искры в точке хита + тряска камеры на крупный урон.
     std::vector<ImpactSpark> sparks_;  // искры-вспышки (живут ~kSparkLife, рисует GameUi)
+    std::vector<BuildPoof> poofs_;     // «пуфы» постройки (живут ~kPoofLife, рисует GameUi)
     uint32_t sparkSeed_ = 0x9e3779b9;  // накопитель для псевдослучайных направлений искр
     float shakeTime_ = 0.0f;           // остаток тряски камеры, сек
     float shakeAmp_ = 0.0f;            // пиковая амплитуда тряски (world units)
