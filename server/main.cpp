@@ -474,6 +474,53 @@ int runHeroStakesTest() {
     return ok ? 0 : 1;
 }
 
+// Авто-атака героя (headless): герой бьёт ближайшего врага в range при линии видимости.
+// A: melee-герой на подступе к ядру выкашивает врагов -> их мало. B: стена по линии
+// видимости между героем и ядром -> герой не бьёт -> враги копятся (LOS работает).
+// C: маг (ranged) стреляет снарядами издалека -> враги гибнут (путь снаряда + хоминг).
+int runHeroAttackTest() {
+    // Общая арена: враги спавнятся на (9,0,0), идут к ядру (0,0,0) по полосе z=0.
+    auto makeDesc = [](bool wall, bool ranged, Vec3 heroPos) {
+        SceneDesc d;
+        ColliderSpec floor; floor.center = Vec3{0, -0.5f, 0}; floor.half = Vec3{50, 0.5f, 50};
+        d.colliders.push_back(floor);
+        BuildingSpec core; core.kind = BuildingSpec::Core; core.pos = Vec3{0, 0, 0};
+        core.hp = 100000.0f; d.buildings.push_back(core);        // ядро не падает — стабильный поток
+        BuildingSpec sp; sp.kind = BuildingSpec::Spawner; sp.pos = Vec3{9, 0, 0};
+        sp.rate = 0.5f; sp.cap = 40.0f; d.buildings.push_back(sp);
+        d.enemy.hp = 15.0f; d.enemy.damage = 1.0f; d.enemy.attackInterval = 1.0f;
+        if (wall) {  // СПЛОШНАЯ стена поперёк (z=4) между дальнобойным героем (z=8) и полосой врагов
+            ColliderSpec w; w.center = Vec3{0, 1, 4}; w.half = Vec3{12, 1, 0.5f};  // не касается z=0 (путь свободен)
+            d.colliders.push_back(w);
+        }
+        CharacterDesc hc; hc.id = "hero"; hc.model = "x"; hc.hp = 10000.0f;  // герой не гибнет
+        hc.damage = 100.0f; hc.attackInterval = ranged ? 0.4f : 0.3f;
+        hc.range = ranged ? 14.0f : 7.0f; hc.ranged = ranged;
+        d.heroTypes.push_back(hc);
+        d.player.pos = heroPos;
+        return d;
+    };
+    auto runN = [](const SceneDesc& d) {
+        GameWorld w; w.configure(d);
+        uint32_t h = w.addHero(0); w.setHeroCharType(h, 0);
+        for (int i = 0; i < 400; ++i) w.step(kTickDt);  // ~13 c
+        return w.enemyCount();
+    };
+
+    // A: melee-герой у полосы (z=3, range 7) выкашивает проходящих врагов -> их мало.
+    int countA = runN(makeDesc(false, false, Vec3{0, 0, 3}));
+    // C: маг (ranged, z=8, range 14) стреляет снарядами -> враги гибнут (путь снаряда + хоминг).
+    int countC = runN(makeDesc(false, true, Vec3{0, 0, 8}));
+    // B: тот же маг, но СПЛОШНАЯ стена по линии видимости -> не бьёт -> враги копятся (LOS работает).
+    int countB = runN(makeDesc(true, true, Vec3{0, 0, 8}));
+
+    std::printf("[HeroAttack] melee=%d, маг=%d, маг+стена(LOS)=%d (ждём melee/маг малы, стена >> маг)\n",
+                countA, countC, countB);
+    bool ok = countA <= 4 && countC <= 6 && countB > countC && countB >= 8;
+    std::printf("[HeroAttack] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
 // Тест team-aware таргетинга (фундамент PvP): бой считает целью только ВРАЖДЕБНЫЕ команды.
 // Ч.1 «свои не бьют своих» (всё team 1): враги НЕ валят своё ядро, башня НЕ бьёт своих врагов.
 // Ч.2 «чужих бьют» (враги team 1 vs ядро team 2): чужое ядро получает урон. Гоняем GameWorld
@@ -1253,8 +1300,9 @@ int main(int argc, char** argv) {
         int o = runMatchRestartTest();  // матч-рестарт: decided -> авто-пересбор -> новый матч
         int p = runPathfindTest();      // поле потока: стена/фолбэк + ломатель + сетка 400
         int q = runEndlessWaveTest();   // бесконечные волны растут; легаси-спавнер стопается на cap
+        int r = runHeroAttackTest();    // авто-атака героя: melee/LOS-стена/маг-снаряды
         return (a == 0 && b == 0 && c == 0 && d == 0 && e == 0 && f == 0 && g == 0 && h == 0 &&
-                k == 0 && m == 0 && n == 0 && o == 0 && p == 0 && q == 0) ? 0 : 1;
+                k == 0 && m == 0 && n == 0 && o == 0 && p == 0 && q == 0 && r == 0) ? 0 : 1;
     }
 
     uint16_t port = kNetPort;

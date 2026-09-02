@@ -22,12 +22,15 @@ struct CharacterDesc {
     enum class MobGoal : uint8_t { Core = 0, Building = 1 };
     MobGoal goal = MobGoal::Core;
 
-    // Боевые статы — только для МОБОВ (config/enemies.cfg), читает сервер. 0 = взять дефолт
-    // из `building enemy`. Клиент эти поля игнорирует (ему нужны только модель/визуал).
+    // Боевые статы — читает сервер. У МОБОВ (enemies.cfg): бой по ядру/герою. У ГЕРОЕВ
+    // (characters.cfg): авто-атака по врагам (range/ranged добавлены для героев). 0 = дефолт.
+    // Клиент эти поля игнорирует (ему нужны только модель/визуал).
     float hp = 0.0f;
-    float damage = 0.0f;          // урон по ядру/герою за удар
+    float damage = 0.0f;          // урон за удар/выстрел
     float speed = 0.0f;           // скорость бега, world/сек
     float attackInterval = 0.0f;  // секунд между ударами
+    float range = 0.0f;           // герой: дальность авто-атаки (world). 0 = не атакует
+    bool ranged = false;          // герой: true -> стреляет снарядом (маг/лук); false -> ближний бой
 };
 
 // Загрузка ростера из текстового конфига (через AssetSource). Формат — по строке:

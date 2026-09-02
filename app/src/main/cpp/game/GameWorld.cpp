@@ -28,6 +28,7 @@ constexpr float kProjSpeed = 16.0f;      // world/сек
 constexpr float kProjHitRadius = 1.0f;   // радиус попадания (>= kProjSpeed*dt, чтобы не проскочить)
 constexpr float kProjMaxLife = 2.5f;     // сек до самоуничтожения (если цель пропала)
 constexpr float kTowerMuzzleY = 2.2f;    // высота вылета снаряда над башней
+constexpr float kHeroMuzzleY = 1.4f;     // высота вылета снаряда героя (грудь/посох)
 constexpr float kEnemyAimY = 0.8f;       // куда целимся по высоте (центр врага)
 
 // Очередь ввода героя (см. HeroInputBuf). Целевая глубина буфера сглаживает джиттер;
@@ -289,14 +290,41 @@ void GameWorld::setHeroCharType(uint32_t heroId, uint8_t charType) {
 // (первый выбор / смена персонажа). Нет типа/поля -> дефолт: heroHp_ и Character.maxSpeed.
 void GameWorld::applyHeroStats(Entity& e) {
     float hp = heroHp_, spd = 0.0f;  // spd 0 -> оставить дефолт move.maxSpeed
+    e.damage = 0.0f; e.range = 0.0f; e.rate = 0.0f;  // авто-атака выключена без конфига
     if (e.charType < heroTypes_.size()) {
         const CharacterDesc& t = heroTypes_[e.charType];
         if (t.hp > 0.0f) hp = t.hp;
         if (t.speed > 0.0f) spd = t.speed;
+        e.damage = t.damage;          // урон авто-атаки
+        e.range = t.range;            // дальность (0 -> не атакует)
+        e.rate = t.attackInterval;    // кулдаун между атаками (e.timer копит)
     }
     e.maxHp = hp;
     e.hp = hp;  // полный hp при выборе персонажа
     if (spd > 0.0f) e.move.maxSpeed = spd;
+}
+
+bool GameWorld::hasLineOfSight(Vec3 a, Vec3 b) const {
+    if (nav_ == nullptr) return true;  // без навсетки — считаем видимым
+    const NavGrid& m = nav_->map;
+    int ax = grid_.cellOf(a.x), az = grid_.cellOf(a.z);
+    int bx = grid_.cellOf(b.x), bz = grid_.cellOf(b.z);
+    if (ax == bx && az == bz) return true;
+    // Bresenham по клеткам: заблокированная ПРОМЕЖУТОЧНАЯ клетка = нет линии видимости.
+    // Концы (клетки героя и врага) не проверяем — они могут быть у стены/на кромке футпринта.
+    int dx = bx > ax ? bx - ax : ax - bx;
+    int dz = bz > az ? bz - az : az - bz;
+    int sx = ax < bx ? 1 : -1, sz = az < bz ? 1 : -1;
+    int err = dx - dz;
+    int cx = ax, cz = az;
+    for (int guard = 0; guard <= 2 * (dx + dz) + 2; ++guard) {
+        int e2 = 2 * err;
+        if (e2 > -dz) { err -= dz; cx += sx; }
+        if (e2 < dx) { err += dx; cz += sz; }
+        if (cx == bx && cz == bz) break;  // дошли до клетки цели — не проверяем
+        if (m.inBounds(cx, cz) && m.isBlocked(cx, cz)) return false;
+    }
+    return true;
 }
 
 void GameWorld::attachFootprint(Entity& e) {
@@ -725,6 +753,50 @@ void GameWorld::step(float dt) {
             tw.timer = tw.rate;  // цели нет — держим заряд готовым (без роста таймера)
         }
     }
+    // Герой: авто-атака ближайшего врага в range при линии видимости. melee -> мгновенный
+    // урон, ranged (маг) -> снаряд (как башня). Атака НЕ рутит движение (см. Character::simulate),
+    // поэтому чисто аддитивна и не конфликтует с предсказанием. Кулдаун копит e.timer.
+    for (Entity* h : heroes) {
+        if (h->hp <= 0.0f) { h->timer = 0.0f; continue; }
+        if (h->range <= 0.0f || h->damage <= 0.0f) continue;  // авто-атака не настроена
+        Entity* target = nullptr;
+        float bestD2 = h->range * h->range;
+        for (Entity* enp : enemies) {
+            if (enp->hp <= 0.0f || !hostile(h->team, enp->team)) continue;
+            Vec3 d = enp->move.position - h->move.position;
+            float d2 = d.x * d.x + d.z * d.z;  // горизонтальная дистанция
+            if (d2 <= bestD2 && hasLineOfSight(h->move.position, enp->move.position)) {
+                bestD2 = d2; target = enp;
+            }
+        }
+        float atkInt = h->rate > 0.0f ? h->rate : 1.0f;
+        h->timer += dt;
+        if (h->timer > atkInt) h->timer = atkInt;  // заряд готов (не копим сверх)
+        if (target == nullptr || h->timer < atkInt) continue;
+        h->timer = 0.0f;
+        Vec3 to = target->move.position - h->move.position;
+        float len = std::sqrt(to.x * to.x + to.z * to.z);
+        if (len > 1e-4f) h->move.facingYaw = std::atan2(to.x / len, to.z / len);
+        h->move.attackTime = Character::kAttackDuration;  // клип атаки (едет клиенту в снапшоте)
+        bool ranged = (h->charType < heroTypes_.size()) && heroTypes_[h->charType].ranged;
+        if (ranged) {
+            Entity proj;
+            proj.id = nextEntityId_++;
+            proj.type = EntityType::Projectile;
+            proj.team = h->team;
+            proj.move.position = h->move.position + Vec3{0.0f, kHeroMuzzleY, 0.0f};
+            proj.move.snapshot();
+            proj.damage = h->damage;
+            proj.move.maxSpeed = kProjSpeed;
+            proj.targetId = target->id;  // хоминг по id цели
+            Vec3 aim = (target->move.position + Vec3{0.0f, kEnemyAimY, 0.0f}) - proj.move.position;
+            proj.move.facingYaw = std::atan2(aim.x, aim.z);
+            projSpawned.push_back(std::move(proj));
+        } else {
+            target->hp -= h->damage;  // ближний бой — мгновенный урон
+        }
+    }
+
     for (Entity& p : projSpawned) entities_.push_back(std::move(p));
 
     // Снаряды: хомингом летят к цели (по её id). Попал в радиусе — урон и самоуничтожение;

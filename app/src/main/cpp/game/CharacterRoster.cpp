@@ -76,6 +76,9 @@ bool loadCharacterRoster(AssetSource& assets, const char* path, std::vector<Char
             else if (k == "damage") { if (i < t.size()) c.damage = toF(t[i++]); }
             else if (k == "speed") { if (i < t.size()) c.speed = toF(t[i++]); }
             else if (k == "atkint") { if (i < t.size()) c.attackInterval = toF(t[i++]); }
+            else if (k == "range") { if (i < t.size()) c.range = toF(t[i++]); }
+            else if (k == "ranged") { c.ranged = true; }   // флаг: стреляет снарядом
+            else if (k == "melee") { c.ranged = false; }   // флаг: ближний бой (дефолт)
             else if (k == "target") {
                 if (i < t.size()) {
                     const std::string& v = t[i++];

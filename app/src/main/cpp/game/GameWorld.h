@@ -147,4 +147,7 @@ private:
     void detachPhysics(Entity& e);             // капсула и/или футпринт
     void rebuildNavIfNeeded();                 // occupancy (только если mapDirty) + сброс полей
     void ensureFlowField(uint8_t team);        // ленивый BFS поля команды (раз на изменение построек)
+    // Линия видимости по навсетке (нет заблокированной клетки между a и b в XZ). Для авто-атаки
+    // героя: не бить сквозь стены/здания. Без навсетки -> true.
+    bool hasLineOfSight(Vec3 a, Vec3 b) const;
 };
