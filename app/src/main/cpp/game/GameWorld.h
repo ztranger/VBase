@@ -93,6 +93,7 @@ public:
     GamePhase gamePhase() const { return phaseForTeam(0); }  // совместимость: перспектива team 0
     uint8_t teamOf(uint32_t id) const;        // команда сущности по id (0, если нет)
     bool decided() const { return decided_; } // матч завершён (для самотеста рестарта)
+    void restartMatch();                       // пересобрать матч (базы/герои/экономика), не трогая геометрию; зовётся по таймеру matchrestart и из самотеста
 
     // Максимум команд (0 = соло/кооп; для PvP 2v2 хватает; запас на free-for-all).
     static constexpr int kMaxTeams = 4;
@@ -140,7 +141,6 @@ private:
     Vec3 spawnFor(uint8_t team) const;         // spawn-точка команды или spawnPos_ (fallback)
     void applyHeroStats(Entity& e);            // hp/speed выбранного персонажа героя (по charType)
     void spawnBuildings();                     // заспавнить базы из buildingSpecs_ (configure + рестарт)
-    void restartMatch();                       // пересобрать матч (базы/герои/экономика), не трогая геометрию
     Entity* entityById(uint32_t id);
     const Entity* entityById(uint32_t id) const;
     void attachFootprint(Entity& e);           // бокс клетки + пометка навсетки грязной

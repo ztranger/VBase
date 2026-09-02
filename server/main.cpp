@@ -36,6 +36,22 @@
 
 namespace {
 
+// Строгий парсер порта из argv: только целое 1..65535. Возвращает false для мусора,
+// хвостового мусора, отрицательных и переполнения (atoi это молча проглатывал: "-1"->65535,
+// "99999"->усечение, "abc"->0). Явная ошибка лучше тихого запуска не на том порту.
+bool parsePort(const char* s, uint16_t& out) {
+    if (s == nullptr || *s == '\0') return false;
+    long v = 0;
+    for (const char* p = s; *p != '\0'; ++p) {
+        if (*p < '0' || *p > '9') return false;  // не-цифра (в т.ч. '-', пробел, хвост)
+        v = v * 10 + (*p - '0');
+        if (v > 65535) return false;             // вне диапазона порта
+    }
+    if (v < 1) return false;
+    out = (uint16_t)v;
+    return true;
+}
+
 // Headless-самотест кинематического контроллера (vbase_server --selftest).
 // Гоним капсулу в стену (лобовое столкновение) и по касательной (скольжение),
 // печатаем результат. Быстрый способ проверить collide-and-slide без GUI.
@@ -1283,6 +1299,144 @@ int runDenseBuildTest() {
     return fails == 0 ? 0 : 1;
 }
 
+// P0-01: серверная санитизация недоверенного ввода. Гигантский magnitude/направление НЕ
+// дают скорость сверх maxSpeed; NaN/Inf не пролезают в позицию (Jolt/снапшоты).
+int runInputGuardTest() {
+    GameWorld world;
+    SceneDesc desc;
+    ColliderSpec floor; floor.center = Vec3{0,-0.5f,0}; floor.half = Vec3{50,0.5f,50}; desc.colliders.push_back(floor);
+    desc.player.pos = Vec3{0,0,0}; desc.player.hp = 100.0f;
+    world.configure(desc);
+    uint32_t hero = world.addHero(0);
+
+    const float dt = kTickDt;
+    InputCommand hack{}; hack.moveX = 1000.0f; hack.moveZ = 1000.0f; hack.magnitude = 1000.0f;
+    for (int i = 0; i < 30; ++i) { hack.seq = (uint32_t)(i + 1); world.setHeroInput(hero, hack); world.step(dt); }
+    Vec3 p = world.heroPos(hero);
+    float dist = std::sqrt(p.x * p.x + p.z * p.z);
+    bool speedOk = std::isfinite(dist) && dist < 20.0f;  // ~1 c * maxSpeed(~6) << читерских 1000×
+
+    InputCommand bad{}; bad.moveX = std::nanf(""); bad.moveZ = INFINITY; bad.magnitude = std::nanf("");
+    for (int i = 0; i < 30; ++i) { bad.seq = (uint32_t)(100 + i); world.setHeroInput(hero, bad); world.step(dt); }
+    Vec3 q = world.heroPos(hero);
+    bool finiteOk = std::isfinite(q.x) && std::isfinite(q.y) && std::isfinite(q.z);
+
+    std::printf("[InputGuard] дист при magnitude=1000: %.2f (ждём <20); позиция при NaN/Inf finite: %s\n",
+                (double)dist, finiteOk ? "да" : "нет");
+    bool ok = speedOk && finiteOk;
+    std::printf("[InputGuard] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
+// P0-02: смена charType в активном матче НЕ лечит. Наносим урон, затем чередуем тип — hp не растёт.
+int runCharTypeHealTest() {
+    GameWorld world;
+    SceneDesc desc;
+    ColliderSpec floor; floor.center = Vec3{0,-0.5f,0}; floor.half = Vec3{50,0.5f,50}; desc.colliders.push_back(floor);
+    BuildingSpec core; core.kind = BuildingSpec::Core; core.pos = Vec3{0,0,0}; core.hp = 100000.0f; desc.buildings.push_back(core);
+    BuildingSpec sp; sp.kind = BuildingSpec::Spawner; sp.pos = Vec3{6,0,0}; sp.rate = 0.3f; sp.cap = 20.0f; desc.buildings.push_back(sp);
+    desc.enemy.hp = 100000.0f; desc.enemy.damage = 5.0f; desc.enemy.attackInterval = 0.25f;
+    desc.player.pos = Vec3{3,0,0}; desc.player.hp = 100.0f; desc.player.respawnDelay = 100.0f;
+    CharacterDesc a; a.id = "a"; a.model = "x"; a.hp = 100.0f; desc.heroTypes.push_back(a);
+    CharacterDesc b; b.id = "b"; b.model = "x"; b.hp = 100.0f; desc.heroTypes.push_back(b);
+    world.configure(desc);
+    uint32_t hero = world.addHero(0);
+    world.setHeroCharType(hero, 0);  // коммит типа 0 (полный hp 100)
+
+    const float dt = kTickDt;
+    for (int i = 0; i < 300 && world.heroHp(hero) > 60.0f; ++i) world.step(dt);
+    float damaged = world.heroHp(hero);
+    for (int i = 0; i < 10; ++i) { world.setHeroCharType(hero, (uint8_t)(i % 2)); world.step(dt); }
+    float after = world.heroHp(hero);
+
+    std::printf("[CharTypeHeal] hp после урона=%.0f, после чередования типов=%.0f (не должен подлечиться к 100)\n",
+                (double)damaged, (double)after);
+    bool ok = damaged < 90.0f && after <= damaged + 2.0f;  // не вырос (допуск на шум)
+    std::printf("[CharTypeHeal] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
+// P2-01: рестарт восстанавливает hp по статам ВЫБРАННОГО персонажа, а не по дефолту heroHp_.
+int runRestartStatsTest() {
+    GameWorld world;
+    SceneDesc desc;
+    ColliderSpec floor; floor.center = Vec3{0,-0.5f,0}; floor.half = Vec3{50,0.5f,50}; desc.colliders.push_back(floor);
+    desc.player.pos = Vec3{0,0,0}; desc.player.hp = 40.0f;  // heroHp_ дефолт (МИМО персонажа)
+    CharacterDesc tank; tank.id = "tank"; tank.model = "x"; tank.hp = 200.0f; desc.heroTypes.push_back(tank);
+    world.configure(desc);
+    uint32_t hero = world.addHero(0);
+    world.setHeroCharType(hero, 0);  // танк: maxHp 200
+    float before = world.heroHp(hero);
+    world.restartMatch();
+    float after = world.heroHp(hero);
+
+    std::printf("[RestartStats] hp до рестарта=%.0f, после=%.0f (ждём 200 — статы танка, не дефолт 40)\n",
+                (double)before, (double)after);
+    bool ok = before > 199.0f && after > 199.0f;
+    std::printf("[RestartStats] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
+// P2-02: стройка после исхода матча отклоняется сервером (даже при достаточном ресурсе).
+int runBuildAfterEndTest() {
+    GameWorld world;
+    SceneDesc desc;
+    ColliderSpec floor; floor.center = Vec3{0,-0.5f,0}; floor.half = Vec3{50,0.5f,50}; desc.colliders.push_back(floor);
+    BuildingSpec gen; gen.kind = BuildingSpec::Generator; gen.pos = Vec3{-6,0,0}; gen.rate = 100.0f; desc.buildings.push_back(gen);
+    BuildingSpec sto; sto.kind = BuildingSpec::Storage; sto.pos = Vec3{-4,0,0}; sto.cap = 300.0f; desc.buildings.push_back(sto);
+    BuildingSpec core; core.kind = BuildingSpec::Core; core.pos = Vec3{0,0,0}; core.hp = 60.0f; desc.buildings.push_back(core);  // падёт
+    BuildingSpec sp; sp.kind = BuildingSpec::Spawner; sp.pos = Vec3{6,0,0}; sp.rate = 0.3f; sp.cap = 20.0f; desc.buildings.push_back(sp);
+    desc.enemy.hp = 100000.0f; desc.enemy.damage = 20.0f; desc.enemy.attackInterval = 0.25f;
+    desc.build[(int)EntityType::Tower] = BuildTemplate{true, 50.0f, 0.5f, 0.0f, 0.0f, 8.0f, 5.0f};
+    desc.player.pos = Vec3{-8,0,0}; desc.player.hp = 100.0f;
+    world.configure(desc);
+    uint32_t builder = world.addHero(0);
+
+    const float dt = kTickDt;
+    for (int i = 0; i < 60 && world.resource(0) < 100.0f; ++i) world.step(dt);  // копим ресурс
+    bool builtBefore = world.tryBuild(builder, EntityType::Tower, 3, 3);         // базовая линия: работает
+
+    for (int i = 0; i < 900 && !world.decided(); ++i) world.step(dt);            // ядро падёт -> исход
+    bool decided = world.decided();
+    float resAfter = world.resource(0);
+    bool builtAfter = world.tryBuild(builder, EntityType::Tower, -3, -3);        // валидная свободная клетка
+
+    std::printf("[BuildAfterEnd] до конца built=%s; завершён=%s ресурс=%.0f; после конца built=%s (ждём НЕТ)\n",
+                builtBefore ? "да" : "нет", decided ? "да" : "нет", (double)resAfter, builtAfter ? "да" : "нет");
+    bool ok = builtBefore && decided && resAfter >= 50.0f && !builtAfter;
+    std::printf("[BuildAfterEnd] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
+// P2-05: строгий парсер порта — принимает 1..65535, отбивает мусор/переполнение/отрицательные.
+int runPortParseTest() {
+    uint16_t p = 0;
+    bool ok = true;
+    ok = ok && parsePort("7777", p) && p == 7777;
+    ok = ok && parsePort("1", p) && p == 1;
+    ok = ok && parsePort("65535", p) && p == 65535;
+    ok = ok && !parsePort("0", p);            // < 1
+    ok = ok && !parsePort("65536", p);        // переполнение
+    ok = ok && !parsePort("-1", p);           // отрицательное
+    ok = ok && !parsePort("abc", p);          // мусор
+    ok = ok && !parsePort("77x", p);          // хвостовой мусор
+    ok = ok && !parsePort("", p);             // пусто
+    ok = ok && !parsePort("999999999999", p); // огромное
+    std::printf("[PortParse] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
+// P1-05: несуществующая сцена не грузится (сигнал, по которому сервер завершается non-zero).
+int runSceneLoadFailTest() {
+    FileAssetSource assets("../../app/src/main/assets");
+    SceneDesc desc;
+    bool loaded = loadSceneDesc(assets, "scenes/__nonexistent__.scene", desc);
+    std::printf("[SceneLoadFail] загрузка несуществующей сцены вернула %s (ждём НЕТ)\n", loaded ? "да" : "нет");
+    bool ok = !loaded;
+    std::printf("[SceneLoadFail] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1316,13 +1470,24 @@ int main(int argc, char** argv) {
         int p = runPathfindTest();      // поле потока: стена/фолбэк + ломатель + сетка 400
         int q = runEndlessWaveTest();   // бесконечные волны растут; легаси-спавнер стопается на cap
         int r = runHeroAttackTest();    // авто-атака героя: melee/LOS-стена/маг-снаряды
+        // Батч хардненинга (аудит PROJECT_REVIEW): валидация ввода, анти-эксплойты, fail-fast.
+        int s = runInputGuardTest();    // P0-01: санитизация ввода (speed hack / NaN-Inf)
+        int t = runCharTypeHealTest();  // P0-02: смена charType в матче не лечит
+        int u = runRestartStatsTest();  // P2-01: рестарт берёт статы выбранного героя
+        int v = runBuildAfterEndTest(); // P2-02: стройка после конца матча отклонена
+        int w = runPortParseTest();     // P2-05: строгий парсер порта
+        int x = runSceneLoadFailTest(); // P1-05: несуществующая сцена не грузится
         return (a == 0 && b == 0 && c == 0 && d == 0 && e == 0 && f == 0 && g == 0 && h == 0 &&
-                k == 0 && m == 0 && n == 0 && o == 0 && p == 0 && q == 0 && r == 0) ? 0 : 1;
+                k == 0 && m == 0 && n == 0 && o == 0 && p == 0 && q == 0 && r == 0 && s == 0 &&
+                t == 0 && u == 0 && v == 0 && w == 0 && x == 0) ? 0 : 1;
     }
 
     uint16_t port = kNetPort;
     if (argc > 1) {
-        port = (uint16_t)std::atoi(argv[1]);
+        if (!parsePort(argv[1], port)) {
+            std::fprintf(stderr, "Неверный порт '%s' (нужно целое 1..65535)\n", argv[1]);
+            return 1;
+        }
     }
 
     NetServer server;
@@ -1360,8 +1525,11 @@ int main(int argc, char** argv) {
         loadCharacterRoster(assets, "config/characters.cfg", desc.heroTypes);  // статы героев (hp/speed)
         server.configureWorld(desc);
     } else {
-        std::fprintf(stderr, "Сцена не загружена (%s, assets=%s) — сервер без коллизий\n",
+        // Fail-fast: без обязательной сцены клиент и сервер симулировали бы РАЗНЫЕ миры
+        // (нет коллизий/базы) — это тихий рассинхрон, поэтому завершаемся с ошибкой.
+        std::fprintf(stderr, "Сцена не загружена (%s, assets=%s) — выход: dedicated-серверу нужна сцена\n",
                      scenePath, assetsDir.c_str());
+        return 1;
     }
 
     const double tick = kTickDt;  // единый шаг симуляции (из engine/net/Net.h)

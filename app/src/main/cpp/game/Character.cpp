@@ -27,8 +27,24 @@ void Character::simulate(float dt, const InputCommand& in, CollisionWorld* world
     // Атака НЕ рутит движение: авто-атака сервера (урон + анимация) не должна конфликтовать
     // с клиентским предсказанием движения — иначе рывки. Персонаж двигается по вводу и во
     // время атаки (кайтинг мага, добивание в движении); attackTime только крутит клип.
-    float mag = in.magnitude;
+    // Санитизация НЕДОВЕРЕННОГО сетевого ввода. Тот же путь у клиента-предсказания и
+    // сервера-авторитета (оба зовут simulate) — значит без расхождения, а честный клиент
+    // и так шлёт нормированное направление + magnitude 0..1, для него это no-op.
+    //  - не-finite (NaN/Inf) -> ноль (иначе NaN течёт в Jolt, позицию и снапшоты);
+    //  - magnitude в [0,1];
+    //  - длину направления ограничиваем 1 (|dir|*mag*maxSpeed иначе > maxSpeed = speed hack).
+    float mag = std::isfinite(in.magnitude) ? clamp01(in.magnitude) : 0.0f;
     Vec3 moveDir{in.moveX, 0.0f, in.moveZ};
+    if (!std::isfinite(moveDir.x) || !std::isfinite(moveDir.z)) {
+        moveDir = Vec3{0.0f, 0.0f, 0.0f};
+        mag = 0.0f;
+    }
+    float dirLen2 = moveDir.x * moveDir.x + moveDir.z * moveDir.z;
+    if (dirLen2 > 1.0f) {
+        float inv = 1.0f / std::sqrt(dirLen2);
+        moveDir.x *= inv;
+        moveDir.z *= inv;
+    }
 
     speed01 += (clamp01(mag) - speed01) * clamp01(dt * 10.0f);
 

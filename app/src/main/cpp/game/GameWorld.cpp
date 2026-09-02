@@ -202,7 +202,7 @@ void GameWorld::restartMatch() {
     for (Entity& e : entities_) {
         if (e.type != EntityType::Hero) continue;
         const Vec3 sp = spawnFor(e.team);
-        e.hp = e.maxHp = heroHp_;
+        applyHeroStats(e);  // hp/maxHp/урон по ВЫБРАННОМУ персонажу (e.charType), а не дефолт heroHp_
         e.aux = 0.0f;
         e.move.position = sp;
         e.move.velocityY = 0.0f;
@@ -276,14 +276,17 @@ void GameWorld::setHeroInput(uint32_t heroId, const InputCommand& in) {
 
 void GameWorld::setHeroCharType(uint32_t heroId, uint8_t charType) {
     Entity* e = entityById(heroId);
-    if (e == nullptr) return;
-    // Статы выбранного персонажа применяем при ПЕРВОМ получении charType и при его смене
-    // (charType по умолчанию 0 совпал бы с выбором мага — потому отдельный флаг applied).
-    if (!e->heroStatsApplied || e->charType != charType) {
-        e->charType = charType;
-        e->heroStatsApplied = true;
-        if (e->type == EntityType::Hero) applyHeroStats(*e);
-    }
+    if (e == nullptr || e->type != EntityType::Hero) return;
+    // Валидность недоверенного charType: вне ростера — игнор (не даём индекс за границей heroTypes_).
+    if (!heroTypes_.empty() && charType >= heroTypes_.size()) return;
+    // Тип КОММИТИТСЯ один раз — при первом получении (выбор персонажа при входе в бой): применяем
+    // статы выбранного + полный hp. Дальнейшие смены игнорируем — персонажа нельзя менять в
+    // активном матче. Это закрывает эксплойт «бесконечный хил чередованием charType» (смена звала
+    // applyHeroStats -> восстановление полного hp). Новый выбор возможен только при новом спавне.
+    if (e->heroStatsApplied) return;
+    e->charType = charType;
+    e->heroStatsApplied = true;
+    applyHeroStats(*e);
 }
 
 // hp/скорость выбранного персонажа героя (config/characters.cfg по charType). Ставит полный hp
@@ -392,6 +395,7 @@ void GameWorld::ensureFlowField(uint8_t team) {
 }
 
 bool GameWorld::tryBuild(uint32_t builderId, EntityType type, int cellX, int cellZ) {
+    if (decided_) return false;  // матч завершён — стройку авторитетно отклоняем (UI-проверки мало)
     if ((int)type < 0 || (int)type >= 8) return false;
     const BuildTemplate& t = buildTemplates_[(int)type];
     if (!t.buildable) return false;          // тип нельзя ставить (нет cost в конфиге)
