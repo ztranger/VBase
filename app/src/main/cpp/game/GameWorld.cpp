@@ -396,6 +396,7 @@ void GameWorld::ensureFlowField(uint8_t team) {
 
 bool GameWorld::tryBuild(uint32_t builderId, EntityType type, int cellX, int cellZ) {
     if (decided_) return false;  // матч завершён — стройку авторитетно отклоняем (UI-проверки мало)
+    if (atEntityCap()) return false;  // жёсткий лимит мира
     if ((int)type < 0 || (int)type >= 8) return false;
     const BuildTemplate& t = buildTemplates_[(int)type];
     if (!t.buildable) return false;          // тип нельзя ставить (нет cost в конфиге)
@@ -521,6 +522,9 @@ void GameWorld::step(float dt) {
         std::vector<Entity> spawned;
         // Один враг из спавнера e -> в `spawned` (тип/статы по charType, коллайдер).
         auto spawnEnemy = [&](Entity& e) {
+            // Жёсткий лимит мира (учитываем уже накопленные в spawned): при переполнении не
+            // спавним — страховка от бесконтрольного роста (напр. survival, когда врагов не бьют).
+            if (entities_.size() + spawned.size() >= (size_t)kMaxEntities) return;
             Entity enemy;
             enemy.id = nextEntityId_++;
             enemy.type = EntityType::Enemy;
@@ -739,7 +743,7 @@ void GameWorld::step(float dt) {
             float d2 = d.x * d.x + d.y * d.y + d.z * d.z;
             if (d2 <= bestD2) { bestD2 = d2; target = enp; }
         }
-        if (target != nullptr) {
+        if (target != nullptr && entities_.size() + projSpawned.size() < (size_t)kMaxEntities) {
             tw.timer -= tw.rate;
             Entity proj;
             proj.id = nextEntityId_++;
@@ -754,7 +758,7 @@ void GameWorld::step(float dt) {
             proj.move.facingYaw = std::atan2(to.x, to.z);  // начальный курс (для ориентации болта)
             projSpawned.push_back(std::move(proj));
         } else {
-            tw.timer = tw.rate;  // цели нет — держим заряд готовым (без роста таймера)
+            tw.timer = tw.rate;  // цели нет ИЛИ лимит мира — держим заряд готовым (без роста таймера)
         }
     }
     // Герой: авто-атака ближайшего врага в range при линии видимости. melee -> мгновенный
@@ -792,18 +796,22 @@ void GameWorld::step(float dt) {
         h->move.attackTime = Character::kAttackDuration;  // клип атаки (едет клиенту в снапшоте)
         bool ranged = (h->charType < heroTypes_.size()) && heroTypes_[h->charType].ranged;
         if (ranged) {
-            Entity proj;
-            proj.id = nextEntityId_++;
-            proj.type = EntityType::Projectile;
-            proj.team = h->team;
-            proj.move.position = h->move.position + Vec3{0.0f, kHeroMuzzleY, 0.0f};
-            proj.move.snapshot();
-            proj.damage = h->damage;
-            proj.move.maxSpeed = kProjSpeed;
-            proj.targetId = target->id;  // хоминг по id цели
-            Vec3 aim = (target->move.position + Vec3{0.0f, kEnemyAimY, 0.0f}) - proj.move.position;
-            proj.move.facingYaw = std::atan2(aim.x, aim.z);
-            projSpawned.push_back(std::move(proj));
+            // Снаряд — только если не упёрлись в лимит мира (иначе выстрел без снаряда: клип
+            // атаки всё равно проиграется через attackTime). НЕ падаем в melee-ветку.
+            if (entities_.size() + projSpawned.size() < (size_t)kMaxEntities) {
+                Entity proj;
+                proj.id = nextEntityId_++;
+                proj.type = EntityType::Projectile;
+                proj.team = h->team;
+                proj.move.position = h->move.position + Vec3{0.0f, kHeroMuzzleY, 0.0f};
+                proj.move.snapshot();
+                proj.damage = h->damage;
+                proj.move.maxSpeed = kProjSpeed;
+                proj.targetId = target->id;  // хоминг по id цели
+                Vec3 aim = (target->move.position + Vec3{0.0f, kEnemyAimY, 0.0f}) - proj.move.position;
+                proj.move.facingYaw = std::atan2(aim.x, aim.z);
+                projSpawned.push_back(std::move(proj));
+            }
         } else {
             target->hp -= h->damage;  // ближний бой — мгновенный урон
         }

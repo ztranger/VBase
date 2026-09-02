@@ -108,6 +108,10 @@ public:
     Vec3 heroPos(uint32_t id) const;   // позиция героя по id (для проверки респауна)
 
 private:
+    // Достигнут ли жёсткий лимит числа сущностей (kMaxEntities). На нём стопается спавн
+    // врагов/снарядов/зданий — страховка от бесконтрольного роста и переполнения снапшота.
+    bool atEntityCap() const { return entities_.size() >= (size_t)kMaxEntities; }
+
     std::vector<Entity> entities_;            // ВСЕ сущности мира (герои + здания + враги)
     std::unordered_map<uint32_t, HeroInputBuf> heroInputs_;  // ввод по героям (heroId -> буфер)
     std::vector<BuildingSpec> buildingSpecs_; // здания базы из сцены (для матч-рестарта)

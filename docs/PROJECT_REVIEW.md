@@ -237,7 +237,14 @@ Android-сборка ожидает готовые файлы. Чистый clon
 
 ### P1-03. Full-snapshot amplification через `ackTick`
 
-- [ ] Добавить серверную валидацию и rate limiting.
+- [x] Исправлено. (1) **Валидация ack** (`ackIsValid` в `Net.h`): принимаем только МОНОТОННЫЙ и
+  не из будущего (`proposed > accepted && proposed <= serverTick`) — `ackTick=0`/старьё/будущее
+  игнорируются, база дельт не откатывается. (2) **Rate-limit full-снапшотов** per-peer
+  (`kFullSnapshotMinGap=10` тиков ≈ 3 full/с): если базы нет, но недавно уже слали full — тик
+  пропускаем. (3) **Счётчики** full/delta (`debugFullSnapshots/DeltaSnapshots`). Обычное
+  восстановление после потери цепочки укладывается в gap (~0.33 c). Тесты: `runAckValidateTest`
+  (предикат: 0/повтор/назад/будущее отклонены), `runSnapshotRateTest` (легит-клиент: **1 full,
+  145 delta** за 150 тиков — спама нет).
 
 Затронутые файлы:
 
@@ -264,7 +271,14 @@ Android-сборка ожидает готовые файлы. Чистый clon
 
 ### P1-04. Неограниченный рост мира и `uint16_t` truncation
 
-- [ ] Ввести явные сетевые и игровые лимиты.
+- [x] Исправлено. (1) **`kMaxEntities=1024`** (`Net.h`, `static_assert` ≤ 2^16): спавн врагов/
+  снарядов/зданий стопается на лимите (`GameWorld::atEntityCap`) — мир не растёт бесконтрольно.
+  (2) **Guard сериализации**: если `changed/removed > 0xFFFF` — снапшот НЕ шлётся (заголовок не
+  разойдётся с payload); при лимите 1024 это недостижимо, но защищает инвариант. Клиент уже
+  проверял `len >= need` перед чтением тела. (3) **O(N) вместо O(N²)**: дельта-генерация на сервере
+  и применение на клиенте переведены на индекс `unordered_map<id, …>` (было вложенное линейное
+  `findState`); клиентское удаление — swap-and-pop. Тест `runEntityCapTest` (агрессивный спавнер →
+  сущностей ровно 1024, не больше). Wire-format не менялся — `kProtocolVersion` прежний.
 
 Затронутые файлы:
 
@@ -674,13 +688,15 @@ Android и desktop должны сохранять разные window/input lif
 - [x] Server build — успешно.
 - [x] Desktop build — успешно.
 - [x] `git diff --check` — успешно.
-- [x] `vbase_server --selftest` — **22** сценария успешно (было 15 + 6 батча хардненинга:
-  InputGuard, CharTypeHeal, RestartStats, BuildAfterEnd, PortParse, SceneLoadFail).
+- [x] `vbase_server --selftest` — **25** сценариев успешно (15 базовых + хардненинг: InputGuard,
+  CharTypeHeal, RestartStats, BuildAfterEnd, PortParse, SceneLoadFail, AckValidate, SnapshotRate,
+  EntityCap).
 - [x] `vbase_server --densetest` — 4/4 успешно.
 
-**Батч хардненинга №1 выполнен** (P0-01, P0-02, P1-05, P2-01, P2-02, P2-05) — см. отметки `[x]`
-в разделах выше. Следующие по приоритету: P0-03 (Release UB), P1-01 (воспроизводимый Android/
-Vulkan shader pipeline), P1-03/P1-04 (лимиты snapshot/ack/entities), P1-08 (CI).
+**Выполнено:** P0-01, P0-02, P1-05, P2-01, P2-02, P2-05 (батч №1); **P1-01** (SPIR-V-пайплайн);
+**P1-03, P1-04** (лимиты ack/snapshot/entities). См. отметки `[x]` в разделах выше. Следующие по
+приоритету: **P0-03** (Release UB), **P1-08** (CI), **P1-06/P1-07** (Android Vulkan fallback +
+window lifecycle), **P1-02** (bone-лимит).
 - [x] Dense flow-field BFS 400×400 с 400 footprint — около 4.45 мс на поле
   на машине аудита.
 

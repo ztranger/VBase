@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 #include <memory>
+#include <unordered_map>
 
 #include "engine/core/Log.h"
 #include "game/GameWorld.h"  // авторитетная игровая симуляция (сущности + системы)
@@ -68,11 +69,6 @@ bool stateChanged(const EntityState& a, const EntityState& b) {
            std::fabs(a.velY - b.velY) > e ||
            std::fabs(a.hp - b.hp) > e || std::fabs(a.aux - b.aux) > e ||
            std::fabs(a.attackT - b.attackT) > e || a.charType != b.charType;
-}
-
-const EntityState* findState(const std::vector<EntityState>& v, uint32_t id) {
-    for (const EntityState& s : v) if (s.id == id) return &s;
-    return nullptr;
 }
 
 // enet_peer_send при ошибке (<0) НЕ освобождает пакет — освобождаем сами, иначе течёт.
@@ -260,14 +256,28 @@ void NetClient::poll() {
                             SnapshotRecord& base = impl_->recvHistory[h.baseTick % kSnapHistory];
                             if (base.tick == h.baseTick) {
                                 ns = base.states;
-                                for (uint32_t rid : removed)
-                                    for (size_t j = 0; j < ns.size(); ++j)
-                                        if (ns[j].id == rid) { ns.erase(ns.begin() + (long)j); break; }
-                                for (const EntityState& cs : changed) {
-                                    bool found = false;
-                                    for (EntityState& s : ns)
-                                        if (s.id == cs.id) { s = cs; found = true; break; }
-                                    if (!found) ns.push_back(cs);
+                                // Индекс id -> позиция в ns: применение дельты O(N) вместо O(N^2)
+                                // (вложенные линейные поиски). Порядок ns не важен (Scene матчит
+                                // по id, и это же база следующей дельты) — потому swap-and-pop.
+                                std::unordered_map<uint32_t, size_t> idx;
+                                idx.reserve(ns.size());
+                                for (size_t j = 0; j < ns.size(); ++j) idx[ns[j].id] = j;
+                                for (uint32_t rid : removed) {  // удалить исчезнувшие
+                                    auto it = idx.find(rid);
+                                    if (it == idx.end()) continue;
+                                    size_t pos = it->second, last = ns.size() - 1;
+                                    if (pos != last) { ns[pos] = ns[last]; idx[ns[pos].id] = pos; }
+                                    ns.pop_back();
+                                    idx.erase(it);
+                                }
+                                for (const EntityState& cs : changed) {  // обновить/добавить
+                                    auto it = idx.find(cs.id);
+                                    if (it != idx.end()) {
+                                        ns[it->second] = cs;
+                                    } else {
+                                        idx[cs.id] = ns.size();
+                                        ns.push_back(cs);
+                                    }
                                 }
                                 applied = true;
                             }
@@ -312,7 +322,8 @@ namespace {
 struct Conn {
     ENetPeer* peer = nullptr;
     uint32_t heroId = 0;
-    uint32_t ackTick = 0;
+    uint32_t ackTick = 0;       // подтверждённая база дельт (валидируется: монотонно, не из будущего)
+    uint32_t lastFullTick = 0;  // тик последнего высланного этому peer full-снапшота (rate-limit)
 };
 }  // namespace
 
@@ -324,6 +335,8 @@ struct NetServer::Impl {
     std::vector<uint8_t> scratch;  // буфер снапшота
     SnapshotRecord history[kSnapHistory];  // кольцо разосланных состояний (базы для дельт)
     int lastChanged = 0;                   // changedCount последнего снапшота (для самотеста)
+    uint32_t fullSnapshots = 0;            // счётчики наблюдаемости (full vs delta) — для самотеста/метрик
+    uint32_t deltaSnapshots = 0;
 
     Conn* connByPeer(ENetPeer* p) {
         for (auto& c : conns) if (c.peer == p) return &c;
@@ -398,7 +411,11 @@ void NetServer::poll() {
                     std::memcpy(&m, ev.packet->data, sizeof(m));
                     Conn* conn = impl_->connByPeer(ev.peer);
                     if (conn != nullptr) {
-                        conn->ackTick = m.ackTick;  // база для дельты этому клиенту
+                        // Валидируем ack ДО применения (P1-03): только монотонный и не из будущего.
+                        // Мусорный/старый/нулевой ack игнорируем — база не откатывается, значит
+                        // клиент не может форсить full-снапшоты (амплификация).
+                        if (ackIsValid(m.ackTick, conn->ackTick, impl_->tickCount))
+                            conn->ackTick = m.ackTick;  // база для дельты этому клиенту
                         InputCommand cmd;
                         cmd.seq = m.seq;
                         cmd.moveX = m.moveX;
@@ -456,6 +473,12 @@ void NetServer::tick(float dt) {
     rec.tick = impl_->tickCount;
     rec.states = current;
 
+    // Индекс id -> состояние текущего мира: O(1) поиск в дельте (было findState = O(N^2) на peer).
+    std::unordered_map<uint32_t, const EntityState*> curIdx;
+    curIdx.reserve(current.size());
+    for (const EntityState& s : current) curIdx[s.id] = &s;
+    constexpr uint32_t kFullSnapshotMinGap = 10;  // не чаще ~3 full/с на peer (антиамплификация)
+
     // Каждому клиенту — дельта относительно ПОДТВЕРЖДЁННОГО им снапшота (устойчиво к
     // потерям: база = его ackTick, а не последний посланный). Нет базы -> полный.
     for (Conn& conn : impl_->conns) {
@@ -465,22 +488,45 @@ void NetServer::tick(float dt) {
             if (h.tick == conn.ackTick) base = &h;  // база ещё в истории
         }
 
+        // Rate-limit full-снапшотов: базы нет (нужен full), но недавно уже слали full этому peer
+        // -> пропускаем тик. Легитимный клиент получает один full и уходит на дельты; тут стопается
+        // лишь тот, кто искусственно форсит full (или редкое восстановление после потери цепочки —
+        // оно уложится в gap, ~0.33 c). Иначе поддельный ack давал бы 30 full/с (амплификация).
+        if (base == nullptr && conn.lastFullTick != 0 &&
+            impl_->tickCount - conn.lastFullTick < kFullSnapshotMinGap) {
+            continue;
+        }
+
         std::vector<EntityState> changed;
         std::vector<uint32_t> removed;
         uint32_t baseTick;
         if (base == nullptr) {
             changed = current;  // полный снапшот
             baseTick = 0;
+            conn.lastFullTick = impl_->tickCount;
+            ++impl_->fullSnapshots;
         } else {
             baseTick = conn.ackTick;
-            for (const EntityState& cur : current) {
-                const EntityState* prev = findState(base->states, cur.id);
-                if (prev == nullptr || stateChanged(cur, *prev)) changed.push_back(cur);
+            std::unordered_map<uint32_t, const EntityState*> baseIdx;
+            baseIdx.reserve(base->states.size());
+            for (const EntityState& s : base->states) baseIdx[s.id] = &s;
+            for (const EntityState& cur : current) {  // изменившиеся/новые: поиск в базе O(1)
+                auto it = baseIdx.find(cur.id);
+                if (it == baseIdx.end() || stateChanged(cur, *it->second)) changed.push_back(cur);
             }
-            for (const EntityState& prev : base->states)
-                if (findState(current, prev.id) == nullptr) removed.push_back(prev.id);
+            for (const EntityState& prev : base->states)  // исчезнувшие: нет в текущем
+                if (curIdx.find(prev.id) == curIdx.end()) removed.push_back(prev.id);
+            ++impl_->deltaSnapshots;
         }
         impl_->lastChanged = (int)changed.size();
+
+        // Инвариант: сущностей <= kMaxEntities (< 2^16) -> счётчики влезают в uint16. Если больше
+        // (не должно) — НЕ шлём битый пакет: заголовок разошёлся бы с payload = порча у клиента.
+        if (changed.size() > 0xFFFFu || removed.size() > 0xFFFFu) {
+            LOGE("NetServer: снапшот %zu changed / %zu removed > uint16 — пропуск (лимит мира?)",
+                 changed.size(), removed.size());
+            continue;
+        }
 
         // ackSeq — последний обработанный ввод героя этого клиента (для реконсиляции).
         uint32_t ackSeq = impl_->game.inputSeq(conn.heroId);
@@ -511,6 +557,8 @@ void NetServer::tick(float dt) {
 }
 
 int NetServer::debugLastChanged() const { return impl_->lastChanged; }
+uint32_t NetServer::debugFullSnapshots() const { return impl_->fullSnapshots; }
+uint32_t NetServer::debugDeltaSnapshots() const { return impl_->deltaSnapshots; }
 float NetServer::debugResource() const { return impl_->game.resource(); }
 int NetServer::debugEnemyCount() const { return impl_->game.enemyCount(); }
 int NetServer::debugPhase() const { return (int)impl_->game.gamePhase(); }

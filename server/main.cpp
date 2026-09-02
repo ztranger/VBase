@@ -1437,6 +1437,72 @@ int runSceneLoadFailTest() {
     return ok ? 0 : 1;
 }
 
+// P1-03: валидация ack (чистый предикат). Отбивает 0/старьё/будущее -> база не откатывается,
+// значит клиент не может форсить full-снапшоты (амплификация).
+int runAckValidateTest() {
+    bool ok = true;
+    ok = ok && ackIsValid(5, 0, 10);    // новый клиент: первый реальный тик (в прошлом) -> да
+    ok = ok && !ackIsValid(0, 0, 10);   // ack=0 -> нет (иначе full каждый тик)
+    ok = ok && !ackIsValid(20, 0, 10);  // из будущего -> нет
+    ok = ok && ackIsValid(6, 5, 10);    // монотонно вперёд -> да
+    ok = ok && !ackIsValid(5, 5, 10);   // повтор -> нет
+    ok = ok && !ackIsValid(3, 5, 10);   // назад (старьё) -> нет
+    ok = ok && !ackIsValid(0, 5, 10);   // сброс к 0 после подтверждения -> нет (ключевой анти-эксплойт)
+    std::printf("[AckValidate] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
+// P1-03: легитимный клиент получает ОДИН full и уходит на дельты (full-снапшоты не спамятся).
+int runSnapshotRateTest() {
+    SceneDesc desc;
+    ColliderSpec floor; floor.center = Vec3{0,-0.5f,0}; floor.half = Vec3{50,0.5f,50}; desc.colliders.push_back(floor);
+    desc.player.pos = Vec3{0,0,0}; desc.player.hp = 100.0f;
+    NetServer server;
+    if (!server.start(kNetPort)) { std::printf("[SnapshotRate] FAIL: сервер\n"); return 1; }
+    server.configureWorld(desc);
+    NetClient client;
+    client.connect("127.0.0.1", kNetPort);
+    const float dt = kTickDt;
+    uint32_t seq = 0;
+    InputCommand idle;
+    for (int i = 0; i < 150; ++i) {
+        server.poll();
+        if (client.connected() && client.myId() != 0) { idle.seq = ++seq; client.sendInput(idle); }
+        server.tick(dt);
+        client.poll();
+        client.consumeSnapshot();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    uint32_t fulls = server.debugFullSnapshots();
+    uint32_t deltas = server.debugDeltaSnapshots();
+    std::printf("[SnapshotRate] full=%u (ждём мало, <=5), delta=%u (ждём много, >40)\n",
+                (unsigned)fulls, (unsigned)deltas);
+    bool ok = fulls <= 5 && deltas > 40;
+    std::printf("[SnapshotRate] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
+// P1-04: агрессивный бесконечный спавнер не разращивает мир сверх kMaxEntities.
+int runEntityCapTest() {
+    GameWorld world;
+    SceneDesc desc;
+    ColliderSpec floor; floor.center = Vec3{0,-0.5f,0}; floor.half = Vec3{80,0.5f,80}; desc.colliders.push_back(floor);
+    BuildingSpec core; core.kind = BuildingSpec::Core; core.pos = Vec3{0,0,0}; core.hp = 1e9f; desc.buildings.push_back(core);
+    BuildingSpec sp; sp.kind = BuildingSpec::Spawner; sp.pos = Vec3{20,0,0};
+    sp.rate = 0.001f; sp.waveSize = 100000; sp.waveGrow = 0; sp.wavePause = 0.0f; desc.buildings.push_back(sp);
+    desc.enemy.hp = 1e9f; desc.enemy.damage = 0.0f; desc.enemy.attackInterval = 10.0f;  // бессмертны/безвредны — копятся
+    world.configure(desc);
+    const float dt = kTickDt;
+    std::vector<EntityState> tmp;
+    for (int i = 0; i < 1500; ++i) world.step(dt);  // ~1500 попыток спавна (1/тик) — заведомо >лимита
+    world.writeStates(tmp);
+    size_t n = tmp.size();
+    std::printf("[EntityCap] сущностей=%zu (лимит %u — ждём, что упёрлось В него)\n", n, (unsigned)kMaxEntities);
+    bool ok = n <= (size_t)kMaxEntities && n >= (size_t)kMaxEntities - 2;  // не превысил И реально дошёл до кэпа
+    std::printf("[EntityCap] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1477,9 +1543,14 @@ int main(int argc, char** argv) {
         int v = runBuildAfterEndTest(); // P2-02: стройка после конца матча отклонена
         int w = runPortParseTest();     // P2-05: строгий парсер порта
         int x = runSceneLoadFailTest(); // P1-05: несуществующая сцена не грузится
+        // Батч лимитов неткода (P1-03/P1-04): ack-валидация, rate-limit full, лимит сущностей.
+        int y1 = runAckValidateTest();  // P1-03: валидация ackTick (анти-амплификация)
+        int y2 = runSnapshotRateTest(); // P1-03: легит-клиент — один full, дальше дельты
+        int y3 = runEntityCapTest();    // P1-04: kMaxEntities держит рост мира
         return (a == 0 && b == 0 && c == 0 && d == 0 && e == 0 && f == 0 && g == 0 && h == 0 &&
                 k == 0 && m == 0 && n == 0 && o == 0 && p == 0 && q == 0 && r == 0 && s == 0 &&
-                t == 0 && u == 0 && v == 0 && w == 0 && x == 0) ? 0 : 1;
+                t == 0 && u == 0 && v == 0 && w == 0 && x == 0 &&
+                y1 == 0 && y2 == 0 && y3 == 0) ? 0 : 1;
     }
 
     uint16_t port = kNetPort;
