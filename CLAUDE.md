@@ -65,7 +65,9 @@ Include — **квалифицированные** от корня `cpp/` (на�
 
 `imgui` (GUI), `enet` (UDP), `cgltf` (glTF), `stb` (stb_image), `glfw` (окно на десктопе),
 `vulkan` (заголовки Khronos, не линкуются), `jolt` (Jolt Physics v5.6.0 — кинематический
-контроллер; подключается родным CMake-таргетом, см. NEXT_STEPS §2.5).
+контроллер; подключается родным CMake-таргетом, см. NEXT_STEPS §2.5),
+`miniaudio` (single-header звук: Windows WASAPI / Android AAudio+OpenSL; за интерфейсом
+`engine/audio/Audio.h`, реализация `MiniAudioEngine`; см. NEXT_STEPS «Звук»).
 `glew/` — пустой остаток неудачной загрузки, **не используется**, можно удалить.
 
 ## Ключевые правила

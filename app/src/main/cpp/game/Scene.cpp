@@ -633,6 +633,42 @@ static void applyHitFx(SkinnedItem& it, float t) {
     it.model = it.model * Mat4::scale({s, s, s});
 }
 
+void Scene::emitSound(SoundId id) {
+    // Антиспам: в бою за один кадр может прилететь много одновременных хитов — не даём
+    // одному звуку задублироваться больше kMax раз (иначе каша/перегруз микса).
+    constexpr int kMax = 4;
+    int n = 0;
+    for (const SoundEvent& e : sounds_)
+        if (e.id == id) ++n;
+    if (n < kMax) sounds_.push_back({id});
+}
+
+bool Scene::killerYaw(const Vec3& mobPos, uint32_t mobId, float& outYaw) const {
+    // Кандидаты в убийцы моба: локальный герой + чужие герои/башни (снаряд летит от стрелка,
+    // поэтому «откуда прилетело» ≈ направление на ближайшего из них). Мобы team 0 враждебны всем,
+    // фильтр по команде не нужен. Берём самую свежую позицию кандидата (из буфера снапшотов).
+    float bestD2 = 1e18f;
+    Vec3 bestSrc{};
+    bool have = false;
+    auto consider = [&](const Vec3& src) {
+        float dx = src.x - mobPos.x, dz = src.z - mobPos.z;
+        float d2 = dx * dx + dz * dz;
+        if (d2 < bestD2) { bestD2 = d2; bestSrc = src; have = true; }
+    };
+    if (client_.connected() && !heroDead()) consider(player_.position);  // локальный герой
+    for (const RemoteEntity& r : remoteEntities_) {
+        if (r.id == mobId) continue;
+        EntityType t = (EntityType)r.type;
+        if (t != EntityType::Hero && t != EntityType::Tower) continue;
+        consider(r.buffer.empty() ? r.ch.position : r.buffer.back().pos);
+    }
+    if (!have) return false;
+    float tx = bestSrc.x - mobPos.x, tz = bestSrc.z - mobPos.z;
+    if (tx * tx + tz * tz < 1e-6f) return false;  // источник на мобе — разворачивать некуда
+    outYaw = std::atan2(tx, tz);  // конвенция кода: yaw = atan2(dir.x, dir.z) — лицом к источнику
+    return true;
+}
+
 void Scene::applySnapshot() {
     uint32_t myId = client_.myId();
     if (myId == 0) return;  // ждём Welcome, иначе примем себя за чужого
@@ -655,6 +691,7 @@ void Scene::applySnapshot() {
                 damageNumbers_.push_back({hit, dmg, 0.0f, {1.0f, 0.45f, 0.40f}});
                 sparks_.push_back({hit, 0.0f, kSparkLife, sparkSeed_ += 0x9e3779b9u});
                 localFlash_ = kFlashDur;
+                emitSound(SoundId::Hit);
                 // Джус: свой герой под ударом — тряска (по урону, скромнее, чем у ядра).
                 float amp = dmg * 0.006f;
                 if (amp > 0.20f) amp = 0.20f;
@@ -690,6 +727,7 @@ void Scene::applySnapshot() {
             if (re.id == s.id) { r = &re; break; }
         }
         const float prevHp = (r != nullptr) ? r->hp : 0.0f;  // до перезаписи — для дифа урона
+        const bool created = (r == nullptr);                  // новая сущность в этом снапшоте
         if (r == nullptr) {
             RemoteEntity re;
             re.id = s.id;
@@ -704,8 +742,11 @@ void Scene::applySnapshot() {
         r->aux = s.aux;  // ресурс в хранилище и т.п. (последнее значение)
         r->hp = s.hp;    // здоровье (ядро/враг)
 
-        // Читаемость боя: наблюдаемый максимум hp (для доли бара) + число урона/вспышка по дифу.
+        // Звук выстрела: снаряд появился в снапшоте (маг/башня открыли огонь).
         const EntityType cet = (EntityType)s.type;
+        if (created && cet == EntityType::Projectile) emitSound(SoundId::Shoot);
+
+        // Читаемость боя: наблюдаемый максимум hp (для доли бара) + число урона/вспышка по дифу.
         if (isCombatType(cet) && s.hp > 0.0f) {
             float& mx = maxHpSeen_[s.id];
             if (s.hp > mx) mx = s.hp;  // спавн на полном → первое значение = максимум
@@ -719,6 +760,7 @@ void Scene::applySnapshot() {
             damageNumbers_.push_back({hit, dmg, 0.0f, dcol});
             sparks_.push_back({hit, 0.0f, kSparkLife, sparkSeed_ += 0x9e3779b9u});  // искры в точке хита
             flash_[s.id] = kFlashDur;                                               // вспышка + scale-punch
+            emitSound(cet == EntityType::Core ? SoundId::CoreHit : SoundId::Hit);
             // Джус: удар по ядру — тряска камеры (амплитуда по урону).
             if (cet == EntityType::Core) {
                 float amp = dmg * 0.012f;
@@ -743,11 +785,14 @@ void Scene::applySnapshot() {
         }
         if (!found) {
             const RemoteEntity& re = remoteEntities_[i];
+            if (playing && (EntityType)re.type == EntityType::Enemy) emitSound(SoundId::EnemyDeath);
             if (playing && (EntityType)re.type == EntityType::Enemy && !mobs_.empty()) {
                 int mi = (int)((uint32_t)re.charType % (uint32_t)mobs_.size());
                 if (mobs_[mi].deathClip >= 0 && mobs_[mi].deathClipDur > 0.0f) {
                     Vec3 p = re.buffer.empty() ? re.ch.position : re.buffer.back().pos;
                     float yaw = re.buffer.empty() ? re.ch.facingYaw : re.buffer.back().yaw;
+                    float ky;  // мгновенный доворот лицом к убийце (бросок death-клипа — от него)
+                    if (killerYaw(p, re.id, ky)) yaw = ky;
                     dyingMobs_.push_back({mi, p, yaw, 0.0f, mobs_[mi].deathClipDur});
                 }
             }
@@ -757,6 +802,14 @@ void Scene::applySnapshot() {
         } else {
             ++i;
         }
+    }
+
+    // Звук исхода матча по фронту смены фазы (победа/поражение своей команды).
+    uint8_t phase = client_.gamePhase();
+    if (phase != prevPhase_) {
+        if (phase == (uint8_t)GamePhase::Won) emitSound(SoundId::Victory);
+        else if (phase == (uint8_t)GamePhase::Lost) emitSound(SoundId::Defeat);
+        prevPhase_ = phase;
     }
 
     // Синхронизируем футпринт-коллайдеры зданий под текущий список сущностей (для предсказания героя).
@@ -1233,5 +1286,6 @@ void Scene::confirmBuild() {
     Vec3 center;
     if (!computeGhost(cx, cz, center)) return;  // невалидно — не шлём запрос
     client_.sendBuild((uint8_t)buildType_, cx, cz);
+    emitSound(SoundId::Build);  // оптимистично: шлём только на валидной клетке
     // Остаёмся в режиме — можно ставить дальше (сервер авторитетно применит/отвергнет).
 }

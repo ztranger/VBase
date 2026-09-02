@@ -48,6 +48,7 @@ set_source_files_properties(${ENET_SOURCES} PROPERTIES COMPILE_DEFINITIONS
 
 set(CGLTF_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/cgltf")
 set(STB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/stb")
+set(MINIAUDIO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/miniaudio")
 
 add_library(vbase SHARED
         platform/main.cpp
@@ -63,6 +64,8 @@ add_library(vbase SHARED
         game/SceneLoader.cpp
         game/CharacterRoster.cpp
         engine/physics/CollisionWorld.cpp
+        engine/audio/MiniAudioEngine.cpp
+        engine/audio/miniaudio_impl.c
         engine/render/GlRenderer.cpp
         engine/render/GameUi.cpp
         engine/render/UiSkin.cpp
@@ -88,7 +91,8 @@ add_library(vbase SHARED
 
 target_include_directories(vbase PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
         "${IMGUI_DIR}" "${IMGUI_DIR}/backends"
-        "${VULKAN_DIR}/include" "${CGLTF_DIR}" "${STB_DIR}" "${ENET_DIR}/include")
+        "${VULKAN_DIR}/include" "${CGLTF_DIR}" "${STB_DIR}" "${ENET_DIR}/include"
+        "${MINIAUDIO_DIR}")
 # imgui_impl_opengl3 -> GLES3; imgui_impl_vulkan -> загрузка функций (VK_NO_PROTOTYPES).
 target_compile_definitions(vbase PRIVATE IMGUI_IMPL_OPENGL_ES3 IMGUI_IMPL_VULKAN_NO_PROTOTYPES)
 
@@ -104,6 +108,7 @@ target_link_libraries(vbase
         android
         EGL
         GLESv3
+        OpenSLES
         dl
         log
         Jolt)

@@ -23,6 +23,7 @@
 #include "backends/imgui_impl_glfw.h"
 
 #include "engine/assets/FileAssetSource.h"
+#include "engine/audio/MiniAudioEngine.h"
 #include "engine/render/GameUi.h"
 #include "engine/render/GlRenderer.h"
 #include "engine/core/MathUtil.h"
@@ -42,6 +43,8 @@ struct DesktopSettings {
     int charIndex = -1;
     char joinIp[64] = "127.0.0.1";
     int joinPort = 7777;  // kNetPort
+    float masterVolume = 0.8f;
+    float musicVolume = 0.45f;
 };
 void loadSettings(const char* path, DesktopSettings& s) {
     FILE* f = std::fopen(path, "r");
@@ -57,6 +60,10 @@ void loadSettings(const char* path, DesktopSettings& s) {
             } else if (std::strcmp(key, "port") == 0) {
                 int p = std::atoi(val);
                 if (p >= 1 && p <= 65535) s.joinPort = p;
+            } else if (std::strcmp(key, "mastervol") == 0) {
+                s.masterVolume = (float)std::atof(val);
+            } else if (std::strcmp(key, "musicvol") == 0) {
+                s.musicVolume = (float)std::atof(val);
             }
         } else {
             int v = 0;  // легаси: одинокое целое = сохранённый charIndex
@@ -67,7 +74,8 @@ void loadSettings(const char* path, DesktopSettings& s) {
 }
 void saveSettings(const char* path, const DesktopSettings& s) {
     if (FILE* f = std::fopen(path, "w")) {
-        std::fprintf(f, "char %d\nip %s\nport %d\n", s.charIndex, s.joinIp, s.joinPort);
+        std::fprintf(f, "char %d\nip %s\nport %d\nmastervol %.3f\nmusicvol %.3f\n", s.charIndex,
+                     s.joinIp, s.joinPort, (double)s.masterVolume, (double)s.musicVolume);
         std::fclose(f);
     }
 }
@@ -82,8 +90,9 @@ int keyAxis(GLFWwindow* w, int pos, int neg) {
 // Запустить клиент на заданном бэкенде (0 = OpenGL, 1 = Vulkan). Создаёт своё окно
 // и рендер. Возвращает следующий бэкенд для перезапуска (по кнопке в GameUi) либо
 // -1, если окно закрыто/ESC (выход). ui переживает переключения (свет/камера/FPS).
-int runClient(int backend, GameUiState& ui, DesktopSettings& saved, const std::string& assetsDir,
-              const char* serverIp, const char* scenePath, bool autoJoin) {
+int runClient(int backend, GameUiState& ui, DesktopSettings& saved, Audio& audio,
+              const std::string& assetsDir, const char* serverIp, const char* scenePath,
+              bool autoJoin) {
     const bool useVk = (backend == 1);
 
     glfwDefaultWindowHints();
@@ -253,13 +262,23 @@ int runClient(int backend, GameUiState& ui, DesktopSettings& saved, const std::s
         renderer->renderFrame(frame);
         if (!useVk) glfwSwapBuffers(window);  // Vulkan презентует сам
 
+        // Звук: громкость из UI (мгновенно из DebugPanel) + слив очереди звуков кадра.
+        audio.setMasterVolume(ui.masterVolume);
+        audio.setMusicVolume(ui.musicVolume);
+        for (const SoundEvent& se : scene.sounds()) audio.play(se.id);
+        scene.clearSounds();
+
         // Персист настроек (выбор персонажа + адрес/порт сервера) при любом изменении.
         // Диф дешёвый (strcmp + пара int) и ловит правки поля даже без захода в бой.
         if (ui.charIndex != saved.charIndex || ui.joinPort != saved.joinPort ||
-            std::strcmp(ui.joinIp, saved.joinIp) != 0) {
+            std::strcmp(ui.joinIp, saved.joinIp) != 0 ||
+            std::fabs(ui.masterVolume - saved.masterVolume) > 0.005f ||
+            std::fabs(ui.musicVolume - saved.musicVolume) > 0.005f) {
             saved.charIndex = ui.charIndex;
             saved.joinPort = ui.joinPort;
             std::snprintf(saved.joinIp, sizeof(saved.joinIp), "%s", ui.joinIp);
+            saved.masterVolume = ui.masterVolume;
+            saved.musicVolume = ui.musicVolume;
             saveSettings(kSettingsFile, saved);
         }
 
@@ -338,15 +357,30 @@ int main(int argc, char** argv) {
     ui.charIndex = saved.charIndex;
     std::snprintf(ui.joinIp, sizeof(ui.joinIp), "%s", saved.joinIp);  // сохранённый адрес -> поле Join
     ui.joinPort = saved.joinPort;
+    ui.masterVolume = saved.masterVolume;
+    ui.musicVolume = saved.musicVolume;
     // CLI serverIp (если задан позиционно) переопределяет сохранённый адрес.
     if (serverIpGiven) std::snprintf(ui.joinIp, sizeof(ui.joinIp), "%s", serverIp);
     if (startLoadingPreview) GameUi::requestLoadingScreen();  // --loading: стартуем на лоадинге
+
+    // Аудио: одно устройство на весь процесс (переживает перезапуски runClient — без щелчков
+    // при смене бэкенда/сцены). Звуки грузятся из ассетов, музыка стартует и лупится.
+    MiniAudioEngine audio;
+    audio.init();  // false = звука не будет (не критично, всё no-op)
+    {
+        FileAssetSource audioAssets(assetsDir);
+        loadGameAudio(audio, audioAssets);
+    }
+    audio.setMasterVolume(ui.masterVolume);
+    audio.setMusicVolume(ui.musicVolume);
+    audio.startMusic();
 
     // Цикл перезапуска: runClient возвращает следующий бэкенд или -1 (выход).
     // Активная сцена может меняться в рантайме (меню -> ui.requestScenePath).
     std::string activeScene = scenePath;
     while (backend >= 0) {
-        backend = runClient(backend, ui, saved, assetsDir, serverIp, activeScene.c_str(), autoJoin);
+        backend = runClient(backend, ui, saved, audio, assetsDir, serverIp, activeScene.c_str(),
+                            autoJoin);
         if (ui.requestScenePath[0] != '\0') {  // меню запросило другую сцену -> перезайти с ней
             activeScene = ui.requestScenePath;
             ui.requestScenePath[0] = '\0';

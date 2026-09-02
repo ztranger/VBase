@@ -15,6 +15,7 @@
 #include "imgui.h"
 
 #include "engine/assets/AssetSource.h"
+#include "engine/audio/MiniAudioEngine.h"
 #include "engine/render/GameUi.h"
 #include "engine/render/GlRenderer.h"
 #include "engine/core/Log.h"
@@ -51,6 +52,8 @@ struct AppSettings {
     int charIndex = -1;
     char joinIp[64] = "127.0.0.1";
     int joinPort = 7777;  // kNetPort
+    float masterVolume = 0.8f;
+    float musicVolume = 0.45f;
 };
 void loadSettings(const std::string& path, AppSettings& s) {
     FILE* f = std::fopen(path.c_str(), "r");
@@ -66,6 +69,10 @@ void loadSettings(const std::string& path, AppSettings& s) {
             } else if (std::strcmp(key, "port") == 0) {
                 int p = std::atoi(val);
                 if (p >= 1 && p <= 65535) s.joinPort = p;
+            } else if (std::strcmp(key, "mastervol") == 0) {
+                s.masterVolume = (float)std::atof(val);
+            } else if (std::strcmp(key, "musicvol") == 0) {
+                s.musicVolume = (float)std::atof(val);
             }
         } else {
             int v = 0;  // легаси: одинокое целое = сохранённый charIndex
@@ -76,7 +83,8 @@ void loadSettings(const std::string& path, AppSettings& s) {
 }
 void saveSettings(const std::string& path, const AppSettings& s) {
     if (FILE* f = std::fopen(path.c_str(), "w")) {
-        std::fprintf(f, "char %d\nip %s\nport %d\n", s.charIndex, s.joinIp, s.joinPort);
+        std::fprintf(f, "char %d\nip %s\nport %d\nmastervol %.3f\nmusicvol %.3f\n", s.charIndex,
+                     s.joinIp, s.joinPort, (double)s.masterVolume, (double)s.musicVolume);
         std::fclose(f);
     }
 }
@@ -94,8 +102,10 @@ struct Engine {
     float accumulator = 0.0f; // накопитель времени для фиксированного тика
     float uiScale = 1.0f;    // масштаб UI по плотности экрана
     GameUiState ui;          // состояние панели — общее с десктопом
-    std::string settingsPath;  // файл персиста (internalDataPath/…): персонаж + адрес/порт сервера
+    std::string settingsPath;  // файл персиста (internalDataPath/…): персонаж + адрес/порт + громкость
     AppSettings saved;         // снапшот записанного на диск (диф с ui для перезаписи)
+    MiniAudioEngine audio;     // звук (одно устройство на процесс; переживает пересоздание рендера)
+    bool audioLoaded = false;  // звуки/музыка загружены (один раз, когда доступен AAssetManager)
     std::string scenePath = "scenes/default.scene";  // активная сцена (меняется из меню)
 
     // Мультитач кадра: pumpInput собирает события ВСЕХ пальцев, а в геймплей (twin-stick)
@@ -270,6 +280,18 @@ extern "C" void android_main(android_app* app) {
         engine.ui.charIndex = engine.saved.charIndex;
         std::snprintf(engine.ui.joinIp, sizeof(engine.ui.joinIp), "%s", engine.saved.joinIp);
         engine.ui.joinPort = engine.saved.joinPort;
+        engine.ui.masterVolume = engine.saved.masterVolume;
+        engine.ui.musicVolume = engine.saved.musicVolume;
+    }
+
+    // Аудио: устройство + загрузка звуков/музыки из APK (AAssetManager доступен). Одно на процесс.
+    if (engine.audio.init() && app->activity && app->activity->assetManager) {
+        AndroidAssetSource aud(app->activity->assetManager);
+        loadGameAudio(engine.audio, aud);
+        engine.audioLoaded = true;
+        engine.audio.setMasterVolume(engine.ui.masterVolume);
+        engine.audio.setMusicVolume(engine.ui.musicVolume);
+        engine.audio.startMusic();
     }
 
     app->userData = &engine;
@@ -350,16 +372,28 @@ extern "C" void android_main(android_app* app) {
 
             engine.renderer->renderFrame(frame);
 
-            // Персист настроек (персонаж + адрес/порт сервера) при любом изменении. Диф
-            // дешёвый (strcmp + пара int) и ловит правки поля Join даже без захода в бой.
+            // Звук: громкость из UI (мгновенно из DebugPanel) + слив очереди звуков кадра.
+            if (engine.audioLoaded) {
+                engine.audio.setMasterVolume(engine.ui.masterVolume);
+                engine.audio.setMusicVolume(engine.ui.musicVolume);
+                for (const SoundEvent& se : engine.scene->sounds()) engine.audio.play(se.id);
+                engine.scene->clearSounds();
+            }
+
+            // Персист настроек (персонаж + адрес/порт + громкость) при любом изменении. Диф
+            // дешёвый (strcmp + пара чисел) и ловит правки поля Join/слайдеров даже без боя.
             if (!engine.settingsPath.empty() &&
                 (engine.ui.charIndex != engine.saved.charIndex ||
                  engine.ui.joinPort != engine.saved.joinPort ||
-                 std::strcmp(engine.ui.joinIp, engine.saved.joinIp) != 0)) {
+                 std::strcmp(engine.ui.joinIp, engine.saved.joinIp) != 0 ||
+                 std::fabs(engine.ui.masterVolume - engine.saved.masterVolume) > 0.005f ||
+                 std::fabs(engine.ui.musicVolume - engine.saved.musicVolume) > 0.005f)) {
                 engine.saved.charIndex = engine.ui.charIndex;
                 engine.saved.joinPort = engine.ui.joinPort;
                 std::snprintf(engine.saved.joinIp, sizeof(engine.saved.joinIp), "%s",
                               engine.ui.joinIp);
+                engine.saved.masterVolume = engine.ui.masterVolume;
+                engine.saved.musicVolume = engine.ui.musicVolume;
                 saveSettings(engine.settingsPath, engine.saved);
             }
 

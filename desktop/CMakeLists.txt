@@ -45,6 +45,8 @@ add_executable(vbase_desktop
         ${APP}/engine/render/GlRenderer.cpp
         ${APP}/engine/render/VkApi.cpp
         ${APP}/engine/render/VulkanRenderer.cpp
+        ${APP}/engine/audio/MiniAudioEngine.cpp
+        ${APP}/engine/audio/miniaudio_impl.c
         ${APP}/engine/render/GameUi.cpp
         ${APP}/engine/render/UiSkin.cpp
         ${APP}/engine/render/ui/UiShell.cpp
@@ -78,7 +80,7 @@ add_executable(vbase_desktop
 # грузятся динамически через glfwGetInstanceProcAddress, vulkan-1.lib не нужен).
 target_include_directories(vbase_desktop PRIVATE
         "${APP}" "${ENET}/include" "${TP}/cgltf" "${TP}/stb" "${IMGUI}" "${IMGUI}/backends"
-        "${TP}/vulkan/include")
+        "${TP}/vulkan/include" "${TP}/miniaudio")
 
 # imgui_impl_vulkan должен грузить Vulkan-функции через ImGui_ImplVulkan_LoadFunctions
 # (у нас VK_NO_PROTOTYPES, линковать vulkan-1 не с чем).
@@ -88,7 +90,7 @@ if(MSVC)
     target_compile_options(vbase_desktop PRIVATE /utf-8)
 endif()
 
-target_link_libraries(vbase_desktop glfw opengl32 ws2_32 winmm Jolt)
+target_link_libraries(vbase_desktop glfw opengl32 ws2_32 winmm ole32 Jolt)
 
 # --- Vulkan-шейдеры: GLSL -> SPIR-V через glslc, в assets/shaders/vk (грузятся
 # рендером через AssetSource). glslc из Vulkan SDK (переопределяется -DGLSLC=...).

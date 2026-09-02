@@ -60,6 +60,11 @@ void draw(UiShell::Ctx& ctx) {
         ctx.scene.setFogColor(Vec3{std::pow(g[0], 2.2f), std::pow(g[1], 2.2f), std::pow(g[2], 2.2f)});
     }
 
+    ImGui::SeparatorText("Audio");
+    // Громкость живёт в GameUiState; платформа применяет к Audio каждый кадр и персистит.
+    ImGui::SliderFloat("Master", &ctx.state.masterVolume, 0.0f, 1.0f, "%.2f");
+    ImGui::SliderFloat("Music", &ctx.state.musicVolume, 0.0f, 1.0f, "%.2f");
+
     ImGui::SeparatorText("Renderer");
     bool isGl = (ctx.state.backend == 0);
     ImGui::BeginDisabled(isGl);

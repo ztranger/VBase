@@ -16,6 +16,10 @@ struct GameUiState {
     char joinIp[64] = "127.0.0.1";
     int joinPort = 7777;             // порт сервера для Join (kNetPort по умолчанию); персистится
 
+    // Громкость (0..1): платформа применяет к Audio каждый кадр; персистится между запусками.
+    float masterVolume = 0.8f;       // общий SFX+музыка
+    float musicVolume = 0.45f;       // только музыка
+
     bool vulkanAvailable = false;
     int backend = 0;         // 0 = OpenGL, 1 = Vulkan
     int requestBackend = -1; // -1 = нет
