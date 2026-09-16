@@ -1,5 +1,6 @@
 #include "game/SceneLoader.h"
 
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <sstream>
@@ -448,4 +449,108 @@ void applyBuildingConfig(SceneDesc& desc, const BuildingConfig& cfg) {
         bt.damage = bi.damage;
         bt.range = bi.range;
     }
+}
+
+namespace {
+// Хелперы санитизации: конечное значение или дефолт; кламп в [lo,hi] с дефолтом при NaN/inf.
+float sanF(float v, float def) { return std::isfinite(v) ? v : def; }
+float clampF(float v, float lo, float hi, float def) {
+    if (!std::isfinite(v)) return def;
+    return v < lo ? lo : (v > hi ? hi : v);
+}
+void sanVec3(Vec3& v) { v.x = sanF(v.x, 0.0f); v.y = sanF(v.y, 0.0f); v.z = sanF(v.z, 0.0f); }
+}  // namespace
+
+void validateSceneDesc(SceneDesc& desc) {
+    // Сетка: cell — делитель (Grid::cellOf), обязана быть > 0 и конечной; arenaHalf ограничивает
+    // размер навсетки (kMaxSide=512) — держим в разумных пределах.
+    desc.grid.cell = clampF(desc.grid.cell, 0.25f, 64.0f, 2.0f);
+    desc.grid.arenaHalf = clampF(desc.grid.arenaHalf, 1.0f, 1000.0f, 11.0f);
+
+    // Меши: параметры формы + stacks/slices сферы (генератор клампит и сам, чистим и тут).
+    for (MeshSpec& m : desc.meshes) {
+        m.a = clampF(m.a, 0.001f, 1e4f, 1.0f);
+        m.b = clampF(m.b, 0.001f, 1e4f, 1.0f);
+        if (m.stacks < 2) m.stacks = 2;
+        if (m.stacks > 512) m.stacks = 512;
+        if (m.slices < 3) m.slices = 3;
+        if (m.slices > 512) m.slices = 512;
+    }
+    // Текстуры: size (потолок против OOM) и cells (≤ size, иначе деление на ноль в генераторе).
+    for (TextureSpec& t : desc.textures) {
+        if (t.size < 1) t.size = 1;
+        if (t.size > 4096) t.size = 4096;
+        if (t.cells < 1) t.cells = 1;
+        if (t.cells > t.size) t.cells = t.size;
+    }
+    // Коллайдеры: центр конечен, полуразмеры конечны и ≥ 0 (иначе Jolt-бокс невалиден).
+    for (ColliderSpec& c : desc.colliders) {
+        sanVec3(c.center);
+        c.half.x = clampF(c.half.x, 0.0f, 1e4f, 0.5f);
+        c.half.y = clampF(c.half.y, 0.0f, 1e4f, 0.5f);
+        c.half.z = clampF(c.half.z, 0.0f, 1e4f, 0.5f);
+    }
+    // Здания: позиция конечна, статы конечны и ≥ 0; волновые счётчики в разумных границах.
+    for (BuildingSpec& b : desc.buildings) {
+        sanVec3(b.pos);
+        b.rate = clampF(b.rate, 0.0f, 1e6f, 0.0f);
+        b.cap = clampF(b.cap, 0.0f, 1e9f, 0.0f);
+        b.hp = clampF(b.hp, 0.0f, 1e12f, 0.0f);
+        b.damage = clampF(b.damage, 0.0f, 1e9f, 0.0f);
+        b.range = clampF(b.range, 0.0f, 1e4f, 0.0f);
+        if (b.waveSize < 0) b.waveSize = 0;
+        if (b.waveSize > 100000) b.waveSize = 100000;
+        b.wavePause = clampF(b.wavePause, 0.0f, 1e4f, 0.0f);
+        if (b.waveGrow < 0) b.waveGrow = 0;
+        if (b.waveGrow > 100000) b.waveGrow = 100000;
+    }
+    for (SpawnSpec& s : desc.spawns) sanVec3(s.pos);
+
+    // Враг по умолчанию: attackInterval — делитель кулдауна, обязан быть > 0.
+    desc.enemy.hp = clampF(desc.enemy.hp, 0.1f, 1e9f, 10.0f);
+    desc.enemy.damage = clampF(desc.enemy.damage, 0.0f, 1e9f, 5.0f);
+    desc.enemy.attackInterval = clampF(desc.enemy.attackInterval, 0.05f, 1e4f, 1.0f);
+
+    // Шаблоны построек героя.
+    for (BuildTemplate& t : desc.build) {
+        t.cost = clampF(t.cost, 0.0f, 1e9f, 0.0f);
+        t.rate = clampF(t.rate, 0.0f, 1e6f, 0.0f);
+        t.cap = clampF(t.cap, 0.0f, 1e9f, 0.0f);
+        t.hp = clampF(t.hp, 0.0f, 1e12f, 0.0f);
+        t.damage = clampF(t.damage, 0.0f, 1e9f, 0.0f);
+        t.range = clampF(t.range, 0.0f, 1e4f, 0.0f);
+    }
+
+    // Игрок: масштаб/капсула > 0 (капсула Jolt), hp > 0.
+    sanVec3(desc.player.pos);
+    desc.player.scale = clampF(desc.player.scale, 1e-4f, 1e3f, 0.03f);
+    desc.player.yawOffset = sanF(desc.player.yawOffset, 0.0f);
+    desc.player.colliderRadius = clampF(desc.player.colliderRadius, 0.01f, 100.0f, 0.3f);
+    desc.player.colliderCylHalf = clampF(desc.player.colliderCylHalf, 0.01f, 100.0f, 0.3f);
+    desc.player.hp = clampF(desc.player.hp, 1.0f, 1e9f, 100.0f);
+    desc.player.respawnDelay = clampF(desc.player.respawnDelay, 0.0f, 1e4f, 5.0f);
+
+    // Камера: nearZ > 0, farZ > nearZ, fovY в (0,π).
+    desc.camera.distance = clampF(desc.camera.distance, 0.1f, 1e4f, 16.0f);
+    desc.camera.pitch = clampF(desc.camera.pitch, 0.05f, 1.5f, 0.9f);
+    desc.camera.lookHeight = clampF(desc.camera.lookHeight, -1e3f, 1e3f, 1.0f);
+    desc.camera.fovY = clampF(desc.camera.fovY, 0.1f, 3.0f, 0.9f);
+    desc.camera.nearZ = clampF(desc.camera.nearZ, 1e-3f, 1e4f, 0.1f);
+    desc.camera.farZ = clampF(desc.camera.farZ, desc.camera.nearZ + 1e-3f, 1e6f, 200.0f);
+
+    sanVec3(desc.lightDir);
+    desc.matchRestartDelay = clampF(desc.matchRestartDelay, 0.0f, 1e4f, 0.0f);
+
+    // Ростеры: attackInterval — делитель, > 0; остальные статы конечны и ≥ 0.
+    auto sanChar = [](CharacterDesc& c) {
+        c.hp = clampF(c.hp, 0.0f, 1e9f, 0.0f);
+        c.damage = clampF(c.damage, 0.0f, 1e9f, 0.0f);
+        c.speed = clampF(c.speed, 0.0f, 1e4f, 0.0f);
+        c.attackInterval = clampF(c.attackInterval, 0.05f, 1e4f, 1.0f);
+        c.range = clampF(c.range, 0.0f, 1e4f, 0.0f);
+        c.scale = clampF(c.scale, 1e-4f, 1e3f, 1.0f);
+        c.yawOffset = sanF(c.yawOffset, 0.0f);
+    };
+    for (CharacterDesc& c : desc.heroTypes) sanChar(c);
+    for (CharacterDesc& c : desc.enemyTypes) sanChar(c);
 }

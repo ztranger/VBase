@@ -33,14 +33,32 @@ RUN test -f /src/third_party/enet/callbacks.c \
     && /src/server/build/vbase_server --selftest \
     && strip /src/server/build/vbase_server
 
+# Версия базового образа закреплена тегом (24.04). Для строгой воспроизводимости можно
+# закрепить дайджестом: FROM ubuntu:24.04@sha256:<digest> (обновлять вручную при апдейте).
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
+# P2-17: heartbeat-файл для HEALTHCHECK (сервер обновляет ~раз в сек; путь общий с кодом сервера).
+ENV VBASE_HEARTBEAT=/tmp/vbase.hb
 
 WORKDIR /app
 COPY --from=builder /src/server/build/vbase_server /app/vbase_server
 COPY app/src/main/assets/scenes /app/assets/scenes
 COPY app/src/main/assets/config /app/assets/config
 
+# P2-17: НЕ root — свой непривилегированный пользователь (defense-in-depth). /app только читаем,
+# heartbeat пишется в /tmp (world-writable). Порт 7777 непривилегированный — root не нужен.
+RUN useradd --system --no-create-home --uid 10001 vbase
+USER vbase
+
 EXPOSE 7777/udp
+
+# P2-17: liveness по СВЕЖЕСТИ heartbeat-файла — ловит зависший игровой цикл, а не только упавший
+# процесс (проверка процесса на это неспособна). Значение файла — unix-время последнего кадра.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD test -f "$VBASE_HEARTBEAT" && [ "$(( $(date +%s) - $(cat "$VBASE_HEARTBEAT") ))" -lt 20 ]
+
+# Ресурсы (документация; задаются при запуске, не в образе): сервер однопоточный, ~1 ядро;
+# память — десятки МБ (Jolt-мир + сущности, лимит kMaxEntities=1024); сеть — UDP 7777,
+# per-peer rate-limit в коде (P2-04). Пример: docker run --cpus=1 --memory=256m ...
 ENTRYPOINT ["/app/vbase_server"]
 CMD ["7777", "/app/assets", "scenes/default.scene"]

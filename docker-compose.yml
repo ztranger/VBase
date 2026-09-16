@@ -8,7 +8,14 @@ services:
       dockerfile: server/Dockerfile
     image: vbase-server
     init: true
+    restart: unless-stopped        # P2-17: авто-перезапуск при падении (HEALTHCHECK — в Dockerfile)
     ports:
       - "7777:7777/udp"
     stdin_open: true
     tty: true
+    # P2-17: лимиты ресурсов (сервер однопоточный, память — десятки МБ). Правьте под нагрузку.
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256M

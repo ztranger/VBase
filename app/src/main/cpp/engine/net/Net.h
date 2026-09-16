@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "engine/core/Input.h"
+#include "game/GameTypes.h"  // P2-19: игровые типы (EntityType/GamePhase/EntityState) — не в транспорте
 
 struct SceneDesc;  // описание сцены (коллайдеры + спавн) — из SceneDesc.h
 
@@ -44,26 +45,8 @@ inline bool ackIsValid(uint32_t proposed, uint32_t accepted, uint32_t serverTick
     return proposed > accepted && proposed <= serverTick;
 }
 
-// Тип игровой сущности (тег в снапшоте; по нему клиент выбирает визуал/поведение).
-// Пока используется только Hero; остальные — задел под геймплей (генераторы,
-// хранилища, спавнеры, враги, башни, ядро базы).
-enum class EntityType : uint8_t {
-    Hero = 0,
-    Generator,
-    Storage,
-    Spawner,
-    Enemy,
-    Tower,
-    Core,
-    Projectile,  // снаряд башни (серверная сущность): летит к цели, урон по попаданию
-};
-
-// Фаза матча (жизненный цикл). Глобальна (не per-entity) — шлётся в заголовке снапшота.
-enum class GamePhase : uint8_t {
-    Playing = 0,  // идёт бой
-    Won = 1,      // все спавнеры отработали и врагов не осталось
-    Lost = 2,     // ядро разрушено
-};
+// Игровые типы (EntityType / GamePhase / EntityState) вынесены в game/GameTypes.h (P2-19) —
+// транспорт их лишь включает и сериализует. NetStatus ниже — транспортное состояние, остаётся тут.
 
 // Состояние транспортного соединения клиента (для HUD/переподключения). ENet сам шлёт
 // keep-alive пинги и детектит таймаут; здесь мы лишь отражаем его для UI.
@@ -72,32 +55,6 @@ enum class GamePhase : uint8_t {
 //  Connected  — рукопожатие прошло, идут снапшоты;
 //  Lost       — соединение оборвалось (таймаут/сервер закрылся), НЕ по нашей воле.
 enum class NetStatus : uint8_t { Offline = 0, Connecting, Connected, Lost };
-
-// Состояние одной сущности в снапшоте (то, что сервер шлёт клиентам). Обобщено под
-// систему сущностей: тип + команда + generic-слоты (hp / aux — ресурс/прогресс/…).
-struct EntityState {
-    uint32_t id = 0;
-    uint8_t type = 0;      // EntityType
-    uint8_t team = 0;      // 0 = нейтрал/PvE; 1/2 — стороны (кооп/PvP)
-    float x = 0.0f, y = 0.0f, z = 0.0f;
-    float yaw = 0.0f;
-    float animParam = 0.0f;
-    float speed01 = 0.0f;
-    float velY = 0.0f;     // вертикальная скорость (для реконсиляции прыжка на клиенте)
-    float hp = 0.0f;       // здоровье (герой/враг/здание); 0 = не используется
-    float aux = 0.0f;      // generic-слот по типу: ресурс в хранилище, прогресс, …
-    float attackT = 0.0f;  // остаток времени атаки героя, сек (>0 = идёт каст; для анимации)
-    uint8_t charType = 0;  // индекс персонажа в ростере (какой моделью рисовать героя)
-};
-
-// EntityState шлётся сырым memcpy (Net.cpp) и НЕ входит в pack(1)-блок — между team (off 5)
-// и x (off 8) есть 2 байта паддинга. На ARM64/x64 (обе LE, natural-align) раскладка совпадает,
-// но kProtocolVersion этого не ловит: страхуемся статик-проверкой. Любое поле, сместившее
-// layout, уронит сборку ЗДЕСЬ (а не породит порчу памяти в снапшотах) — напоминание бампнуть
-// версию И сверить раскладку на обеих целях.
-static_assert(sizeof(EntityState) == 52, "EntityState: размер изменился — бампни kProtocolVersion");
-static_assert(alignof(EntityState) == 4, "EntityState: выравнивание изменилось");
-static_assert(offsetof(EntityState, x) == 8, "EntityState: паддинг после team съехал");
 
 // Клиент: подключается к серверу, шлёт InputCommand, принимает снапшоты.
 // ENet спрятан за pimpl, чтобы не тащить его заголовки в остальной код.

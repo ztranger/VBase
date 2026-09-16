@@ -15,6 +15,7 @@
 #include "engine/core/Log.h"
 #include "engine/core/Renderer.h"
 #include "game/SceneLoader.h"
+#include "game/BuildRules.h"  // blocksPath/footprintBox — общие с сервером (GameWorld)
 
 namespace {
 // Запечь статичную OBJ-модель под generic-рендер (он только translation): центрируем по XZ,
@@ -84,67 +85,72 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
         return;  // пустая сцена — ошибки уже в логе
     }
     sceneDesc_ = desc;  // сохраняем: host отдаст ту же геометрию серверу; rebuildGraphics переиспользует
-    grid_ = desc.grid;  // строительная сетка из сцены (та же, что применит сервер)
     // Конфиг зданий (параметры + тексты панели). Параметры применяем к зданиям сцены —
     // единый источник настроек: сцена размещает, конфиг задаёт rate/cap/…
     loadBuildingConfig(assets, "config/buildings.cfg", config_);
     applyBuildingConfig(sceneDesc_, config_);
+
+    // --- Ростер персонажей: ДАННЫЕ (в sceneDesc_). GPU-загрузка — ниже в createGpuResources
+    // (из sceneDesc_.heroTypes/enemyTypes), чтобы rebuildGraphics поднимал модели без чтения
+    // конфигов. Определяем ДО валидации, чтобы санитизация покрыла и статы ростера. ---
+    int defChar = 0;
+    if (sceneDesc_.player.present) {
+        std::vector<CharacterDesc> roster;
+        if (!loadCharacterRoster(assets, "config/characters.cfg", roster)) {
+            CharacterDesc c;
+            c.id = c.name = "player";
+            c.model = sceneDesc_.player.model;
+            c.scale = sceneDesc_.player.scale;
+            c.yawOffset = sceneDesc_.player.yawOffset;
+            c.hide = sceneDesc_.player.hideNodes;
+            roster.push_back(std::move(c));
+        }
+        sceneDesc_.heroTypes = roster;  // статы героев -> локальному серверу И источник GPU-загрузки
+        for (size_t i = 0; i < roster.size(); ++i)
+            if (roster[i].model == sceneDesc_.player.model) { defChar = (int)i; break; }
+
+        std::vector<CharacterDesc> mobRoster;
+        if (loadCharacterRoster(assets, "config/enemies.cfg", mobRoster))
+            sceneDesc_.enemyTypes = mobRoster;
+    }
+
+    // P2-12: санитизируем недоверенное описание ДО использования (сетка-делитель, коллайдеры/
+    // капсула в Jolt, статы). Дальше читаем ТОЛЬКО из sceneDesc_ (уже безопасного).
+    validateSceneDesc(sceneDesc_);
+
+    grid_ = sceneDesc_.grid;  // строительная сетка (после клампа cell>0)
     localMaxHp_ = config_.get(EntityType::Hero).hp;  // для HUD-бара героя
-    if (localMaxHp_ <= 0.0f) localMaxHp_ = 100.0f;
+    if (!(localMaxHp_ > 0.0f)) localMaxHp_ = 100.0f;  // ловит и NaN
 
-    // Свет и камера — прямо из описания.
-    lightDir_ = desc.lightDir;
-    camera_.distance = desc.camera.distance;
-    camera_.pitch = desc.camera.pitch;
-    camera_.lookHeight = desc.camera.lookHeight;
-    camera_.fovY = desc.camera.fovY;
-    camera_.nearZ = desc.camera.nearZ;
-    camera_.farZ = desc.camera.farZ;
+    // Свет и камера — из санитизированного описания.
+    lightDir_ = sceneDesc_.lightDir;
+    camera_.distance = sceneDesc_.camera.distance;
+    camera_.pitch = sceneDesc_.camera.pitch;
+    camera_.lookHeight = sceneDesc_.camera.lookHeight;
+    camera_.fovY = sceneDesc_.camera.fovY;
+    camera_.nearZ = sceneDesc_.camera.nearZ;
+    camera_.farZ = sceneDesc_.camera.farZ;
 
-    // --- Статичные коллайдеры физики (из описания сцены) ---
+    // --- Статичные коллайдеры физики (санитизированные полуразмеры) ---
     for (const ColliderSpec& cs : sceneDesc_.colliders) {
         collision_->addBox(cs.center, cs.half);
     }
     collision_->finalize();  // оптимизация broad-phase после всей статики
     LOGI("Физика: %d статичных коллайдеров", (int)sceneDesc_.colliders.size());
 
-    // --- Ростер персонажей: ДАННЫЕ (в sceneDesc_) + контроллер игрока. GPU-загрузка ростера —
-    // ниже в createGpuResources (из sceneDesc_.heroTypes/enemyTypes), чтобы rebuildGraphics
-    // мог переподнять модели без повторного чтения конфигов. ---
-    int defChar = 0;
-    if (desc.player.present) {
-        // Данные ростера героев. Если конфиг не прочитан — один вход из player-директивы сцены.
-        std::vector<CharacterDesc> roster;
-        if (!loadCharacterRoster(assets, "config/characters.cfg", roster)) {
-            CharacterDesc c;
-            c.id = c.name = "player";
-            c.model = desc.player.model;
-            c.scale = desc.player.scale;
-            c.yawOffset = desc.player.yawOffset;
-            c.hide = desc.player.hideNodes;
-            roster.push_back(std::move(c));
-        }
-        sceneDesc_.heroTypes = roster;  // статы героев (hp/speed) -> локальному серверу И источник GPU-загрузки
-        for (size_t i = 0; i < roster.size(); ++i)
-            if (roster[i].model == desc.player.model) { defChar = (int)i; break; }
-
-        // Ростер мобов (враги спавнеров). Нет файла -> enemyTypes пуст -> враги generic-мешем.
-        std::vector<CharacterDesc> mobRoster;
-        if (loadCharacterRoster(assets, "config/enemies.cfg", mobRoster))
-            sceneDesc_.enemyTypes = mobRoster;
-
-        // Позиция и кинематический контроллер — независимо от рендера (это игра/физика).
-        player_.position = desc.player.pos;
-        player_.collider = collision_->addCharacter(desc.player.pos,
-                                                    desc.player.colliderRadius,
-                                                    desc.player.colliderCylHalf);
+    // --- Кинематический контроллер игрока (санитизированные позиция/капсула) ---
+    if (sceneDesc_.player.present) {
+        player_.position = sceneDesc_.player.pos;
+        player_.collider = collision_->addCharacter(sceneDesc_.player.pos,
+                                                    sceneDesc_.player.colliderRadius,
+                                                    sceneDesc_.player.colliderCylHalf);
         player_.snapshot();  // prev = curr, чтобы первый кадр не «прыгнул»
     }
 
     // --- GPU-ресурсы (меши/текстуры/материалы/объекты/визуалы/ростер) ---
     createGpuResources(renderer, assets);
 
-    if (desc.player.present)
+    if (sceneDesc_.player.present)
         selectCharacter(defChar);  // индекс + player_.maxSpeed из chars_[def].speed (нужны загруженные chars_)
 }
 
@@ -572,6 +578,12 @@ void Scene::fixedUpdate(float dt) {
         cmd.seq = ++inputSeq_;
         client_.sendInput(cmd);
         pending_.push_back({cmd, dt});
+        // P2-03: ограничиваем окно неподтверждённых вводов. При долгом отсутствии ack (обрыв/лаг)
+        // буфер рос бы без предела, а реплей реконсиляции — всё дороже (O(N) simulate за снапшот).
+        // Сбрасываем самые старые: следующий авторитетный снапшот всё равно поправит позицию.
+        constexpr size_t kMaxPending = 256;  // ~8.5 с при 30 тиках/с
+        if (pending_.size() > kMaxPending)
+            pending_.erase(pending_.begin(), pending_.begin() + (pending_.size() - kMaxPending));
     }
 
     player_.snapshot();                        // зафиксировать прошлое для интерполяции
@@ -844,31 +856,23 @@ void Scene::applySnapshot() {
     if (navDebug_) rebuildNavDebug();
 }
 
-// Зеркало серверного GameWorld::blocksPath: какие здания физически блокируют движение (футпринт-
-// бокс). Должно СОВПАДАТЬ с сервером — иначе предсказание героя разойдётся с авторитетом. Спавнер
-// НЕ блокирует (из него выходят враги), враг — тоже.
-static bool blocksHeroPath(EntityType t) {
-    return t == EntityType::Generator || t == EntityType::Storage ||
-           t == EntityType::Tower || t == EntityType::Core;
-}
-
 void Scene::syncBuildingColliders() {
     if (!collision_) return;
     // Здания статичны: бокс ставим один раз по позиции появления, геометрия ТА ЖЕ, что у сервера
-    // (GameWorld::attachFootprint) — центр {x, 0.5, z}, полуразмеры {cell/2, 0.5, cell/2}.
-    const float h = grid_.cell * 0.5f;
+    // (общий footprintBox из game/BuildRules.h). Предикат blocksPath — тоже общий с сервером.
     for (const RemoteEntity& r : remoteEntities_) {
-        if (!blocksHeroPath((EntityType)r.type)) continue;
+        if (!blocksPath((EntityType)r.type)) continue;
         if (buildingColliders_.count(r.id) != 0) continue;
-        uint32_t box = collision_->addBox(Vec3{r.ch.position.x, 0.5f, r.ch.position.z},
-                                          Vec3{h, 0.5f, h});
+        Vec3 c, hf;
+        footprintBox(r.ch.position, grid_.cell, c, hf);
+        uint32_t box = collision_->addBox(c, hf);
         if (box != 0) buildingColliders_[r.id] = box;
     }
     // Убрать боксы зданий, которых больше нет (разрушены / матч-рестарт / выход из сессии).
     for (auto it = buildingColliders_.begin(); it != buildingColliders_.end();) {
         bool alive = false;
         for (const RemoteEntity& r : remoteEntities_)
-            if (r.id == it->first && blocksHeroPath((EntityType)r.type)) { alive = true; break; }
+            if (r.id == it->first && blocksPath((EntityType)r.type)) { alive = true; break; }
         if (alive) {
             ++it;
         } else {
@@ -895,7 +899,7 @@ void Scene::rebuildNavDebug() {
     uint64_t sig = 0;
     for (const RemoteEntity& r : remoteEntities_) {
         const EntityType t = (EntityType)r.type;
-        const bool relevant = blocksHeroPath(t) || t == EntityType::Core;
+        const bool relevant = blocksPath(t) || t == EntityType::Core;
         if (!relevant) continue;
         const uint64_t hpBit = (r.hp > 0.0f) ? 1ull : 0ull;
         const uint64_t px = (uint64_t)(int64_t)std::lround(r.ch.position.x * 4.0f) & 0xFFFFull;
@@ -907,15 +911,16 @@ void Scene::rebuildNavDebug() {
     navDebugSig_ = sig;
 
     // Те же входы, что у сервера: коллайдеры сцены + футпринты блокирующих зданий; цели —
-    // живые ядра (основная цель мобов, GameWorld::ensureFlowField.toCore). Геометрия футпринта —
-    // копия footprintBox/attachFootprint: центр {x,0.5,z}, полуразмеры {cell/2,0.5,cell/2}.
+    // живые ядра (основная цель мобов, GameWorld::ensureFlowField.toCore). Предикат blocksPath
+    // и геометрия footprintBox — общие с сервером (game/BuildRules.h).
     std::vector<NavDebugBlocker> blockers;
     std::vector<NavCell> goals;
-    const float half = grid_.cell * 0.5f;
     for (const RemoteEntity& r : remoteEntities_) {
         const EntityType t = (EntityType)r.type;
-        if (blocksHeroPath(t)) {  // == серверный blocksPath (Generator/Storage/Tower/Core)
-            blockers.push_back({Vec3{r.ch.position.x, 0.5f, r.ch.position.z}, Vec3{half, 0.5f, half}});
+        if (blocksPath(t)) {
+            Vec3 c, hf;
+            footprintBox(r.ch.position, grid_.cell, c, hf);
+            blockers.push_back({c, hf});
         }
         if (t == EntityType::Core && r.hp > 0.0f) {
             goals.push_back({grid_.cellOf(r.ch.position.x), grid_.cellOf(r.ch.position.z)});

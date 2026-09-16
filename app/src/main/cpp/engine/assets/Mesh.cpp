@@ -64,6 +64,13 @@ MeshData makeCube(float size) {
 }
 
 MeshData makeSphere(float radius, int stacks, int slices) {
+    // P2-12: недоверенные stacks/slices/radius из сцены/конфига. stacks/slices ниже 1 -> деление
+    // на ноль (NaN-вершины); огромные -> раздутые буферы; radius NaN/inf/≤0 -> мусор. Клампим.
+    if (stacks < 2) stacks = 2;
+    if (slices < 3) slices = 3;
+    if (stacks > 512) stacks = 512;
+    if (slices > 512) slices = 512;
+    if (!(radius > 0.0f) || !std::isfinite(radius)) radius = 1.0f;
     MeshData mesh;
     const float pi = 3.14159265358979323846f;
 

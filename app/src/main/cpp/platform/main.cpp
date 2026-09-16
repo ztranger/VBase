@@ -30,9 +30,11 @@ class AndroidAssetSource : public AssetSource {
 public:
     explicit AndroidAssetSource(AAssetManager* mgr) : mgr_(mgr) {}
     bool read(const char* path, std::vector<uint8_t>& out) override {
+        if (!assetPathIsSafe(path)) return false;  // P2-14
         AAsset* a = AAssetManager_open(mgr_, path, AASSET_MODE_BUFFER);
         if (a == nullptr) return false;
         off_t len = AAsset_getLength(a);
+        if (len < 0 || (size_t)len > kMaxAssetBytes) { AAsset_close(a); return false; }  // P2-13
         out.resize((size_t)len);
         int r = AAsset_read(a, out.data(), (size_t)len);
         AAsset_close(a);

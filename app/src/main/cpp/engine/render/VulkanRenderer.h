@@ -67,13 +67,19 @@ private:
     // Растит SSBO костей кадра frameIdx под needed матриц (пересоздаёт буфер + переписывает set2).
     // Вызывается в начале renderFrame, когда ресурсы кадра простаивают (после ожидания fence).
     bool ensureBonesCapacity(uint32_t frameIdx, uint32_t needed);
+    // Растит инстанс-буфер кадра под needed матриц (пересоздаёт vertex-буфер + remap; дескриптора
+    // нет — буфер перепривязывается на каждый draw). P2-08: аналог ensureBonesCapacity.
+    bool ensureInstanceCapacity(uint32_t frameIdx, uint32_t needed);
     VkShaderModule loadShaderModule(const char* path);
 
     // Хелперы Фазы 2.
     bool createGraphicsPipeline(VkShaderModule vs, VkShaderModule fs, VkPipeline& out);
     VkCommandBuffer beginOneTime();          // разовый командный буфер (загрузки)
     void endOneTime(VkCommandBuffer cmd);    // submit + wait + free
-    VkDescriptorSet allocMaterialSet(VkImageView albedo, VkImageView normal);  // set 1 (albedo+normal)
+    // set 1 (albedo+normal). albedoSampler=VK_NULL_HANDLE -> sampler_ (REPEAT); иначе заданный
+    // (P2-09: clampSampler_ для UI-текстур с clampEdges).
+    VkDescriptorSet allocMaterialSet(VkImageView albedo, VkImageView normal,
+                                     VkSampler albedoSampler = VK_NULL_HANDLE);
     // Создать GPU-текстуру RGBA8 из пикселей (staging + барьеры + view).
     bool uploadTexture(uint32_t w, uint32_t h, const void* rgba, VkTexture& out);
 
@@ -124,7 +130,8 @@ private:
     VkPipelineLayout skinnedPipelineLayout_ = VK_NULL_HANDLE;  // set0,1,2 + push=model/color/boneOffset
     VkPipeline skinnedPipeline_ = VK_NULL_HANDLE;
     VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
-    VkSampler sampler_ = VK_NULL_HANDLE;  // общий (LINEAR + REPEAT)
+    VkSampler sampler_ = VK_NULL_HANDLE;       // общий (LINEAR + REPEAT)
+    VkSampler clampSampler_ = VK_NULL_HANDLE;  // LINEAR + CLAMP_TO_EDGE (UI 9-slice; clampEdges, P2-09)
 
     // Дефолтная белая 1x1 — материалы/объекты без текстуры ссылаются на неё.
     VkImage whiteImage_ = VK_NULL_HANDLE;
@@ -153,7 +160,8 @@ private:
 
     // Ресурсы на кадр «в полёте»: кадровый UBO + дескриптор + инстанс-буфер
     // (матрицы модели всех объектов кадра, host-visible, обновляется каждый кадр).
-    static constexpr uint32_t kMaxInstances = 512;
+    static constexpr uint32_t kMaxInstances = 512;      // стартовая ёмкость инстанс-буфера (растёт)
+    static constexpr uint32_t kMaxInstancesCap = 16384;  // потолок роста инстансов (P2-08)
     struct FrameRes {
         VkBuffer ubo = VK_NULL_HANDLE;
         VkDeviceMemory uboMem = VK_NULL_HANDLE;
@@ -162,6 +170,7 @@ private:
         VkBuffer inst = VK_NULL_HANDLE;      // инстанс-буфер (матрицы iModel)
         VkDeviceMemory instMem = VK_NULL_HANDLE;
         void* instMapped = nullptr;
+        uint32_t instCapacity = 0;           // ёмкость inst (матриц); растёт под кадр (P2-08)
         VkBuffer bones = VK_NULL_HANDLE;     // SSBO костей скиннинга
         VkDeviceMemory bonesMem = VK_NULL_HANDLE;
         void* bonesMapped = nullptr;
@@ -223,4 +232,6 @@ private:
     uint32_t nextHandle_ = 1;          // счётчик заглушечных handle'ов (Фаза 0)
     bool ready_ = false;
     bool imguiReady_ = false;          // инициализирован ли ImGui + Vulkan-бэкенд
+    bool swapchainOk_ = true;          // false = swapchain пересоздать не удалось, кадры пропускаем (P2-06)
+    void* vulkanLib_ = nullptr;        // Android: хэндл dlopen(libvulkan.so); dlclose в cleanup (P2-11)
 };

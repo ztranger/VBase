@@ -154,6 +154,7 @@ bool VulkanRenderer::init(void* nativeWindow, AssetSource& assets) {
         LOGE("Vulkan: не удалось dlopen libvulkan.so");
         return false;
     }
+    vulkanLib_ = vklib;  // P2-11: держим хэндл, чтобы dlclose в cleanup (парный dlopen)
     auto gipa = (PFN_vkGetInstanceProcAddr)dlsym(vklib, "vkGetInstanceProcAddr");
 #else
     auto gipa = (PFN_vkGetInstanceProcAddr)glfwGetInstanceProcAddress(
@@ -666,7 +667,11 @@ bool VulkanRenderer::createShadowResources() {
 }
 
 bool VulkanRenderer::createDescriptors() {
-    constexpr uint32_t kMaxMaterials = 64;  // запас дескрипторов на материалы
+    // P2-07: бюджет set1 покрывает И материалы, И per-texture сеты (общий setLayout1_). 256 —
+    // с большим запасом на ассеты игры (десятки материалов/текстур); исчерпание практически
+    // исключено, а при нём createTexture/createMaterial вернут набор с VK_NULL_HANDLE, который
+    // renderFrame пропускает (см. гарды привязки), а не биндит невалидный дескриптор.
+    constexpr uint32_t kMaxMaterials = 256;  // запас дескрипторов на материалы + текстуры
 
     // set 0: binding 0 = uniform buffer (Frame), vertex+fragment;
     //        binding 1 = combined image sampler (карта теней), fragment.
@@ -751,6 +756,7 @@ bool VulkanRenderer::createDescriptors() {
             return false;
         }
         vkMapMemory(device_, frames_[i].instMem, 0, instSize, 0, &frames_[i].instMapped);
+        frames_[i].instCapacity = kMaxInstances;  // стартовая ёмкость (растёт в ensureInstanceCapacity)
 
         // SSBO костей: kMaxBones матриц (host-visible, замаплен).
         const VkDeviceSize bonesSize = (VkDeviceSize)kMaxBones * 16 * sizeof(float);
@@ -893,6 +899,36 @@ bool VulkanRenderer::ensureBonesCapacity(uint32_t frameIdx, uint32_t needed) {
     return true;
 }
 
+bool VulkanRenderer::ensureInstanceCapacity(uint32_t frameIdx, uint32_t needed) {
+    FrameRes& fr = frames_[frameIdx];
+    if (needed <= fr.instCapacity) return true;
+    uint32_t cap = fr.instCapacity > 0 ? fr.instCapacity : kMaxInstances;
+    while (cap < needed && cap < kMaxInstancesCap) cap *= 2;
+    if (cap > kMaxInstancesCap) cap = kMaxInstancesCap;
+    if (cap <= fr.instCapacity) return false;  // потолок — рост невозможен
+
+    // Новый буфер СНАЧАЛА: при сбое старый цел (просто не выросли). Дескриптора нет —
+    // инстанс-буфер перепривязывается как vertex buffer на каждый draw, переписывать нечего.
+    VkBuffer nb = VK_NULL_HANDLE;
+    VkDeviceMemory nm = VK_NULL_HANDLE;
+    void* nmap = nullptr;
+    const VkDeviceSize sz = (VkDeviceSize)cap * 16 * sizeof(float);
+    if (!createBuffer(sz, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                      nb, nm)) {
+        return false;
+    }
+    vkMapMemory(device_, nm, 0, sz, 0, &nmap);
+    if (fr.instMapped) vkUnmapMemory(device_, fr.instMem);
+    if (fr.inst) vkDestroyBuffer(device_, fr.inst, nullptr);
+    if (fr.instMem) vkFreeMemory(device_, fr.instMem, nullptr);
+    fr.inst = nb;
+    fr.instMem = nm;
+    fr.instMapped = nmap;
+    fr.instCapacity = cap;
+    return true;
+}
+
 bool VulkanRenderer::createSampler() {
     VkSamplerCreateInfo si{};
     si.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
@@ -904,6 +940,13 @@ bool VulkanRenderer::createSampler() {
     si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
     si.maxLod = 0.0f;
     VK_CHECK(vkCreateSampler(device_, &si, nullptr, &sampler_), "vkCreateSampler");
+
+    // P2-09: CLAMP-сэмплер для текстур с clampEdges=true (UI 9-slice/кнопки) — REPEAT дал бы
+    // просачивание краёв. Тот же LINEAR, но addressMode = CLAMP_TO_EDGE.
+    si.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    si.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    VK_CHECK(vkCreateSampler(device_, &si, nullptr, &clampSampler_), "vkCreateSampler(clamp)");
     return true;
 }
 
@@ -1541,7 +1584,7 @@ bool VulkanRenderer::recreateSwapchain() {
 
 bool VulkanRenderer::maybeRecreateSwapchain(VkResult reason) {
     if (reason == VK_ERROR_OUT_OF_DATE_KHR) {
-        recreateSwapchain();
+        swapchainOk_ = recreateSwapchain();  // P2-06: сбой (или свёрнутое окно) -> кадры пропускаем
         return true;
     }
     if (reason != VK_SUBOPTIMAL_KHR) return false;
@@ -1553,7 +1596,7 @@ bool VulkanRenderer::maybeRecreateSwapchain(VkResult reason) {
     if (caps.currentExtent.width == 0 || caps.currentExtent.height == 0) return false;
     const VkExtent2D e = chooseSwapchainExtent(caps, desiredW_, desiredH_);
     if (e.width == swapchainExtent_.width && e.height == swapchainExtent_.height) return false;
-    recreateSwapchain();
+    swapchainOk_ = recreateSwapchain();
     return true;
 }
 
@@ -1678,7 +1721,9 @@ bool VulkanRenderer::uploadTexture(uint32_t w, uint32_t h, const void* rgba, VkT
     return true;
 }
 
-VkDescriptorSet VulkanRenderer::allocMaterialSet(VkImageView albedo, VkImageView normal) {
+VkDescriptorSet VulkanRenderer::allocMaterialSet(VkImageView albedo, VkImageView normal,
+                                                 VkSampler albedoSampler) {
+    if (albedoSampler == VK_NULL_HANDLE) albedoSampler = sampler_;  // по умолчанию REPEAT (тайлинг)
     VkDescriptorSetAllocateInfo ai{};
     ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     ai.descriptorPool = descriptorPool_;
@@ -1690,10 +1735,10 @@ VkDescriptorSet VulkanRenderer::allocMaterialSet(VkImageView albedo, VkImageView
         return VK_NULL_HANDLE;
     }
     VkDescriptorImageInfo imgs[2]{};
-    imgs[0].sampler = sampler_;
+    imgs[0].sampler = albedoSampler;  // albedo: REPEAT или CLAMP (по clampEdges, P2-09)
     imgs[0].imageView = albedo;
     imgs[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    imgs[1].sampler = sampler_;
+    imgs[1].sampler = sampler_;  // нормал-карта тайлится -> REPEAT
     imgs[1].imageView = normal;
     imgs[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     VkWriteDescriptorSet w[2]{};
@@ -1741,13 +1786,15 @@ MeshHandle VulkanRenderer::createMesh(const MeshData& data) {
     return (MeshHandle)meshes_.size();  // handle = индекс + 1
 }
 
-TextureHandle VulkanRenderer::createTexture(const TextureData& data, bool /*clampEdges*/) {
+TextureHandle VulkanRenderer::createTexture(const TextureData& data, bool clampEdges) {
     if (data.width == 0 || data.height == 0 || data.rgba.empty()) return 0;
     VkTexture t;
     if (!uploadTexture(data.width, data.height, data.rgba.data(), t)) return 0;
     textures_.push_back(t);
     // Скиннинг-объекты нормал-карты пока не используют -> плоская нормаль по умолчанию.
-    textureSets_.push_back(allocMaterialSet(t.view, flatNormalView_));  // set 1
+    // P2-09: clampEdges (UI 9-slice/кнопки) -> CLAMP-сэмплер, иначе REPEAT.
+    VkSampler samp = clampEdges ? clampSampler_ : sampler_;
+    textureSets_.push_back(allocMaterialSet(t.view, flatNormalView_, samp));  // set 1
     imguiTextureSets_.push_back(VK_NULL_HANDLE);       // лениво в getImGuiTexture
     return (TextureHandle)textures_.size();  // handle = индекс + 1
 }
@@ -1820,6 +1867,14 @@ SkinnedHandle VulkanRenderer::createSkinnedMesh(const SkinnedModel& model) {
 
 void VulkanRenderer::renderFrame(const RenderFrame& frame) {
     if (!ready_) return;
+    // P2-06: swapchain сломан/устарел (прошлое пересоздание не удалось или окно свёрнуто) —
+    // пробуем поднять заново раз в кадр; пока не вышло (extent 0 у свёрнутого окна) — кадр
+    // пропускаем, а не рендерим с невалидным swapchain_ (раньше ready_ оставался true и цикл
+    // крутил acquire по VK_NULL_HANDLE).
+    if (!swapchainOk_) {
+        swapchainOk_ = recreateSwapchain();
+        if (!swapchainOk_) return;
+    }
 
     vkWaitForFences(device_, 1, &inFlight_[currentFrame_], VK_TRUE, UINT64_MAX);
 
@@ -1895,12 +1950,25 @@ void VulkanRenderer::renderFrame(const RenderFrame& frame) {
             if (a == nullptr) { accs.push_back({it.mesh, it.material, {}}); a = &accs.back(); }
             a->models.push_back(&it.model);
         }
+        // P2-08: растим инстанс-буфер под все инстансы кадра (было — тихий обрыв на kMaxInstances).
+        uint32_t needed = 0;
+        for (Acc& a : accs) needed += (uint32_t)a.models.size();
+        ensureInstanceCapacity(currentFrame_, needed);  // best-effort: при сбое остаёмся на старой ёмкости
+        const uint32_t cap = frames_[currentFrame_].instCapacity;
         char* instBase = (char*)frames_[currentFrame_].instMapped;
         uint32_t total = 0;
         for (Acc& a : accs) {
             uint32_t first = total;
             for (const Mat4* mm : a.models) {
-                if (total >= kMaxInstances) break;
+                if (total >= cap) {  // упёрлись в потолок роста — остаток кадра не влезает
+                    static bool warned = false;
+                    if (!warned) {
+                        LOGW("VulkanRenderer: инстансов кадра больше потолка %u — часть не отрисована",
+                             kMaxInstancesCap);
+                        warned = true;
+                    }
+                    break;
+                }
                 std::memcpy(instBase + (size_t)total * 16 * sizeof(float), mm->m, 16 * sizeof(float));
                 ++total;
             }
@@ -2033,6 +2101,11 @@ void VulkanRenderer::renderFrame(const RenderFrame& frame) {
     for (const Batch& b : batches) {
         const VkMesh& m = meshes_[b.mesh - 1];
         const VkMaterial& mat = materials_[b.material - 1];
+        if (mat.set == VK_NULL_HANDLE) {  // P2-07: дескриптор не выделился (пул) — не биндим невалид
+            static bool warned = false;
+            if (!warned) { LOGW("Vulkan: материал без дескриптора (пул исчерпан) — батч пропущен"); warned = true; }
+            continue;
+        }
         uint32_t sh = (mat.shader < 3) ? mat.shader : 0;
         if (sh != curPipeline) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines_[sh]);
@@ -2066,6 +2139,8 @@ void VulkanRenderer::renderFrame(const RenderFrame& frame) {
             if (sd.item->texture >= 1 && sd.item->texture <= textureSets_.size()) {
                 texSet = textureSets_[sd.item->texture - 1];
             }
+            if (texSet == VK_NULL_HANDLE) texSet = whiteSet_;  // P2-07: текстура без дескриптора -> белая
+            if (texSet == VK_NULL_HANDLE) continue;             // даже белой нет — объект пропускаем
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, skinnedPipelineLayout_, 1, 1,
                                     &texSet, 0, nullptr);
             SkinnedPushData push{};
@@ -2215,6 +2290,7 @@ void VulkanRenderer::cleanup() {
     if (flatNormalImage_) vkDestroyImage(device_, flatNormalImage_, nullptr);
     if (flatNormalMem_) vkFreeMemory(device_, flatNormalMem_, nullptr);
     if (sampler_) vkDestroySampler(device_, sampler_, nullptr);
+    if (clampSampler_) vkDestroySampler(device_, clampSampler_, nullptr);
     whiteView_ = VK_NULL_HANDLE;
     whiteImage_ = VK_NULL_HANDLE;
     whiteMem_ = VK_NULL_HANDLE;
@@ -2311,5 +2387,13 @@ void VulkanRenderer::cleanup() {
     device_ = VK_NULL_HANDLE;
     surface_ = VK_NULL_HANDLE;
     instance_ = VK_NULL_HANDLE;
+#ifdef __ANDROID__
+    // P2-11: парный dlclose для dlopen(libvulkan.so) из init. VkApi-глобали перезагрузит
+    // следующий init (свой dlopen); между teardown и ним Vulkan-вызовов нет.
+    if (vulkanLib_ != nullptr) {
+        dlclose(vulkanLib_);
+        vulkanLib_ = nullptr;
+    }
+#endif
     ready_ = false;
 }

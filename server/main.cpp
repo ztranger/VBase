@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -1710,6 +1711,88 @@ int runConfigValidateTest() {
     return ok ? 0 : 1;
 }
 
+// P2-12/P2-14: санитизация недоверенного описания (validateSceneDesc клампит опасные числа) и
+// безопасность путей ассетов (assetPathIsSafe отвергает выход за корень assets).
+int runHardenDataTest() {
+    SceneDesc d;
+    d.grid.cell = 0.0f;         // делитель Grid::cellOf -> обязан стать > 0
+    d.grid.arenaHalf = 1e30f;   // абсурдный размер навсетки
+    ColliderSpec c;
+    c.center = Vec3{0.0f, 0.0f, 0.0f};
+    c.half = Vec3{std::nanf(""), -5.0f, 1e30f};  // NaN / отрицательный / огромный полуразмер
+    d.colliders.push_back(c);
+    TextureSpec t;
+    t.kind = TextureSpec::Checker;
+    t.size = 100000;  // OOM
+    t.cells = 0;      // деление на ноль в генераторе
+    d.textures.push_back(t);
+    MeshSpec m;
+    m.kind = MeshSpec::Sphere;
+    m.stacks = 0;  // деление на ноль
+    m.slices = 1;
+    d.meshes.push_back(m);
+    d.player.present = true;
+    d.player.colliderRadius = 0.0f;      // капсула Jolt -> > 0
+    d.player.hp = std::nanf("");
+    d.enemy.attackInterval = 0.0f;       // делитель кулдауна -> > 0
+    validateSceneDesc(d);
+    const bool p12 =
+        d.grid.cell > 0.0f && std::isfinite(d.grid.arenaHalf) &&
+        std::isfinite(d.colliders[0].half.x) && d.colliders[0].half.y >= 0.0f &&
+        d.colliders[0].half.z <= 1e4f && d.textures[0].size <= 4096 &&
+        d.textures[0].cells >= 1 && d.textures[0].cells <= d.textures[0].size &&
+        d.meshes[0].stacks >= 2 && d.meshes[0].slices >= 3 &&
+        d.player.colliderRadius > 0.0f && d.player.hp > 0.0f && d.enemy.attackInterval > 0.0f;
+
+    const bool p14 =
+        assetPathIsSafe("scenes/default.scene") && assetPathIsSafe("a/b/c.png") &&
+        !assetPathIsSafe("../secret") && !assetPathIsSafe("a/../../etc") &&
+        !assetPathIsSafe("/etc/passwd") && !assetPathIsSafe("C:/Windows/x") &&
+        !assetPathIsSafe("..") && !assetPathIsSafe("") && !assetPathIsSafe(nullptr);
+
+    std::printf("[HardenData] validate=%d pathsafe=%d\n", (int)p12, (int)p14);
+    const bool ok = p12 && p14;
+    std::printf("[HardenData] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
+// P2-04: rate-limit ввода. Клиент, флудящий вводом сильно сверх кэпа много тиков подряд,
+// авторитетно отключается сервером (устойчивый флуд). Легит-темп (~1/тик) не затрагивается.
+int runRateLimitTest() {
+    SceneDesc desc;
+    ColliderSpec floor; floor.center = Vec3{0,-0.5f,0}; floor.half = Vec3{50,0.5f,50};
+    desc.colliders.push_back(floor);
+    desc.player.pos = Vec3{0,0,0}; desc.player.colliderRadius = 0.3f; desc.player.colliderCylHalf = 0.3f;
+
+    NetServer server;
+    if (!server.start(kNetPort)) { std::printf("[RateLimit] FAIL: сервер не стартовал\n"); return 1; }
+    server.configureWorld(desc);
+    NetClient client;
+    client.connect("127.0.0.1", kNetPort);
+
+    const float dt = 1.0f / 60.0f;
+    for (int i = 0; i < 90 && client.myId() == 0; ++i) {
+        server.poll(); server.tick(dt); client.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    const bool connected = client.myId() != 0;
+
+    InputCommand cmd; cmd.moveX = 1.0f; cmd.magnitude = 1.0f; cmd.faceMove = true;
+    uint32_t seq = 0;
+    bool disconnected = false;
+    for (int i = 0; i < 200 && !disconnected; ++i) {
+        for (int k = 0; k < 40; ++k) { cmd.seq = ++seq; client.sendInput(cmd); }  // 40/кадр >> кэп 8
+        server.poll(); server.tick(dt); client.poll();
+        if (!client.connected() || client.status() == NetStatus::Lost) disconnected = true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+
+    std::printf("[RateLimit] connected=%d disconnectedFlooder=%d\n", (int)connected, (int)disconnected);
+    const bool ok = connected && disconnected;
+    std::printf("[RateLimit] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1759,11 +1842,13 @@ int main(int argc, char** argv) {
         int z1 = runMalformedMsgTest();   // P1-09: усечённые/раздутые/неизвестные сообщения не роняют сервер
         int z2 = runReconnectTest();      // P1-09: реконнект -> новый герой + полный снапшот
         int z3 = runConfigValidateTest(); // P1-09: загрузчики отклоняют мусорные конфиги
+        int z4 = runHardenDataTest();     // P2-12/P2-14: санитизация описания + безопасность путей
+        int z5 = runRateLimitTest();      // P2-04: флудер ввода отключается сервером
         return (a == 0 && b == 0 && c == 0 && d == 0 && e == 0 && f == 0 && g == 0 && h == 0 &&
                 k == 0 && m == 0 && n == 0 && o == 0 && p == 0 && p2 == 0 && q == 0 && r == 0 &&
                 s == 0 && t == 0 && u == 0 && v == 0 && w == 0 && x == 0 &&
                 y1 == 0 && y2 == 0 && y3 == 0 &&
-                z1 == 0 && z2 == 0 && z3 == 0) ? 0 : 1;
+                z1 == 0 && z2 == 0 && z3 == 0 && z4 == 0 && z5 == 0) ? 0 : 1;
     }
 
     uint16_t port = kNetPort;
@@ -1821,6 +1906,15 @@ int main(int argc, char** argv) {
     double accumulator = 0.0;
     int lastClients = -1;
 
+    // P2-17 (observability + healthcheck): heartbeat-файл для Docker HEALTHCHECK — детектит
+    // ЗАВИСШИЙ цикл (не только упавший процесс), обновляется ~раз в секунду. Путь из
+    // VBASE_HEARTBEAT или дефолт. Плюс периодический лог метрик (игроки/снапшоты/пик dt).
+    const char* hbEnv = std::getenv("VBASE_HEARTBEAT");
+    const std::string heartbeatPath = (hbEnv != nullptr && hbEnv[0] != '\0') ? hbEnv : "/tmp/vbase.hb";
+    auto lastHb = std::chrono::steady_clock::now();
+    auto lastStats = lastHb;
+    double maxDtWindow = 0.0;
+
     while (gRunning.load()) {
         server.poll();  // принять подключения и ввод
 
@@ -1828,6 +1922,7 @@ int main(int argc, char** argv) {
         double dt = std::chrono::duration<double>(now - last).count();
         last = now;
         if (dt > 0.25) dt = 0.25;
+        if (dt > maxDtWindow) maxDtWindow = dt;  // пик кадрового dt в окне (индикатор tick lag)
         accumulator += dt;
 
         while (accumulator >= tick) {
@@ -1838,6 +1933,24 @@ int main(int argc, char** argv) {
         if (server.clientCount() != lastClients) {
             lastClients = server.clientCount();
             std::printf("Игроков онлайн: %d\n", lastClients);
+        }
+
+        // Heartbeat раз в секунду.
+        if (std::chrono::duration<double>(now - lastHb).count() >= 1.0) {
+            lastHb = now;
+            if (std::FILE* hb = std::fopen(heartbeatPath.c_str(), "w")) {
+                std::fprintf(hb, "%lld\n", (long long)std::time(nullptr));
+                std::fclose(hb);
+            }
+        }
+        // Метрики раз в 10 секунд (peers / full-delta snapshots / пик dt = tick lag).
+        if (std::chrono::duration<double>(now - lastStats).count() >= 10.0) {
+            lastStats = now;
+            std::printf("[Stats] игроков=%d снапшоты(full=%u delta=%u) пик_dt=%.1fмс\n",
+                        server.clientCount(), server.debugFullSnapshots(),
+                        server.debugDeltaSnapshots(), maxDtWindow * 1000.0);
+            std::fflush(stdout);
+            maxDtWindow = 0.0;
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(1));

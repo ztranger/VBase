@@ -2,6 +2,7 @@
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_NO_STDIO
+#define STBI_MAX_DIMENSIONS 8192  // P2-13: отвергаем изображения-бомбы (огромные w/h -> OOM/ANR)
 #include "stb_image.h"
 
 #include <cmath>
@@ -29,11 +30,18 @@ bool readText(AssetSource& src, const char* path, std::string& out) {
 } // namespace
 
 TextureData makeCheckerboard(uint32_t size, uint32_t cells) {
+    // P2-12: недоверенные size/cells из сцены. size==0 -> пустая текстура; cells==0 или
+    // cells>size -> cell=0 = деление на ноль ниже; огромный size -> OOM. Клампим.
+    if (size == 0) size = 1;
+    if (size > 4096) size = 4096;
+    if (cells == 0) cells = 1;
+    if (cells > size) cells = size;
     TextureData tex;
     tex.width = size;
     tex.height = size;
     tex.rgba.resize((size_t)size * size * 4);
     uint32_t cell = size / cells;
+    if (cell == 0) cell = 1;
     for (uint32_t y = 0; y < size; ++y) {
         for (uint32_t x = 0; x < size; ++x) {
             bool light = ((x / cell) + (y / cell)) % 2 == 0;
@@ -49,6 +57,8 @@ TextureData makeCheckerboard(uint32_t size, uint32_t cells) {
 }
 
 TextureData makeBumpNormal(uint32_t size, uint32_t freq) {
+    if (size == 0) size = 1;          // P2-12: недоверенный size из сцены
+    if (size > 4096) size = 4096;     // потолок против OOM
     TextureData tex;
     tex.width = size;
     tex.height = size;

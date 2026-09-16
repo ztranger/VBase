@@ -9,6 +9,8 @@
 #include "game/FlowField.h"
 #include "game/Grid.h"
 #include "game/SceneDesc.h"
+#include "game/SceneLoader.h"  // validateSceneDesc (санитизация недоверенного описания, P2-12)
+#include "game/BuildRules.h"  // isBuildingType/blocksPath/footprintBox — общие с клиентом
 
 namespace {
 // Параметры врагов: скорость бега, капсула, дистанция «дошёл до цели».
@@ -37,26 +39,13 @@ constexpr float kEnemyAimY = 0.8f;       // куда целимся по выс�
 constexpr size_t kInputBufferTarget = 2;
 constexpr size_t kInputQueueCap = 16;
 
-// Занимает ли тип клетку сетки (для проверки коллизии размещения).
-bool isBuildingType(EntityType t) {
-    return t == EntityType::Generator || t == EntityType::Storage ||
-           t == EntityType::Spawner || t == EntityType::Tower || t == EntityType::Core;
-}
+// isBuildingType / blocksPath — общие с клиентом, вынесены в game/BuildRules.h (один источник).
 
-// Блокирует ли тип путь мобов (футпринт + occupancy). Спавнер — нет: из него выходят.
-bool blocksPath(EntityType t) {
-    return t == EntityType::Generator || t == EntityType::Storage ||
-           t == EntityType::Tower || t == EntityType::Core;
-}
-
-// Бокс футпринта здания — ОДНА геометрия для физики (Jolt) и occupancy (навсетка):
-// поле потока не должно вести мобов в клетку, где стоит коллайдер. Клетка-в-размер,
-// центр = позиция здания (НЕ cellCenter: здания из сцены часто не по сетке — иначе
-// физбокс и занятость разъехались бы на полклетки).
+// Бокс футпринта здания по СУЩНОСТИ — тонкая обёртка над общей геометрией (BuildRules.h),
+// которая берёт позицию сущности. Геометрия (клетка-в-размер, центр = позиция) — одна на
+// сервер и клиент, чтобы физбокс и occupancy не разъехались.
 void footprintBox(const Entity& e, float cell, Vec3& center, Vec3& half) {
-    const float h = cell * 0.5f;
-    center = Vec3{e.move.position.x, 0.5f, e.move.position.z};
-    half = Vec3{h, 0.5f, h};
+    ::footprintBox(e.move.position, cell, center, half);
 }
 
 // Враждебны ли команды (кого бой считает целью). team 0 — нейтрал/PvE: враждебен всем,
@@ -119,8 +108,12 @@ void GameWorld::reset() {
     restartTimer_ = 0.0f;
 }
 
-void GameWorld::configure(const SceneDesc& desc) {
+void GameWorld::configure(const SceneDesc& descIn) {
     reset();  // идемпотентно: свежий мир на каждую конфигурацию
+    // P2-12: санитизируем недоверенное описание (сетка-делитель, коллайдеры/капсула в Jolt, статы)
+    // авторитетно на сервере — локальная копия, дальше работаем только с ней.
+    SceneDesc desc = descIn;
+    validateSceneDesc(desc);
     world_ = std::make_unique<CollisionWorld>();
     sceneColliders_ = desc.colliders;
     for (const ColliderSpec& cs : desc.colliders) {

@@ -8,35 +8,24 @@
 #include <unordered_map>
 
 #include "engine/core/Log.h"
+#include "engine/net/ByteIO.h"  // явная LE-сериализация управляющих сообщений (P2-15)
 #include "game/GameWorld.h"  // авторитетная игровая симуляция (сущности + системы)
 
 namespace {
 
-// --- Протокол (POD, фиксированная раскладка; клиенты одной ABI) ---
+// --- Протокол ---
 enum : uint8_t { MSG_WELCOME = 1, MSG_INPUT = 2, MSG_SNAPSHOT = 3, MSG_BUILD = 4 };
 
+// P2-15: управляющие сообщения (Welcome/Input/Build) сериализуются ЯВНО, побайтно в little-endian
+// (ByteWriter/ByteReader, engine/net/ByteIO.h) — без зависимости от раскладки/паддинга/endianness
+// и с проверкой границ при чтении. Их packed-структуры убраны.
+//
+// Снапшот (SnapshotHeader + EntityState[] + id[]) — высокочастотный и перф-чувствительный путь —
+// ОСТАВЛЕН на прежней memcpy-раскладке, защищённой `#pragma pack(1)` + `static_assert` на
+// sizeof/offsetof (ловит дрейф раскладки при сборке) + `kProtocolVersion` (несовместимый билд
+// отклоняется до спавна) + гардами длины при чтении. Миграция снапшота на явную сериализацию —
+// следующий шаг «по одному типу сообщения» (см. PROJECT_REVIEW P2-15), делать отдельно с бенчем.
 #pragma pack(push, 1)
-struct WelcomeMsg {
-    uint8_t type;
-    uint32_t protocolVersion;  // сервер шлёт свою версию; клиент сверяет с kProtocolVersion
-    uint32_t entityId;
-};
-struct InputMsg {
-    uint8_t type;
-    uint32_t seq;
-    float moveX, moveZ, magnitude;
-    uint8_t faceMove;
-    uint8_t jump;
-    uint8_t attack;    // запрос атаки (каста) на этом тике — одноразовое событие
-    uint8_t charType;  // выбранный персонаж (индекс ростера) — для рендера героя чужими
-    uint32_t ackTick;  // последний применённый клиентом снапшот (база для дельты)
-};
-// Запрос постройки: тип здания + клетка сетки. Надёжно (дискретное событие).
-struct BuildMsg {
-    uint8_t type;       // MSG_BUILD
-    uint8_t buildType;  // EntityType возводимого здания
-    int32_t cellX, cellZ;
-};
 // Дельта-снапшот: изменения относительно снапшота baseTick, который клиент подтвердил.
 // baseTick=0 — полный снапшот (база пуста). Далее: changedCount×EntityState (новые/
 // изменившиеся), затем removedCount×uint32_t (id исчезнувших сущностей).
@@ -176,21 +165,21 @@ bool NetClient::consumeSnapshot() {
 
 void NetClient::sendInput(const InputCommand& cmd) {
     if (impl_->peer == nullptr || impl_->status != NetStatus::Connected) return;
-    InputMsg msg{};
-    msg.type = MSG_INPUT;
-    msg.seq = cmd.seq;
-    msg.moveX = cmd.moveX;
-    msg.moveZ = cmd.moveZ;
-    msg.magnitude = cmd.magnitude;
-    msg.faceMove = cmd.faceMove ? 1 : 0;
-    msg.jump = cmd.jump ? 1 : 0;
-    msg.attack = cmd.attack ? 1 : 0;
-    msg.charType = impl_->charType;
-    msg.ackTick = impl_->stateTick;  // подтверждаем последний применённый снапшот
+    ByteWriter w;  // явная LE-раскладка (P2-15), байт-в-байт как прежняя packed-структура
+    w.u8(MSG_INPUT);
+    w.u32(cmd.seq);
+    w.f32(cmd.moveX);
+    w.f32(cmd.moveZ);
+    w.f32(cmd.magnitude);
+    w.u8(cmd.faceMove ? 1 : 0);
+    w.u8(cmd.jump ? 1 : 0);
+    w.u8(cmd.attack ? 1 : 0);
+    w.u8(impl_->charType);
+    w.u32(impl_->stateTick);  // подтверждаем последний применённый снапшот (ackTick)
     // Обычный ввод — ненадёжно (realtime). Прыжок/атака — надёжно, чтобы не потерять
     // одноразовое событие (иначе клиент проиграет его в предсказании, а сервер — нет).
     uint32_t flags = (cmd.jump || cmd.attack) ? ENET_PACKET_FLAG_RELIABLE : 0;
-    ENetPacket* pkt = enet_packet_create(&msg, sizeof(msg), flags);
+    ENetPacket* pkt = enet_packet_create(w.data(), w.size(), flags);
     sendPacket(impl_->peer, 0, pkt);
 }
 
@@ -198,9 +187,13 @@ void NetClient::setCharType(uint8_t charType) { impl_->charType = charType; }
 
 void NetClient::sendBuild(uint8_t buildType, int cellX, int cellZ) {
     if (impl_->peer == nullptr || impl_->status != NetStatus::Connected) return;
-    BuildMsg msg{MSG_BUILD, buildType, (int32_t)cellX, (int32_t)cellZ};
+    ByteWriter w;  // явная LE-раскладка (P2-15)
+    w.u8(MSG_BUILD);
+    w.u8(buildType);
+    w.i32((int32_t)cellX);
+    w.i32((int32_t)cellZ);
     // Надёжно: постройка — одноразовое событие, терять нельзя.
-    ENetPacket* pkt = enet_packet_create(&msg, sizeof(msg), ENET_PACKET_FLAG_RELIABLE);
+    ENetPacket* pkt = enet_packet_create(w.data(), w.size(), ENET_PACKET_FLAG_RELIABLE);
     sendPacket(impl_->peer, 0, pkt);
 }
 
@@ -223,17 +216,19 @@ void NetClient::poll() {
             case ENET_EVENT_TYPE_RECEIVE: {
                 const uint8_t* data = ev.packet->data;
                 size_t len = ev.packet->dataLength;
-                if (len >= 1 && data[0] == MSG_WELCOME && len >= sizeof(WelcomeMsg)) {
-                    WelcomeMsg w;
-                    std::memcpy(&w, data, sizeof(w));
-                    if (w.protocolVersion != kProtocolVersion) {
+                if (len >= 1 && data[0] == MSG_WELCOME) {
+                    ByteReader rd(data, len);
+                    rd.u8();  // type
+                    uint32_t ver = rd.u32();
+                    uint32_t entId = rd.u32();
+                    if (rd.ok() && ver != kProtocolVersion) {
                         LOGE("NetClient: версия протокола сервера %u != нашей %u — отключаюсь",
-                             (unsigned)w.protocolVersion, (unsigned)kProtocolVersion);
+                             (unsigned)ver, (unsigned)kProtocolVersion);
                         enet_packet_destroy(ev.packet);
                         disconnect();
                         return;  // peer/host уничтожены — выходим из poll
                     }
-                    impl_->myId = w.entityId;
+                    if (rd.ok()) impl_->myId = entId;
                 } else if (len >= sizeof(SnapshotHeader) && data[0] == MSG_SNAPSHOT) {
                     SnapshotHeader h;
                     std::memcpy(&h, data, sizeof(h));
@@ -326,11 +321,20 @@ void NetClient::poll() {
 namespace {
 // Подключение клиента: peer, id управляемого им героя, подтверждённый снапшот (база дельт).
 // Игровые сущности живут в GameWorld — сервер здесь лишь транспорт.
+// P2-04: rate-limit ввода/стройки per-peer. Легит-клиент шлёт ~1 ввод/тик; щедрые кэпы бьют
+// только по флуду. Пакеты сверх кэпа за тик отбрасываются; устойчивый флуд рвёт peer.
+constexpr uint16_t kMaxInputsPerTick = 8;   // с запасом на догон буфера ввода
+constexpr uint16_t kMaxBuildsPerTick = 4;   // стройка — редкое действие игрока
+constexpr uint16_t kFloodTicksLimit = 30;   // ~1 c непрерывного превышения -> дисконнект
+
 struct Conn {
     ENetPeer* peer = nullptr;
     uint32_t heroId = 0;
     uint32_t ackTick = 0;       // подтверждённая база дельт (валидируется: монотонно, не из будущего)
     uint32_t lastFullTick = 0;  // тик последнего высланного этому peer full-снапшота (rate-limit)
+    uint16_t inputsThisTick = 0;  // P2-04: счётчики за тик (сбрасываются в tick), детект флуда
+    uint16_t buildsThisTick = 0;
+    uint16_t floodTicks = 0;      // сколько тиков подряд упирался в кэп (устойчивый флуд)
 };
 }  // namespace
 
@@ -404,8 +408,11 @@ void NetServer::poll() {
                 // Создаём авторитетную сущность-героя (позиция + контроллер) в игровом мире.
                 uint32_t heroId = impl_->game.addPlayer();  // авто-выбор стороны (PvP-баланс)
                 impl_->conns.push_back(Conn{ev.peer, heroId, 0});
-                WelcomeMsg w{MSG_WELCOME, kProtocolVersion, heroId};
-                ENetPacket* pkt = enet_packet_create(&w, sizeof(w), ENET_PACKET_FLAG_RELIABLE);
+                ByteWriter w;
+                w.u8(MSG_WELCOME);
+                w.u32(kProtocolVersion);
+                w.u32(heroId);
+                ENetPacket* pkt = enet_packet_create(w.data(), w.size(), ENET_PACKET_FLAG_RELIABLE);
                 sendPacket(ev.peer, 0, pkt);
                 LOGI("NetServer: клиент подключён (hero id=%u), всего %d", heroId,
                      (int)impl_->conns.size());
@@ -413,33 +420,45 @@ void NetServer::poll() {
             }
             case ENET_EVENT_TYPE_RECEIVE: {
                 const uint8_t msgType = ev.packet->dataLength >= 1 ? ev.packet->data[0] : 0;
-                if (msgType == MSG_INPUT && ev.packet->dataLength >= sizeof(InputMsg)) {
-                    InputMsg m;
-                    std::memcpy(&m, ev.packet->data, sizeof(m));
+                if (msgType == MSG_INPUT) {
+                    // Явный декод (P2-15): ByteReader.ok() = пакет был достаточной длины (гард
+                    // усечённого/битого пакета вместо sizeof-проверки + memcpy за границу).
+                    ByteReader rd(ev.packet->data, ev.packet->dataLength);
+                    rd.u8();  // type
+                    const uint32_t seq = rd.u32();
+                    const float mx = rd.f32(), mz = rd.f32(), mag = rd.f32();
+                    const uint8_t face = rd.u8(), jmp = rd.u8(), atk = rd.u8(), ct = rd.u8();
+                    const uint32_t ackTick = rd.u32();
                     Conn* conn = impl_->connByPeer(ev.peer);
-                    if (conn != nullptr) {
+                    // P2-04: сверх кэпа ввода за тик — отбрасываем (флуд не грузит симуляцию).
+                    if (rd.ok() && conn != nullptr && conn->inputsThisTick < kMaxInputsPerTick) {
+                        ++conn->inputsThisTick;
                         // Валидируем ack ДО применения (P1-03): только монотонный и не из будущего.
-                        // Мусорный/старый/нулевой ack игнорируем — база не откатывается, значит
-                        // клиент не может форсить full-снапшоты (амплификация).
-                        if (ackIsValid(m.ackTick, conn->ackTick, impl_->tickCount))
-                            conn->ackTick = m.ackTick;  // база для дельты этому клиенту
+                        if (ackIsValid(ackTick, conn->ackTick, impl_->tickCount))
+                            conn->ackTick = ackTick;  // база для дельты этому клиенту
                         InputCommand cmd;
-                        cmd.seq = m.seq;
-                        cmd.moveX = m.moveX;
-                        cmd.moveZ = m.moveZ;
-                        cmd.magnitude = m.magnitude;
-                        cmd.faceMove = (m.faceMove != 0);
-                        cmd.jump = (m.jump != 0);
-                        cmd.attack = (m.attack != 0);
+                        cmd.seq = seq;
+                        cmd.moveX = mx;
+                        cmd.moveZ = mz;
+                        cmd.magnitude = mag;
+                        cmd.faceMove = (face != 0);
+                        cmd.jump = (jmp != 0);
+                        cmd.attack = (atk != 0);
                         impl_->game.setHeroInput(conn->heroId, cmd);
-                        impl_->game.setHeroCharType(conn->heroId, m.charType);  // выбор персонажа
+                        impl_->game.setHeroCharType(conn->heroId, ct);  // выбор персонажа
                     }
-                } else if (msgType == MSG_BUILD && ev.packet->dataLength >= sizeof(BuildMsg)) {
-                    BuildMsg m;
-                    std::memcpy(&m, ev.packet->data, sizeof(m));
+                } else if (msgType == MSG_BUILD) {
+                    ByteReader rd(ev.packet->data, ev.packet->dataLength);
+                    rd.u8();  // type
+                    const uint8_t bt = rd.u8();
+                    const int32_t cx = rd.i32(), cz = rd.i32();
                     Conn* conn = impl_->connByPeer(ev.peer);
-                    if (conn != nullptr)  // валидацию (клетка/ресурс/границы) делает GameWorld
-                        impl_->game.tryBuild(conn->heroId, (EntityType)m.buildType, m.cellX, m.cellZ);
+                    // P2-04: сверх кэпа стройки за тик — отбрасываем. Валидацию (клетка/ресурс/
+                    // границы) делает GameWorld.
+                    if (rd.ok() && conn != nullptr && conn->buildsThisTick < kMaxBuildsPerTick) {
+                        ++conn->buildsThisTick;
+                        impl_->game.tryBuild(conn->heroId, (EntityType)bt, cx, cz);
+                    }
                 }
                 enet_packet_destroy(ev.packet);
                 break;
@@ -467,6 +486,22 @@ void NetServer::poll() {
 void NetServer::tick(float dt) {
     if (impl_->host == nullptr) return;
     impl_->tickCount++;
+
+    // P2-04: poll() (до tick) уже разобрал пакеты кадра и накопил счётчики. Здесь детектим
+    // устойчивый флуд (упор в кэп много тиков подряд -> дисконнект) и сбрасываем счётчики на кадр.
+    for (Conn& c : impl_->conns) {
+        if (c.inputsThisTick >= kMaxInputsPerTick || c.buildsThisTick >= kMaxBuildsPerTick) {
+            if (++c.floodTicks >= kFloodTicksLimit && c.peer != nullptr) {
+                LOGW("NetServer: peer (hero id=%u) флудит вводом/стройкой — дисконнект", c.heroId);
+                enet_peer_disconnect(c.peer, 0);
+                c.floodTicks = 0;
+            }
+        } else if (c.floodTicks > 0) {
+            --c.floodTicks;
+        }
+        c.inputsThisTick = 0;
+        c.buildsThisTick = 0;
+    }
 
     // Вся игровая симуляция — в GameWorld (движение/экономика/спавнеры/враги, дальше бой).
     // Сервер лишь двигает мир и сериализует его состояние.

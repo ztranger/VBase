@@ -187,6 +187,13 @@ bool loadGltfModel(AssetSource& src, const char* path, SkinnedModel& out,
         cgltf_free(data);
         return false;
     }
+    // P2-13: валидируем структуру ДО чтения аксессоров — крафтовый glTF с завышенными count
+    // указывал бы за границы буфера, и cgltf_accessor_read_* читал бы OOB. validate это ловит.
+    if (cgltf_validate(data) != cgltf_result_success) {
+        LOGE("cgltf_validate failed (битый/вредоносный glTF): %s", path);
+        cgltf_free(data);
+        return false;
+    }
 
     // Узлы + иерархия.
     out.nodes.resize(data->nodes_count);
