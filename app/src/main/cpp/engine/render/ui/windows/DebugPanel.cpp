@@ -109,6 +109,20 @@ void draw(UiShell::Ctx& ctx) {
         ctx.scene.setModelScale(mscale);
     }
 
+    ImGui::SeparatorText("Навигация");
+    // Оверлей навсетки/пасфайндинга: сетка клеток, закрашенные обстаклы, поле потока к целям.
+    // Клиент реконструирует навсетку из снапшотов теми же классами, что и сервер (см. NavDebug).
+    bool nav = ctx.scene.navDebugEnabled();
+    if (ImGui::Checkbox("Показать навсетку", &nav)) ctx.scene.setNavDebugEnabled(nav);
+    if (nav) {
+        const NavDebugFrame& nf = ctx.scene.navDebugFrame();
+        if (!ctx.scene.netConnected())
+            ImGui::TextDisabled("Нужна сессия (Host/Join)");
+        else if (nf.valid)
+            ImGui::TextDisabled("Клеток %dx%d, обстаклов %d, целей %d (опции — в окне на арене)",
+                                nf.w, nf.h, nf.blockedCount, nf.goalCount);
+    }
+
     ImGui::SeparatorText("Camera");
     float cd = ctx.scene.cameraDistance();
     if (ImGui::SliderFloat("Distance", &cd, 6.0f, 34.0f)) ctx.scene.setCameraDistance(cd);

@@ -122,13 +122,26 @@ struct Engine {
 // Частота симуляции — единый шаг из engine/net/Net.h. Рендер быстрее и интерполирует.
 constexpr float kTick = kTickDt;
 
-// Создать рендер по engine->backend (0 = GL, 1 = Vulkan) из окна и построить мир.
-// Оба бэкенда создают surface из одного ANativeWindow, поэтому переключение —
-// это reset + повторный createRenderer.
-bool createRenderer(Engine* engine, android_app* app) {
-    // Источник ассетов нужен и рендеру (шейдеры), и сцене (модели/текстуры).
+// Масштаб UI по плотности экрана -> джойстик + стиль ImGui. Контекст ImGui создаёт рендер в
+// init (свежий на каждое пересоздание), поэтому вызываем после любого (пере)создания рендера.
+void applyUiScale(Engine* engine, android_app* app) {
+    int density = AConfiguration_getDensity(app->config);
+    float scale = 2.5f;
+    if (density > 0 && density <= 1000) scale = (float)density / 160.0f;
+    if (scale < 1.0f) scale = 1.0f;
+    if (scale > 4.0f) scale = 4.0f;
+    engine->uiScale = scale;
+    if (engine->scene) engine->scene->setUiScale(scale);
+    ImGuiStyle& style = ImGui::GetStyle();  // свежий контекст (только что создан в init рендера)
+    style.ScaleAllSizes(scale);
+    style.FontScaleDpi = scale;
+}
+
+// Создать ТОЛЬКО рендер (без сцены) по бэкенду (0 = GL, 1 = Vulkan). Успех -> в engine->renderer;
+// неудача -> engine->renderer НЕ трогаем (у вызывающего он уже null) и возвращаем false.
+bool createBackend(Engine* engine, android_app* app, int backend) {
     AndroidAssetSource assets(app->activity->assetManager);
-    if (engine->backend == 1) {
+    if (backend == 1) {
         auto r = std::make_unique<VulkanRenderer>();
         if (!r->init(app->window, assets)) { LOGE("VulkanRenderer init failed"); return false; }
         engine->renderer = std::move(r);
@@ -137,29 +150,41 @@ bool createRenderer(Engine* engine, android_app* app) {
         if (!r->init(app->window, assets)) { LOGE("GlRenderer init failed"); return false; }
         engine->renderer = std::move(r);
     }
-    // Мир строится после init рендера: нужны живой GPU-контекст и AAssetManager.
-    engine->scene = std::make_unique<Scene>();
-    engine->scene->build(*engine->renderer, assets, engine->scenePath.c_str());
-    // Восстанавливаем сохранённый выбор персонажа (пересборка сцены на смене окна/бэкенда — тоже).
-    if (engine->ui.charIndex >= 0) engine->scene->selectCharacter(engine->ui.charIndex);
+    return true;
+}
+
+// Поднять графику из текущего окна: создать рендер (при сбое Vulkan -> откат на GL, P1-06) и
+// подготовить GPU-ресурсы сцены — переподняв их у ЖИВОЙ сессии (rebuildGraphics, P1-07) или
+// построив мир заново, если сцены ещё нет. Возвращает false, если не удалось создать даже GL.
+bool bringUpRenderer(Engine* engine, android_app* app) {
+    AndroidAssetSource assets(app->activity->assetManager);
+    if (!createBackend(engine, app, engine->backend)) {
+        if (engine->backend == 1) {
+            LOGW("Vulkan init не удался — откат на OpenGL");
+            engine->vulkanSupported = false;
+            engine->ui.vulkanAvailable = false;  // UI покажет «(недоступен)» и выключит кнопку Vulkan
+            engine->backend = 0;
+            if (!createBackend(engine, app, 0)) { LOGE("GL init тоже не удался — рендер недоступен"); return false; }
+        } else {
+            LOGE("GL init не удался — рендер недоступен");
+            return false;
+        }
+    }
+    // Мир строится/переподнимается после init рендера (нужны живой GPU-контекст и AAssetManager).
+    // Живую сессию (матч/сеть/предсказание/физику) сохраняем — обновляем только GPU-ресурсы;
+    // сцены ещё нет (первый запуск или смена сцены — её сбросили выше) -> строим заново.
+    if (engine->scene) {
+        engine->scene->rebuildGraphics(*engine->renderer, assets);
+    } else {
+        engine->scene = std::make_unique<Scene>();
+        engine->scene->build(*engine->renderer, assets, engine->scenePath.c_str());
+        if (engine->ui.charIndex >= 0) engine->scene->selectCharacter(engine->ui.charIndex);
+    }
     engine->haveTime = false;
-
-    // Масштаб UI по плотности экрана (иначе на HiDPI интерфейс крошечный).
-    int density = AConfiguration_getDensity(app->config);
-    float scale = 2.5f;
-    if (density > 0 && density <= 1000) scale = (float)density / 160.0f;
-    if (scale < 1.0f) scale = 1.0f;
-    if (scale > 4.0f) scale = 4.0f;
-    engine->uiScale = scale;
-    engine->scene->setUiScale(scale);
-    // Контекст ImGui создаёт рендер в init — стиль масштабируем на свежем контексте.
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.ScaleAllSizes(scale);
-    style.FontScaleDpi = scale;
-
+    applyUiScale(engine, app);
     engine->ui.backend = engine->backend;
     engine->ui.requestBackend = -1;
-    LOGI("Renderer: %s, UI scale %.2f", engine->backend == 1 ? "Vulkan" : "GL ES3", (double)scale);
+    LOGI("Renderer: %s, UI scale %.2f", engine->backend == 1 ? "Vulkan" : "GL ES3", (double)engine->uiScale);
     return true;
 }
 
@@ -169,20 +194,19 @@ void handleCmd(android_app* app, int32_t cmd) {
     switch (cmd) {
         case APP_CMD_INIT_WINDOW:
             if (app->window != nullptr) {
-                // Если рендер уже жив (INIT без парного TERM) — снести ДО пересоздания:
-                // createRenderer делает ImGui::CreateContext внутри init, а деструктор старого
-                // рендера потом дёрнул бы Shutdown/DestroyContext уже по НОВОМУ контексту (UAF).
-                if (engine->renderer) {
-                    engine->scene.reset();
-                    engine->renderer.reset();
-                }
-                createRenderer(engine, app);
+                // Рендер ещё жив (INIT без парного TERM): сносим ТОЛЬКО рендер — его dtor
+                // разрушит старый ImGui-контекст ДО создания нового (иначе Shutdown/DestroyContext
+                // прилетел бы по НОВОМУ контексту = UAF). Сцену (сессию/матч) сохраняем и
+                // переподнимем её GPU-ресурсы в bringUpRenderer (P1-07).
+                if (engine->renderer) engine->renderer.reset();
+                bringUpRenderer(engine, app);
             }
             break;
 
         case APP_CMD_TERM_WINDOW:
-            // Поверхность уничтожается — сносим рендер (GPU-ресурсы) и мир.
-            engine->scene.reset();
+            // Поверхность уничтожена — сносим ТОЛЬКО рендер (GPU/ImGui). Сцену (сеть/матч/
+            // предсказание) НЕ трогаем: временная потеря окна (поворот/сворачивание) не должна
+            // рвать сессию (P1-07). Полный teardown сессии — на выходе из android_main.
             engine->renderer.reset();
             break;
 
@@ -422,26 +446,26 @@ extern "C" void android_main(android_app* app) {
                 engine.touchEventCount = 0;
             }
 
-            // Переключение бэкенда по кнопке в GameUi: сносим рендер+мир и
-            // пересоздаём из того же окна (surface поддерживают оба бэкенда).
+            // Переключение бэкенда по кнопке в GameUi: сносим ТОЛЬКО рендер и пересоздаём из
+            // того же окна (surface поддерживают оба бэкенда). Сцену (сессию/матч) сохраняем —
+            // bringUpRenderer переподнимет её GPU-ресурсы (rebuildGraphics), матч не рвётся.
             if (engine.ui.requestBackend >= 0 && engine.ui.requestBackend != engine.backend &&
                 app->window != nullptr) {
                 int nb = engine.ui.requestBackend;
                 if (nb == 1 && !engine.vulkanSupported) nb = 0;
-                engine.scene.reset();
                 engine.renderer.reset();
                 engine.backend = nb;
-                createRenderer(&engine, app);
+                bringUpRenderer(&engine, app);
             }
 
-            // Смена сцены по кнопке меню: пересобираем мир из того же окна/бэкенда
-            // (полный рекриэйт рендера — без утечек GPU-ресурсов старой сцены).
+            // Смена сцены по кнопке меню: мир СТРОИМ ЗАНОВО (другая геометрия) — сбрасываем и
+            // сцену, и рендер, затем bringUpRenderer построит новую сцену из requestScenePath.
             if (engine.ui.requestScenePath[0] != '\0' && app->window != nullptr) {
                 engine.scenePath = engine.ui.requestScenePath;
                 engine.ui.requestScenePath[0] = '\0';
                 engine.scene.reset();
                 engine.renderer.reset();
-                createRenderer(&engine, app);
+                bringUpRenderer(&engine, app);
             }
         }
     }

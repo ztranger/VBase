@@ -761,6 +761,7 @@ bool VulkanRenderer::createDescriptors() {
             return false;
         }
         vkMapMemory(device_, frames_[i].bonesMem, 0, bonesSize, 0, &frames_[i].bonesMapped);
+        frames_[i].bonesCapacity = kMaxBones;  // стартовая ёмкость (растёт в ensureBonesCapacity)
 
         // Дескрипторы: set0 (UBO) и set2 (кости).
         VkDescriptorSetLayout layouts[2] = {setLayout0_, setLayout2_};
@@ -845,6 +846,50 @@ bool VulkanRenderer::createDescriptors() {
         w[2].pImageInfo = &shadowInfo;
         vkUpdateDescriptorSets(device_, 3, w, 0, nullptr);
     }
+    return true;
+}
+
+bool VulkanRenderer::ensureBonesCapacity(uint32_t frameIdx, uint32_t needed) {
+    FrameRes& fr = frames_[frameIdx];
+    if (needed <= fr.bonesCapacity) return true;
+    uint32_t cap = fr.bonesCapacity > 0 ? fr.bonesCapacity : kMaxBones;
+    while (cap < needed && cap < kMaxBonesCap) cap *= 2;
+    if (cap > kMaxBonesCap) cap = kMaxBonesCap;
+    if (cap <= fr.bonesCapacity) return false;  // упёрлись в потолок — рост невозможен
+
+    // Новый буфер СНАЧАЛА: при сбое старый цел, просто не выросли (модели-перебор отбросятся).
+    VkBuffer nb = VK_NULL_HANDLE;
+    VkDeviceMemory nm = VK_NULL_HANDLE;
+    void* nmap = nullptr;
+    const VkDeviceSize sz = (VkDeviceSize)cap * 16 * sizeof(float);
+    if (!createBuffer(sz, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                      nb, nm)) {
+        return false;
+    }
+    vkMapMemory(device_, nm, 0, sz, 0, &nmap);
+    // Кадр frameIdx простаивает (ждали его fence в начале renderFrame) — уничтожать безопасно.
+    if (fr.bonesMapped) vkUnmapMemory(device_, fr.bonesMem);
+    if (fr.bones) vkDestroyBuffer(device_, fr.bones, nullptr);
+    if (fr.bonesMem) vkFreeMemory(device_, fr.bonesMem, nullptr);
+    fr.bones = nb;
+    fr.bonesMem = nm;
+    fr.bonesMapped = nmap;
+    fr.bonesCapacity = cap;
+
+    // Переписываем дескриптор set2 на новый буфер.
+    VkDescriptorBufferInfo bi{};
+    bi.buffer = fr.bones;
+    bi.offset = 0;
+    bi.range = sz;
+    VkWriteDescriptorSet w{};
+    w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    w.dstSet = fr.bonesSet;
+    w.dstBinding = 0;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    w.descriptorCount = 1;
+    w.pBufferInfo = &bi;
+    vkUpdateDescriptorSets(device_, 1, &w, 0, nullptr);
     return true;
 }
 
@@ -1866,12 +1911,29 @@ void VulkanRenderer::renderFrame(const RenderFrame& frame) {
     struct SkinDraw { const SkinnedItem* item; uint32_t boneOffset; };
     std::vector<SkinDraw> skinDraws;
     {
+        // Сколько костей нужно на кадр (валидные меши) — под это растим SSBO.
+        uint32_t needed = 0;
+        for (const SkinnedItem& it : frame.skinned) {
+            if (it.mesh == 0 || it.mesh > skinnedMeshes_.size()) continue;
+            needed += (uint32_t)it.joints.size();
+        }
+        ensureBonesCapacity(currentFrame_, needed);  // best-effort: при сбое остаёмся на старой ёмкости
+        const uint32_t cap = frames_[currentFrame_].bonesCapacity;
         char* bonesBase = (char*)frames_[currentFrame_].bonesMapped;
         uint32_t boneTotal = 0;
         for (const SkinnedItem& it : frame.skinned) {
             if (it.mesh == 0 || it.mesh > skinnedMeshes_.size()) continue;
             uint32_t nb = (uint32_t)it.joints.size();
-            if (boneTotal + nb > kMaxBones) break;
+            // Отбрасываем модель ЦЕЛИКОМ (не break): маленькая следующая ещё может влезть.
+            if (boneTotal + nb > cap) {
+                static bool warned = false;
+                if (!warned) {
+                    LOGW("VulkanRenderer: костей кадра больше потолка %u — часть моделей не отрисована",
+                         kMaxBonesCap);
+                    warned = true;
+                }
+                continue;
+            }
             uint32_t off = boneTotal;
             for (uint32_t j = 0; j < nb; ++j)
                 std::memcpy(bonesBase + (size_t)(off + j) * 16 * sizeof(float), it.joints[j].m, 16 * sizeof(float));

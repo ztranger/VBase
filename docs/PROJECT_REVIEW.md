@@ -207,7 +207,17 @@ Android-сборка ожидает готовые файлы. Чистый clon
 
 ### P1-02. Переполнение и тихое отбрасывание bone data
 
-- [ ] Устранить фиксированный лимит или сделать корректный batching.
+- [x] Исправлено. Bone-буфер теперь **растёт под кадр** в обоих бэкендах (общий источник счёта —
+  `SkinnedItem::joints.size()`): GL пере-аллоцирует bone-текстуру (`ensureBoneCapacity`, старт
+  1024 → потолок `kBoneTexMaxRows=16384` строк), Vulkan пересоздаёт SSBO костей и переписывает
+  дескриптор set2 (`ensureBonesCapacity`, старт `kMaxBones=512` → потолок `kMaxBonesCap=8192`,
+  новый буфер создаётся ДО уничтожения старого — при сбое старый цел). Переполнение (сверх
+  потолка) теперь **отбрасывает модель ЦЕЛИКОМ** одинаково в GL и Vulkan (`skinOffsets_[i]=-1`
+  пропускает её в основном И теневом проходах; Vulkan — `continue`, а не `break`) с однократным
+  `LOGW`. Устранены оба прежних дефекта: GL больше не рисует с мусорными смещениями за 1024,
+  Vulkan не роняет «тихо» модели за 512. Проверено: десктоп собран, GL и Vulkan стартуют без
+  краша; `GlRenderer.cpp`/`VulkanRenderer.cpp` под aarch64 `-fsyntax-only` чисто. Диагностика —
+  `LOGW` при упоре в потолок (fallback покрыт диагностикой, как просит критерий).
 
 Затронутые файлы:
 
@@ -332,7 +342,15 @@ Android-сборка ожидает готовые файлы. Чистый clon
 
 ### P1-06. Android Vulkan не делает fallback на GL
 
-- [ ] Добавить безопасный fallback.
+- [x] Исправлено. Создание рендера разбито (`platform/main.cpp`): `createBackend()` поднимает
+  ТОЛЬКО рендер и честно возвращает bool; `bringUpRenderer()` при неудаче `init` Vulkan
+  **откатывается на GL** (`backend=0`, `createBackend(0)`), гасит `ui.vulkanAvailable` (UI
+  показывает «(недоступен)» и выключает кнопку Vulkan) и не оставляет полусозданных ресурсов
+  (деструкторы обоих бэкендов null-guarded, локальный `unique_ptr` при сбое `init` чистится сам).
+  Все три места (INIT_WINDOW, смена бэкенда, смена сцены) зовут `bringUpRenderer`, а не игнорят
+  результат как раньше. Раньше провал `VulkanRenderer::init` оставлял `renderer=null` навсегда
+  (чёрный экран без выхода). Проверено: `platform/main.cpp` под aarch64 `-fsyntax-only` чисто;
+  на устройстве — за пользователем.
 
 Затронутые файлы:
 
@@ -347,7 +365,20 @@ Android-сборка ожидает готовые файлы. Чистый clon
 
 ### P1-07. Android window lifecycle уничтожает игровую сессию
 
-- [ ] Разделить session lifecycle и graphics lifecycle.
+- [x] Исправлено. Разделены графика и сессия. `APP_CMD_TERM_WINDOW` теперь сбрасывает ТОЛЬКО
+  рендер (GPU/ImGui), а `Scene` (сеть `client_`/`server_`, `remoteEntities_`, предсказание,
+  физика, матч) живёт дальше — временная потеря окна (поворот/сворачивание) не рвёт матч.
+  `APP_CMD_INIT_WINDOW` пересоздаёт рендер и переподнимает ТОЛЬКО GPU-ресурсы сцены новым
+  методом **`Scene::rebuildGraphics()`** (сессия сохраняется). Для этого `Scene::build` разбит
+  на мир (desc/физика/контроллер/сеть-данные) и `createGpuResources()` (меши/текстуры/материалы/
+  объекты/визуалы/ростер) — общий путь для первой сборки и пере-подъёма; хэндлы всех держателей
+  (objects_/visuals_/chars_/mobs_/ghost/proj/grid) переприсваиваются вместе, выбранный персонаж и
+  позиция героя сохраняются. Смена бэкенда (GL↔Vulkan) тоже сохраняет сессию (тот же
+  `rebuildGraphics`); смена сцены по-прежнему строит мир заново. Полный teardown сессии — только
+  на выходе из `android_main`. Двойного shutdown ImGui нет: старый рендер (и его ImGui-контекст)
+  уничтожается ДО создания нового. Проверено: десктоп собран и рендерит после рефактора
+  (`createGpuResources` идёт из `build`); `platform/main.cpp`/`Scene.cpp` под aarch64
+  `-fsyntax-only` чисто; на устройстве (поворот/сворачивание в бою) — за пользователем.
 
 Затронутые файлы:
 
@@ -668,7 +699,17 @@ Android и desktop должны сохранять разные window/input lif
 
 ### P1-09. Добавить sanitizer и негативные тесты
 
-- [ ] Добавить отдельные конфигурации.
+- [x] Частично сделано (сервер). **ASan-сборка**: опция `VBASE_ASAN` в `server/CMakeLists.txt`
+  (MSVC `/fsanitize=address` + `_DISABLE_STL_ANNOTATION` — иначе LNK2038 с неинструментированным
+  Jolt.lib) и драйвер `server/build-asan.bat` (отдельный `build-asan/`). Прогон
+  `build-asan\vbase_server.exe --selftest` — **все сценарии ASan-чисты** (ни heap/stack-overflow,
+  ни use-after-free). UBSan на `cl.exe` нет — нужен clang-cl (осталось). **Негативные тесты**
+  (в дополнение к уже покрытым NaN/Inf, ack, entity-cap, wave, scene-load): `runMalformedMsgTest`
+  (усечённые/раздутые/неизвестные пакеты через тест-хук `NetClient::debugSendRaw` не роняют сервер,
+  валидный ввод после мусора работает), `runReconnectTest` (реконнект -> новый герой + полный
+  снапшот), `runConfigValidateTest` (загрузчики scene/building/roster отклоняют мусор через
+  in-memory `AssetSource`). Все зелёные (28/28 в `--selftest`). Остаётся: UBSan (clang-cl),
+  прогон санитайзеров в CI (P1-08), негативы для рендер-лимитов/Android surface (клиентские).
 
 Необходимые категории:
 
@@ -688,20 +729,23 @@ Android и desktop должны сохранять разные window/input lif
 - [x] Server build — успешно.
 - [x] Desktop build — успешно.
 - [x] `git diff --check` — успешно.
-- [x] `vbase_server --selftest` — **25** сценариев успешно (15 базовых + хардненинг: InputGuard,
+- [x] `vbase_server --selftest` — **28** сценариев успешно (15 базовых + хардненинг: InputGuard,
   CharTypeHeal, RestartStats, BuildAfterEnd, PortParse, SceneLoadFail, AckValidate, SnapshotRate,
-  EntityCap).
+  EntityCap + NavDebug + P1-09: Malformed, Reconnect, ConfigGuard).
 - [x] `vbase_server --densetest` — 4/4 успешно.
+- [x] `vbase_server --selftest` под **AddressSanitizer** (`server/build-asan.bat`) — 28/28 ASan-чисто.
 
 **Выполнено:** P0-01, P0-02, P1-05, P2-01, P2-02, P2-05 (батч №1); **P1-01** (SPIR-V-пайплайн);
-**P1-03, P1-04** (лимиты ack/snapshot/entities). См. отметки `[x]` в разделах выше. Следующие по
-приоритету: **P0-03** (Release UB), **P1-08** (CI), **P1-06/P1-07** (Android Vulkan fallback +
-window lifecycle), **P1-02** (bone-лимит).
+**P1-03, P1-04** (лимиты ack/snapshot/entities); **батч P1 №2: P1-02** (растущий bone-буфер GL+Vulkan),
+**P1-06** (Android Vulkan→GL fallback), **P1-07** (Android window lifecycle — сессия переживает
+пересоздание окна), **P1-09** (ASan-сборка сервера + негативные тесты). См. отметки `[x]` в разделах
+выше. Следующие по приоритету: **P0-03** (Release UB), **P1-08** (CI, вкл. прогон ASan-суиты),
+UBSan через clang-cl (хвост P1-09).
 - [x] Dense flow-field BFS 400×400 с 400 footprint — около 4.45 мс на поле
   на машине аудита.
 
-Успешные тесты не закрывают сетевые эксплойты, Release UB, чистую Android/Vulkan
-сборку и негативные сценарии: для них пока нет соответствующего покрытия.
+Открытыми остаются Release UB (P0-03), CI (P1-08) и P2/P3 (рендер-лимиты Vulkan, недоверенные
+конфиги/ассеты, явная сериализация протокола, декомпозиция Scene).
 
 ## 13. Сильные решения, которые нужно сохранить
 

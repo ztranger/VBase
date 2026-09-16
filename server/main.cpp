@@ -26,11 +26,13 @@
 #endif
 
 #include "engine/physics/CollisionWorld.h"
+#include "engine/assets/AssetSource.h"
 #include "engine/assets/FileAssetSource.h"
 #include "game/GameWorld.h"
 #include "engine/net/Net.h"
 #include "game/CharacterRoster.h"
 #include "game/FlowField.h"
+#include "game/NavDebug.h"
 #include "game/SceneDesc.h"
 #include "game/SceneLoader.h"
 
@@ -798,6 +800,73 @@ bool runningInDocker() {
     return false;
 }
 
+// Клиентская реконструкция навсетки для дебаг-оверлея (game/NavDebug.buildNavDebug): те же
+// NavGrid/FlowField, что у сервера, но собранные из снапшотных данных (коллайдеры + футпринты
+// зданий + клетки ядер). Проверяем: обстаклы попали на клетки, цель помечена, стрелка ведёт
+// к цели, а запертая стеной область недостижима.
+int runNavDebugTest() {
+    Grid g;
+    g.cell = 2.0f;
+    g.arenaHalf = 6.0f;
+
+    ColliderSpec floor;
+    floor.center = Vec3{0.0f, -0.5f, 0.0f};  // пол ниже нуля — навсетка его игнорирует
+    floor.half = Vec3{20.0f, 0.5f, 20.0f};
+    std::vector<ColliderSpec> cols{floor};
+
+    // A) Ядро-цель в (0,0): футпринт занимает клетки, клетка помечена целью, поток к ней.
+    {
+        NavDebugBlocker core;
+        core.center = Vec3{0.0f, 0.5f, 0.0f};
+        core.half = Vec3{g.cell * 0.5f, 0.5f, g.cell * 0.5f};
+        std::vector<NavDebugBlocker> blockers{core};
+        std::vector<NavCell> goals{NavCell{0, 0}};
+        NavDebugFrame f = buildNavDebug(g, cols, blockers, goals, 0.3f);
+
+        const NavDebugCell* goalC = f.at(0, 0);
+        const NavDebugCell* farC = f.at(2, 0);  // свободная клетка правее ядра (в пределах арены)
+        const bool ok = f.valid && f.blockedCount >= 1 && f.goalCount == 1 && goalC != nullptr &&
+                        goalC->goal && farC != nullptr && farC->reachable && farC->dist >= 1 &&
+                        farC->dirX < -0.3f;  // поток ведёт к ядру (влево, -x)
+        std::printf("[NavDebug] A: обстаклов=%d цель=%d far(reach=%d dist=%d dirX=%.2f)\n",
+                    f.blockedCount, goalC ? (int)goalC->goal : -1,
+                    farC ? (int)farC->reachable : -1, farC ? farC->dist : -1,
+                    farC ? (double)farC->dirX : 0.0);
+        if (!ok) {
+            std::printf("[NavDebug] FAIL: реконструкция обстаклов/цели/потока\n");
+            return 1;
+        }
+    }
+
+    // B) Сплошная стена футпринтов по строке cz=-1 (вся ширина) запирает область cz<=-2 от
+    // цели в (0,0): клетка (0,-3) должна стать недостижимой (8-связность не режет угол сквозь блок).
+    {
+        std::vector<NavDebugBlocker> wall;
+        for (int cx = -3; cx <= 2; ++cx) {
+            NavDebugBlocker b;
+            b.center = Vec3{((float)cx + 0.5f) * g.cell, 0.5f, (-1.0f + 0.5f) * g.cell};
+            b.half = Vec3{g.cell * 0.5f, 0.5f, g.cell * 0.5f};
+            wall.push_back(b);
+        }
+        std::vector<NavCell> goals{NavCell{0, 0}};
+        NavDebugFrame f = buildNavDebug(g, cols, wall, goals, 0.3f);
+
+        const NavDebugCell* nearC = f.at(0, 1);   // по ту же сторону, что цель
+        const NavDebugCell* sealed = f.at(0, -3);  // заперта стеной
+        const bool ok = f.valid && f.blockedCount == 6 && nearC != nullptr && nearC->reachable &&
+                        sealed != nullptr && !sealed->reachable;
+        std::printf("[NavDebug] B: стена=%d near.reach=%d sealed.reach=%d\n", f.blockedCount,
+                    nearC ? (int)nearC->reachable : -1, sealed ? (int)sealed->reachable : -1);
+        if (!ok) {
+            std::printf("[NavDebug] FAIL: стена не заперла область\n");
+            return 1;
+        }
+    }
+
+    std::printf("[NavDebug] OK\n");
+    return 0;
+}
+
 // Пасфайндинг мобов: поле потока на сетке произвольного размера, цели по типу,
 // фолбэк «нет пути к ядру → ломать ближайшее здание».
 int runPathfindTest() {
@@ -1503,6 +1572,144 @@ int runEntityCapTest() {
     return ok ? 0 : 1;
 }
 
+// P1-09: битые сетевые сообщения (усечённые/раздутые/неизвестные) не роняют сервер и не
+// нарушают обработку валидного ввода. Шлём мусор через тест-хук debugSendRaw, затем проверяем,
+// что сервер жив и авторитетно двигает героя по нормальному вводу.
+int runMalformedMsgTest() {
+    SceneDesc desc;
+    ColliderSpec floor; floor.center = Vec3{0,-0.5f,0}; floor.half = Vec3{50,0.5f,50};
+    desc.colliders.push_back(floor);
+    desc.player.pos = Vec3{0,0,0}; desc.player.colliderRadius = 0.3f; desc.player.colliderCylHalf = 0.3f;
+
+    NetServer server;
+    if (!server.start(kNetPort)) { std::printf("[Malformed] FAIL: сервер не стартовал\n"); return 1; }
+    server.configureWorld(desc);
+    NetClient client;
+    client.connect("127.0.0.1", kNetPort);
+
+    const float dt = 1.0f / 60.0f;
+    auto pump = [&](int iters) {
+        for (int i = 0; i < iters; ++i) {
+            server.poll(); server.tick(dt); client.poll();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+    };
+    for (int i = 0; i < 90 && client.myId() == 0; ++i) pump(1);  // дождаться Welcome
+    bool connected = client.myId() != 0;
+
+    // Батарея битых пакетов (2 = MSG_INPUT, 4 = MSG_BUILD в протоколе).
+    auto blast = [&]() {
+        client.debugSendRaw(nullptr, 0);                                   // пустой пакет
+        const uint8_t unknown = 0xEE; client.debugSendRaw(&unknown, 1);    // неизвестный тип
+        const uint8_t shortInput[2] = {2, 0x7F}; client.debugSendRaw(shortInput, 2);  // усечённый INPUT
+        std::vector<uint8_t> bigInput(4096, 0xAB); bigInput[0] = 2;        // раздутый INPUT (хвост игнор)
+        client.debugSendRaw(bigInput.data(), bigInput.size());
+        const uint8_t shortBuild[3] = {4, 2, 0}; client.debugSendRaw(shortBuild, 3);  // усечённый BUILD
+        std::vector<uint8_t> junk(777);
+        for (size_t k = 0; k < junk.size(); ++k) junk[k] = (uint8_t)(k * 7 + 3);
+        client.debugSendRaw(junk.data(), junk.size());                     // сплошной мусор
+    };
+    for (int r = 0; r < 6; ++r) { blast(); pump(1); }
+    bool aliveAfter = server.running() && client.connected();
+
+    // После мусора нормальный ввод всё ещё двигает героя авторитетно (сервер функционален).
+    InputCommand cmd; cmd.moveX = 1.0f; cmd.moveZ = 0.0f; cmd.magnitude = 1.0f; cmd.faceMove = true;
+    float lastX = 0.0f; uint32_t seq = 0;
+    for (int i = 0; i < 120; ++i) {
+        server.poll();
+        if (client.connected() && client.myId() != 0) { cmd.seq = ++seq; client.sendInput(cmd); }
+        server.tick(dt); client.poll();
+        if (client.consumeSnapshot())
+            for (const EntityState& s : client.states()) if (s.id == client.myId()) lastX = s.x;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    bool movedOk = lastX > 1.0f;
+
+    std::printf("[Malformed] connected=%d aliveAfter=%d movedX=%.2f (ждём жив + ввод работает)\n",
+                (int)connected, (int)aliveAfter, (double)lastX);
+    bool ok = connected && aliveAfter && movedOk;
+    std::printf("[Malformed] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
+// P1-09: реконнект. Клиент подключается, отключается, подключается снова — получает НОВОГО
+// героя (свежий id) и полный снапшот. Проверяет, что сервер корректно чистит старую сессию.
+int runReconnectTest() {
+    SceneDesc desc;
+    ColliderSpec floor; floor.center = Vec3{0,-0.5f,0}; floor.half = Vec3{50,0.5f,50};
+    desc.colliders.push_back(floor);
+    desc.player.pos = Vec3{0,0,0}; desc.player.colliderRadius = 0.3f; desc.player.colliderCylHalf = 0.3f;
+
+    NetServer server;
+    if (!server.start(kNetPort)) { std::printf("[Reconnect] FAIL: сервер не стартовал\n"); return 1; }
+    server.configureWorld(desc);
+
+    const float dt = 1.0f / 60.0f;
+    NetClient client;
+    auto pump = [&](int iters) {
+        for (int i = 0; i < iters; ++i) {
+            server.poll(); server.tick(dt); client.poll();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+    };
+
+    client.connect("127.0.0.1", kNetPort);
+    for (int i = 0; i < 90 && client.myId() == 0; ++i) pump(1);
+    uint32_t id1 = client.myId();
+
+    client.disconnect();
+    pump(40);  // сервер обрабатывает DISCONNECT и убирает старого героя
+
+    client.connect("127.0.0.1", kNetPort);
+    for (int i = 0; i < 90 && client.myId() == 0; ++i) pump(1);
+    uint32_t id2 = client.myId();
+
+    bool gotSnapshot = false;
+    for (int i = 0; i < 90 && !gotSnapshot; ++i) {
+        server.poll(); server.tick(dt); client.poll();
+        if (client.consumeSnapshot() && !client.states().empty()) gotSnapshot = true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+
+    std::printf("[Reconnect] id1=%u id2=%u snapshot=%d (ждём id2!=0, id2!=id1, снапшот пришёл)\n",
+                id1, id2, (int)gotSnapshot);
+    bool ok = id1 != 0 && id2 != 0 && id2 != id1 && gotSnapshot;
+    std::printf("[Reconnect] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
+// P1-09: недоверенные конфиги. Загрузчики (in-memory AssetSource) должны ОТКЛОНЯТЬ мусор:
+// неизвестные директивы, усечённые аргументы, ключи вне блока, неизвестные типы, пустой ростер.
+int runConfigValidateTest() {
+    struct MemAsset : AssetSource {
+        std::string body;
+        explicit MemAsset(std::string b) : body(std::move(b)) {}
+        bool read(const char*, std::vector<uint8_t>& out) override {
+            out.assign(body.begin(), body.end());
+            return true;
+        }
+    };
+    // Сцена: неизвестная директива и усечённые аргументы -> false.
+    SceneDesc d1; MemAsset badDirective("totally not a directive\n");
+    bool r1 = loadSceneDesc(badDirective, "x", d1);
+    SceneDesc d2; MemAsset shortCollider("collider box center 0 0\n");  // не хватает третьей координаты
+    bool r2 = loadSceneDesc(shortCollider, "x", d2);
+    // Конфиг зданий: ключ вне блока building и неизвестный тип -> false.
+    BuildingConfig cfg1; MemAsset keyNoBlock("rate 5\n");
+    bool r3 = loadBuildingConfig(keyNoBlock, "x", cfg1);
+    BuildingConfig cfg2; MemAsset badType("building nonsense\nname X\n");
+    bool r4 = loadBuildingConfig(badType, "x", cfg2);
+    // Ростер персонажей: сплошной мусор -> ни одного персонажа -> false.
+    std::vector<CharacterDesc> roster; MemAsset junkRoster("garbage line\nmore junk\n");
+    bool r5 = loadCharacterRoster(junkRoster, "x", roster);
+
+    std::printf("[ConfigGuard] scene(dir=%d short=%d) bldg(nokey=%d type=%d) roster=%d (все ждём false)\n",
+                (int)r1, (int)r2, (int)r3, (int)r4, (int)r5);
+    bool ok = !r1 && !r2 && !r3 && !r4 && !r5;
+    std::printf("[ConfigGuard] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1534,6 +1741,7 @@ int main(int argc, char** argv) {
         int n = runPvpTest();           // PvP: назначение стороны + спавн-точки + per-team исход
         int o = runMatchRestartTest();  // матч-рестарт: decided -> авто-пересбор -> новый матч
         int p = runPathfindTest();      // поле потока: стена/фолбэк + ломатель + сетка 400
+        int p2 = runNavDebugTest();     // клиентская реконструкция навсетки для дебаг-оверлея
         int q = runEndlessWaveTest();   // бесконечные волны растут; легаси-спавнер стопается на cap
         int r = runHeroAttackTest();    // авто-атака героя: melee/LOS-стена/маг-снаряды
         // Батч хардненинга (аудит PROJECT_REVIEW): валидация ввода, анти-эксплойты, fail-fast.
@@ -1547,10 +1755,15 @@ int main(int argc, char** argv) {
         int y1 = runAckValidateTest();  // P1-03: валидация ackTick (анти-амплификация)
         int y2 = runSnapshotRateTest(); // P1-03: легит-клиент — один full, дальше дельты
         int y3 = runEntityCapTest();    // P1-04: kMaxEntities держит рост мира
+        // Батч P1-09: негативные тесты (битые пакеты / реконнект / невалидные конфиги).
+        int z1 = runMalformedMsgTest();   // P1-09: усечённые/раздутые/неизвестные сообщения не роняют сервер
+        int z2 = runReconnectTest();      // P1-09: реконнект -> новый герой + полный снапшот
+        int z3 = runConfigValidateTest(); // P1-09: загрузчики отклоняют мусорные конфиги
         return (a == 0 && b == 0 && c == 0 && d == 0 && e == 0 && f == 0 && g == 0 && h == 0 &&
-                k == 0 && m == 0 && n == 0 && o == 0 && p == 0 && q == 0 && r == 0 && s == 0 &&
-                t == 0 && u == 0 && v == 0 && w == 0 && x == 0 &&
-                y1 == 0 && y2 == 0 && y3 == 0) ? 0 : 1;
+                k == 0 && m == 0 && n == 0 && o == 0 && p == 0 && p2 == 0 && q == 0 && r == 0 &&
+                s == 0 && t == 0 && u == 0 && v == 0 && w == 0 && x == 0 &&
+                y1 == 0 && y2 == 0 && y3 == 0 &&
+                z1 == 0 && z2 == 0 && z3 == 0) ? 0 : 1;
     }
 
     uint16_t port = kNetPort;

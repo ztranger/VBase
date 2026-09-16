@@ -11,10 +11,19 @@
 #include "engine/render/ui/windows/BuildingInfo.h"
 #include "engine/render/ui/windows/DebugPanel.h"
 #include "game/BuildingConfig.h"
+#include "game/NavDebug.h"
 #include "game/Scene.h"
 
 namespace BattleScreen {
 namespace {
+
+// Опции отображения навигационного оверлея — чисто клиентские, переключаются в окне-легенде.
+bool g_navGrid = true;       // линии сетки клеток
+bool g_navObstacles = true;  // занятые (obstacle) клетки
+bool g_navUnreach = true;    // проходимые клетки без пути к цели
+bool g_navFlow = true;       // стрелки поля потока к цели
+bool g_navHeat = false;      // хитмап дистанции до цели
+bool g_navDist = false;      // числа дистанции в клетках
 
 void drawHud(UiShell::Ctx& ctx) {
     const float m = UiShell::uiMargin();
@@ -207,6 +216,138 @@ void drawCombatOverlay(Scene& scene) {
     }
 }
 
+// Отладочный оверлей навигации: сетка клеток, закрашенные обстаклы, «мёртвые» клетки без
+// пути, цели-ядра и поле потока (стрелки/хитмап). Данные (navDebugFrame) производит Scene —
+// реконструкцией навсетки теми же NavGrid/FlowField, что у сервера; тут только проекция
+// мировых клеток на экран и рисование (как drawCombatOverlay). Фоновый draw-list — над 3D,
+// под окнами; окно-легенда с переключателями — обычное ImGui-окно (поверх).
+void drawNavOverlay(Scene& scene) {
+    if (!scene.navDebugEnabled() || !scene.netConnected()) return;
+    const NavDebugFrame& nf = scene.navDebugFrame();
+    if (!nf.valid || nf.cells.empty()) return;
+
+    ImGuiIO& io = ImGui::GetIO();
+    const float W = io.DisplaySize.x, H = io.DisplaySize.y;
+    const Mat4 vp = scene.projMatrix() * scene.viewMatrix();
+    const float* m = vp.m;  // column-major: clip = VP * (x,y,z,1)
+    auto project = [&](const Vec3& p, float& sx, float& sy) -> bool {
+        float cx = m[0] * p.x + m[4] * p.y + m[8] * p.z + m[12];
+        float cy = m[1] * p.x + m[5] * p.y + m[9] * p.z + m[13];
+        float cw = m[3] * p.x + m[7] * p.y + m[11] * p.z + m[15];
+        if (cw <= 0.0001f) return false;  // точка за камерой
+        float ndcx = cx / cw, ndcy = cy / cw;
+        sx = (ndcx * 0.5f + 0.5f) * W;
+        sy = (1.0f - (ndcy * 0.5f + 0.5f)) * H;
+        return true;
+    };
+
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();
+    const float cell = nf.cell;
+    const float y = 0.05f;  // чуть над полом, чтобы читалось поверх пола
+
+    for (const NavDebugCell& c : nf.cells) {
+        // Кулинг: клетка за камерой или далеко за краем экрана — пропускаем целиком.
+        const float wcx = ((float)c.cx + 0.5f) * cell;
+        const float wcz = ((float)c.cz + 0.5f) * cell;
+        float ccx, ccy;
+        if (!project(Vec3{wcx, y, wcz}, ccx, ccy)) continue;
+        if (ccx < -256.0f || ccx > W + 256.0f || ccy < -256.0f || ccy > H + 256.0f) continue;
+
+        const float x0 = (float)c.cx * cell, x1 = x0 + cell;
+        const float z0 = (float)c.cz * cell, z1 = z0 + cell;
+        float px[4], py[4];
+        if (!(project(Vec3{x0, y, z0}, px[0], py[0]) && project(Vec3{x1, y, z0}, px[1], py[1]) &&
+              project(Vec3{x1, y, z1}, px[2], py[2]) && project(Vec3{x0, y, z1}, px[3], py[3])))
+            continue;
+        ImVec2 poly[4] = {{px[0], py[0]}, {px[1], py[1]}, {px[2], py[2]}, {px[3], py[3]}};
+
+        // Заливка по состоянию клетки (цель важнее занятости — ядро занято И является целью).
+        ImU32 fill = 0;
+        if (c.goal) {
+            fill = IM_COL32(60, 220, 90, 130);  // цель (ядро) — зелёный
+        } else if (c.blocked) {
+            if (g_navObstacles) fill = IM_COL32(225, 60, 45, 95);  // обстакл — красный
+        } else if (!c.reachable) {
+            if (g_navUnreach) fill = IM_COL32(235, 165, 40, 75);  // нет пути к цели — оранжевый
+        } else if (g_navHeat && nf.maxDist > 0 && c.dist >= 0) {
+            float t = (float)c.dist / (float)nf.maxDist;  // 0 у цели -> 1 далеко
+            int rr = (int)(40.0f + t * 205.0f);
+            int gg = (int)(190.0f - t * 130.0f);
+            int bb = (int)(230.0f - t * 180.0f);
+            fill = IM_COL32(rr, gg, bb, 60);
+        }
+        if (fill != 0) dl->AddConvexPolyFilled(poly, 4, fill);
+        if (g_navGrid)
+            dl->AddPolyline(poly, 4, IM_COL32(255, 255, 255, 45), ImDrawFlags_Closed, 1.0f);
+
+        // Грубый экранный размер клетки — гейт мелочи (стрелки/числа), чтобы не было каши.
+        const float sizePx = std::fabs(px[1] - px[0]) + std::fabs(py[2] - py[1]);
+
+        // Стрелка поля потока: направление, которым моб пойдёт из этой клетки к цели.
+        if (g_navFlow && sizePx > 26.0f && c.reachable && !c.blocked && !c.goal &&
+            (c.dirX != 0.0f || c.dirZ != 0.0f)) {
+            float ax, ay, bx, by;
+            if (project(Vec3{wcx, y, wcz}, ax, ay) &&
+                project(Vec3{wcx + c.dirX * cell * 0.42f, y, wcz + c.dirZ * cell * 0.42f}, bx, by)) {
+                const ImU32 col = IM_COL32(90, 220, 255, 210);
+                dl->AddLine(ImVec2(ax, ay), ImVec2(bx, by), col, 1.7f);
+                float dx = bx - ax, dy = by - ay;
+                float len = std::sqrt(dx * dx + dy * dy);
+                if (len > 0.5f) {
+                    dx /= len; dy /= len;
+                    const float hx = -dy, hy = dx;  // перпендикуляр для «усов» наконечника
+                    const float hs = 5.0f;
+                    dl->AddLine(ImVec2(bx, by),
+                                ImVec2(bx - dx * hs + hx * hs * 0.55f, by - dy * hs + hy * hs * 0.55f),
+                                col, 1.7f);
+                    dl->AddLine(ImVec2(bx, by),
+                                ImVec2(bx - dx * hs - hx * hs * 0.55f, by - dy * hs - hy * hs * 0.55f),
+                                col, 1.7f);
+                }
+            }
+        }
+
+        // Число дистанции до цели (по желанию — только на крупных клетках).
+        if (g_navDist && sizePx > 34.0f && c.reachable && c.dist >= 0) {
+            char buf[12];
+            std::snprintf(buf, sizeof(buf), "%d", c.dist);
+            ImVec2 ts = ImGui::CalcTextSize(buf);
+            dl->AddText(ImVec2(ccx - ts.x * 0.5f, ccy - ts.y * 0.5f), IM_COL32(230, 240, 255, 210), buf);
+        }
+    }
+
+    // Окно-легенда: счётчики + переключатели отображения + расшифровка цветов.
+    const float mrg = UiShell::uiMargin();
+    ImGui::SetNextWindowPos(ImVec2(W - 250.0f - mrg, mrg), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowBgAlpha(0.82f);
+    ImGui::SetNextWindowSize(ImVec2(0, 0), ImGuiCond_Always);
+    if (ImGui::Begin("Навигация (debug)###navDebug", nullptr,
+                     ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                         ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav)) {
+        ImGui::Text("Сетка %dx%d, клетка %.1f", nf.w, nf.h, (double)cell);
+        ImGui::Text("Обстаклы: %d  Достижимо: %d  Цели: %d", nf.blockedCount, nf.reachableCount,
+                    nf.goalCount);
+        if (nf.goalCount == 0)
+            ImGui::TextColored(ImVec4(0.95f, 0.6f, 0.3f, 1.0f), "Нет живых ядер — поле потока пусто");
+        ImGui::Separator();
+        ImGui::Checkbox("Сетка", &g_navGrid);
+        ImGui::SameLine();
+        ImGui::Checkbox("Обстаклы", &g_navObstacles);
+        ImGui::Checkbox("Поток", &g_navFlow);
+        ImGui::SameLine();
+        ImGui::Checkbox("Тупики", &g_navUnreach);
+        ImGui::Checkbox("Хитмап", &g_navHeat);
+        ImGui::SameLine();
+        ImGui::Checkbox("Дистанции", &g_navDist);
+        ImGui::Separator();
+        ImGui::TextColored(ImVec4(0.88f, 0.24f, 0.18f, 1.0f), "красный = обстакл");
+        ImGui::TextColored(ImVec4(0.92f, 0.65f, 0.16f, 1.0f), "оранжевый = нет пути (тупик)");
+        ImGui::TextColored(ImVec4(0.24f, 0.86f, 0.35f, 1.0f), "зелёный = цель (ядро)");
+        ImGui::TextColored(ImVec4(0.35f, 0.86f, 1.0f, 1.0f), "стрелки = поток к цели");
+    }
+    ImGui::End();
+}
+
 void drawMatchBanner(Scene& scene) {
     int phase = scene.matchPhase();
     if (phase == 0) return;
@@ -239,6 +380,7 @@ void drawJoysticks(Scene& scene) {
 
 void draw(UiShell::Ctx& ctx) {
     drawCombatOverlay(ctx.scene);  // HP-бары/числа — под окнами (фоновый draw-list)
+    drawNavOverlay(ctx.scene);     // отладка навсетки/пасфайндинга (по кнопке в Debug-панели)
     drawHud(ctx);
     drawBuild(ctx);
     BuildingInfoWindow::draw(ctx);

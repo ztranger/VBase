@@ -204,6 +204,13 @@ void NetClient::sendBuild(uint8_t buildType, int cellX, int cellZ) {
     sendPacket(impl_->peer, 0, pkt);
 }
 
+void NetClient::debugSendRaw(const void* data, size_t len) {
+    if (impl_->peer == nullptr || impl_->status != NetStatus::Connected) return;
+    // len==0 -> валидный ENet-пакет нулевой длины (проверяем гард msgType при dataLength<1).
+    ENetPacket* pkt = enet_packet_create(data, len, ENET_PACKET_FLAG_RELIABLE);
+    sendPacket(impl_->peer, 0, pkt);
+}
+
 void NetClient::poll() {
     if (impl_->host == nullptr) return;
     ENetEvent ev;

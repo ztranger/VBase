@@ -118,6 +118,9 @@ public:
     void sendInput(const InputCommand& cmd);
     void setCharType(uint8_t charType);  // выбранный персонаж (шлётся в каждом InputMsg)
     void sendBuild(uint8_t buildType, int cellX, int cellZ);  // запрос постройки (надёжно)
+    // Отправить произвольные байты серверу (надёжно). ТОЛЬКО для негативных тестов протокола
+    // (усечённые/раздутые/неизвестные сообщения) — обычный код шлёт типизированные send*.
+    void debugSendRaw(const void* data, size_t len);
     void poll();                        // прокачать сеть, разобрать сообщения
     bool consumeSnapshot();             // true если пришёл новый снапшот (сбрасывает флаг)
     uint32_t ackSeq() const;            // последний обработанный сервером seq (для сверки)

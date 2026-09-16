@@ -30,8 +30,12 @@ namespace {
 // Точка связывания UBO с кадровыми данными (совпадает в C++ и шейдерах).
 constexpr GLuint kFrameBinding = 0;
 
-// Максимум строк (костей) в bone-текстуре на кадр — суммарно по всем моделям.
+// Начальная ёмкость bone-текстуры (строк = костей на кадр, суммарно по всем моделям).
+// Растёт под кадр (ensureBoneCapacity), поэтому это не жёсткий лимит, а стартовый размер.
 constexpr int kBoneTexRows = 1024;
+// Потолок роста: страховка от рант-эвей (16384*4*16 байт = 4 МБ). Сверх него модели, не
+// влезшие целиком, пропускаются с однократным предупреждением (не рисуем с мусорными костями).
+constexpr int kBoneTexMaxRows = 16384;
 
 // Раскладка std140 блока Frame. vec3 в std140 выравнивается на 16 байт,
 // поэтому явные паддинги. Размер = 176 байт. ОБЯЗАНА совпадать с common.glsl.
@@ -355,10 +359,11 @@ bool GlRenderer::initSkin() {
         glUniform1i(uSkinShadowMap_, 2);  // карта теней на юните 2
     }
 
-    // Bone-текстура: ширина 4 texel (4 столбца mat4), высота = лимит строк-костей.
+    // Bone-текстура: ширина 4 texel (4 столбца mat4), высота = ёмкость строк-костей (растёт).
     glGenTextures(1, &boneTexture_);
     glBindTexture(GL_TEXTURE_2D, boneTexture_);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 4, kBoneTexRows, 0, GL_RGBA, GL_FLOAT, nullptr);
+    boneTexRows_ = kBoneTexRows;
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -403,18 +408,44 @@ SkinnedHandle GlRenderer::createSkinnedMesh(const SkinnedModel& model) {
     return (SkinnedHandle)skinnedMeshes_.size();
 }
 
+// Растит bone-текстуру, если под кадр нужно больше строк, чем сейчас (до kBoneTexMaxRows).
+// Пересоздание текстуры вне рисования безопасно: перед этим кадром её никто не читает.
+void GlRenderer::ensureBoneCapacity(size_t rows) {
+    if ((int)rows <= boneTexRows_) return;
+    int cap = boneTexRows_ > 0 ? boneTexRows_ : kBoneTexRows;
+    while (cap < (int)rows && cap < kBoneTexMaxRows) cap *= 2;
+    if (cap > kBoneTexMaxRows) cap = kBoneTexMaxRows;
+    if (cap <= boneTexRows_) return;  // упёрлись в потолок
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, boneTexture_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, 4, cap, 0, GL_RGBA, GL_FLOAT, nullptr);
+    boneTexRows_ = cap;
+}
+
 // Кости ВСЕХ моделей кадра -> один буфер + заливка в bone-текстуру (юнит 1).
-// Смещения запоминаем в skinOffsets_. Зовётся ОДИН раз до всех проходов (теневой
-// и основной используют одни и те же кости), поэтому вынесено из drawSkinned.
+// Смещения запоминаем в skinOffsets_ (или -1 = модель не влезла и в проходах пропускается).
+// Зовётся ОДИН раз до всех проходов (теневой и основной используют одни и те же кости).
 void GlRenderer::uploadBones(const std::vector<SkinnedItem>& items) {
     boneData_.clear();
-    skinOffsets_.assign(items.size(), 0);
+    skinOffsets_.assign(items.size(), -1);
+    // Сколько костей нужно на кадр (целыми моделями) — под это растим текстуру.
+    size_t need = 0;
+    for (const SkinnedItem& it : items) need += it.joints.size();
+    ensureBoneCapacity(need);
     for (size_t i = 0; i < items.size(); ++i) {
-        skinOffsets_[i] = (int)boneData_.size();
-        for (const Mat4& j : items[i].joints) {
-            if ((int)boneData_.size() >= kBoneTexRows) break;  // защита от переполнения
-            boneData_.push_back(j);
+        const size_t nb = items[i].joints.size();
+        // Отбрасываем ЦЕЛИКОМ (как Vulkan), а не режем модель: усечённый скелет = мусор.
+        if (boneData_.size() + nb > (size_t)boneTexRows_) {
+            static bool warned = false;
+            if (!warned) {
+                LOGW("GlRenderer: костей кадра больше потолка %d — часть моделей не отрисована",
+                     kBoneTexMaxRows);
+                warned = true;
+            }
+            continue;  // skinOffsets_[i] остаётся -1
         }
+        skinOffsets_[i] = (int)boneData_.size();
+        for (const Mat4& j : items[i].joints) boneData_.push_back(j);
     }
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, boneTexture_);
@@ -434,6 +465,7 @@ void GlRenderer::drawSkinned(const std::vector<SkinnedItem>& items) {
 
     for (size_t i = 0; i < items.size(); ++i) {
         const SkinnedItem& item = items[i];
+        if (skinOffsets_[i] < 0) continue;  // модель не влезла в bone-буфер (не рисуем с мусором)
         if (item.mesh == 0 || item.mesh > skinnedMeshes_.size()) continue;
         const GlMesh& mesh = skinnedMeshes_[item.mesh - 1];
 
@@ -538,6 +570,7 @@ void GlRenderer::renderShadowPass(const RenderFrame& frame) {
             glBindTexture(GL_TEXTURE_2D, boneTexture_);
             for (size_t s = 0; s < frame.skinned.size(); ++s) {
                 const SkinnedItem& it = frame.skinned[s];
+                if (skinOffsets_[s] < 0) continue;  // не влезла в bone-буфер — пропуск (как в осн. проходе)
                 if (it.mesh == 0 || it.mesh > skinnedMeshes_.size()) continue;
                 const GlMesh& mesh = skinnedMeshes_[it.mesh - 1];
                 glUniformMatrix4fv(uShadowSkinModel_, 1, GL_FALSE, it.model.m);

@@ -36,6 +36,7 @@ add_executable(vbase_server
         ${APP}/engine/net/Net.cpp
         ${APP}/game/GameWorld.cpp
         ${APP}/game/FlowField.cpp
+        ${APP}/game/NavDebug.cpp
         ${APP}/game/Character.cpp
         ${APP}/engine/physics/CollisionWorld.cpp
         ${APP}/game/SceneLoader.cpp
@@ -55,6 +56,20 @@ target_include_directories(vbase_server PRIVATE "${APP}" "${ENET}/include")
 # чтобы русские строки в бинарь попадали как UTF-8 (консоль тоже в UTF-8).
 if(MSVC)
     target_compile_options(vbase_server PRIVATE /utf-8)
+endif()
+
+# P1-09: опциональная сборка с AddressSanitizer (MSVC /fsanitize=address). OFF по умолчанию —
+# обычная сборка не затрагивается. Включается отдельным build-asan.bat в СВОЁМ build-каталоге,
+# чтобы не смешивать инструментированные объектники с обычной сборкой. UBSan на cl.exe нет —
+# для него нужен clang-cl (см. PROJECT_REVIEW P1-09).
+option(VBASE_ASAN "Build vbase_server with AddressSanitizer (MSVC)" OFF)
+if(VBASE_ASAN AND MSVC)
+    target_compile_options(vbase_server PRIVATE /fsanitize=address /Zi)
+    # Jolt.lib собран БЕЗ ASan -> отключаем ASan-аннотации STL-контейнеров (string/vector/optional),
+    # иначе LNK2038 (mismatch annotate_*) при линковке с неинструментированной либой.
+    target_compile_definitions(vbase_server PRIVATE _DISABLE_STL_ANNOTATION=1)
+    target_link_options(vbase_server PRIVATE /INCREMENTAL:NO /DEBUG)  # ASan: без инкрем. линковки, +символы
+    message(STATUS "vbase_server: AddressSanitizer ВКЛЮЧЁН")
 endif()
 
 if(NOT WIN32)

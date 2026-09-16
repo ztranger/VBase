@@ -77,6 +77,7 @@ private:
     // Карта теней: depth-FBO + depth-программы; проход глазами света перед основным.
     bool initShadow();
     void uploadBones(const std::vector<SkinnedItem>& items);  // кости кадра -> bone-текстура
+    void ensureBoneCapacity(size_t rows);  // растит bone-текстуру под число костей кадра
     void renderShadowPass(const RenderFrame& frame);
     bool initHud();
     void drawHud(const std::vector<HudText>& texts, int screenW, int screenH);
@@ -114,8 +115,9 @@ private:
     GLint uBoneTex_ = -1;     // сэмплер bone-текстуры
     GLint uBoneOffset_ = -1;  // строка начала костей текущей модели
     GLuint boneTexture_ = 0;  // RGBA32F: все матрицы костей кадра (кость = 1 строка)
+    int boneTexRows_ = 0;     // текущая ёмкость bone-текстуры (строк); растёт под кадр
     std::vector<Mat4> boneData_;         // CPU-накопитель костей на кадр
-    std::vector<int> skinOffsets_;       // строка начала костей каждой модели (кадр)
+    std::vector<int> skinOffsets_;       // строка начала костей модели (кадр); -1 = не влезла
     std::vector<GlMesh> skinnedMeshes_;  // handle = индекс + 1
 
     // Карта теней (directional shadow map).

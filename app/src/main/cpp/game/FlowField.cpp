@@ -141,6 +141,12 @@ void FlowField::compute(const NavGrid& nav, const std::vector<NavCell>& goals) {
     }
 }
 
+int FlowField::distanceAt(int cx, int cz) const {
+    int i = idx(cx, cz);
+    if (i < 0 || dist_[(size_t)i] == kUnreach) return -1;
+    return (int)dist_[(size_t)i];
+}
+
 bool FlowField::reachable(int cx, int cz) const {
     int i = idx(cx, cz);
     if (i >= 0 && dist_[(size_t)i] != kUnreach) return true;

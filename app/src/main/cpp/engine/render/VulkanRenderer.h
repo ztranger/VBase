@@ -64,6 +64,9 @@ private:
     uint32_t findMemoryType(uint32_t typeBits, VkMemoryPropertyFlags props) const;
     bool createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
                       VkMemoryPropertyFlags memProps, VkBuffer& buf, VkDeviceMemory& mem);
+    // Растит SSBO костей кадра frameIdx под needed матриц (пересоздаёт буфер + переписывает set2).
+    // Вызывается в начале renderFrame, когда ресурсы кадра простаивают (после ожидания fence).
+    bool ensureBonesCapacity(uint32_t frameIdx, uint32_t needed);
     VkShaderModule loadShaderModule(const char* path);
 
     // Хелперы Фазы 2.
@@ -134,7 +137,8 @@ private:
     VkDeviceMemory flatNormalMem_ = VK_NULL_HANDLE;
     VkImageView flatNormalView_ = VK_NULL_HANDLE;
 
-    static constexpr uint32_t kMaxBones = 512;      // суммарно костей на кадр
+    static constexpr uint32_t kMaxBones = 512;      // стартовая ёмкость SSBO костей (растёт под кадр)
+    static constexpr uint32_t kMaxBonesCap = 8192;  // потолок роста костей (страховка от рант-эвей)
     static constexpr uint32_t kMaxHudVerts = 8192;  // вершин HUD-текста на кадр
 
     // HUD (2D-текст растровым шрифтом): свой пайплайн (alpha-blend, без depth),
@@ -161,6 +165,7 @@ private:
         VkBuffer bones = VK_NULL_HANDLE;     // SSBO костей скиннинга
         VkDeviceMemory bonesMem = VK_NULL_HANDLE;
         void* bonesMapped = nullptr;
+        uint32_t bonesCapacity = 0;          // ёмкость bones (матриц); растёт под кадр
         VkDescriptorSet bonesSet = VK_NULL_HANDLE;  // set 2
         VkBuffer hud = VK_NULL_HANDLE;       // динамический вершинный буфер HUD (x,y,u,v)
         VkDeviceMemory hudMem = VK_NULL_HANDLE;

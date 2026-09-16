@@ -60,6 +60,7 @@ add_library(vbase SHARED
         engine/net/Net.cpp
         game/GameWorld.cpp
         game/FlowField.cpp
+        game/NavDebug.cpp
         game/Scene.cpp
         game/SceneLoader.cpp
         game/CharacterRoster.cpp

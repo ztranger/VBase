@@ -15,6 +15,7 @@
 #include "engine/assets/Model.h"
 #include "engine/net/Net.h"
 #include "engine/core/RenderFrame.h"
+#include "game/NavDebug.h"
 #include "game/SceneDesc.h"
 #include "engine/core/Texture.h"
 
@@ -87,6 +88,12 @@ public:
     // Построить сцену из файла (scenePath — через AssetSource, напр. "scenes/default.scene").
     void build(Renderer& renderer, AssetSource& assets,
                const char* scenePath = "scenes/default.scene");
+
+    // Пересоздать ТОЛЬКО GPU-ресурсы под новый рендер, сохранив игровую сессию (сеть, матч,
+    // предсказание, физика). Нужно при потере/пересоздании окна на Android и смене бэкенда:
+    // рендер уничтожается, а `Scene` (с client_/server_/remoteEntities_) живёт (см. P1-07).
+    // Требует ранее выполненного build() (переиспользует сохранённые sceneDesc_/config_/grid_).
+    void rebuildGraphics(Renderer& renderer, AssetSource& assets);
 
     // Шаг симуляции на фиксированный dt (движение, анимация, вращение декора).
     void fixedUpdate(float dt);
@@ -239,6 +246,13 @@ public:
     float fogDensity() const { return fogDensity_; }
     void setFogDensity(float d) { fogDensity_ = d; }
 
+    // Отладочный оверлей навигации (сетка / обстаклы / поле потока к целям). Клиент
+    // реконструирует навсетку из снапшотов теми же NavGrid/FlowField, что и авторитетный
+    // сервер, — без нового сетевого пакета. Рисует GameUi поверх кадра (см. BattleScreen).
+    bool navDebugEnabled() const { return navDebug_; }
+    void setNavDebugEnabled(bool e);
+    const NavDebugFrame& navDebugFrame() const { return navDebugFrame_; }
+
 private:
     FollowCamera camera_;
     std::vector<GameObject> objects_;
@@ -318,6 +332,14 @@ private:
     Vec3 fogColor_{0.09f, 0.13f, 0.20f};  // цвет тумана (линейное пространство)
     float fogDensity_ = 0.014f;        // плотность экспоненциального тумана (0 = выкл)
 
+    // Отладочная навигация: снимок навсетки+поля потока. Перестраивается из снапшотов
+    // ТОЛЬКО когда оверлей включён и изменился набор зданий/ядер (дешёвая подпись
+    // navDebugSig_ гасит лишние BFS на больших полях — здания статичны, поле не меняется).
+    bool navDebug_ = false;
+    NavDebugFrame navDebugFrame_;
+    uint64_t navDebugSig_ = 0;
+    void rebuildNavDebug();  // собрать navDebugFrame_ из remoteEntities_/sceneDesc_ (см. NavDebug)
+
     // Построить отрисовочный предмет модели reg[index] по состоянию (клиентский рендер).
     // reg — chars_ (герои) или mobs_ (враги). oneShotClip>=0 — проиграть конкретный клип в
     // oneShotTime (для «трупа»: смерть), перекрывая локомоцию/атаку.
@@ -330,6 +352,9 @@ private:
     // Загрузить модели ростера в GPU-реестр (клипы по имени). Используется для героев и мобов.
     void loadRosterModels(Renderer& renderer, AssetSource& assets,
                           const std::vector<CharacterDesc>& roster, std::vector<PlayerModel>& out);
+    // GPU-часть сборки (общая для build() и rebuildGraphics()): создаёт ресурсы рендера из
+    // сохранённого sceneDesc_/config_/grid_, не трогая физику/сеть/сессию.
+    void createGpuResources(Renderer& renderer, AssetSource& assets);
 
     // Сеть.
     NetClient client_;
