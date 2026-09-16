@@ -1257,7 +1257,7 @@ float Scene::coreHp() const {
 
 float Scene::coreMaxHp() const { return config_.get(EntityType::Core).hp; }
 
-const Scene::EntityVisual& Scene::visual(EntityType t) const {
+const EntityVisual& Scene::visual(EntityType t) const {
     static const EntityVisual kNone;  // неизвестный/вне-диапазона тип -> пусто (не рисуется/не пикается)
     int i = (int)t;
     return (i >= 0 && i < kEntityVisualCount) ? visuals_[i] : kNone;

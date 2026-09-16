@@ -17,63 +17,16 @@
 #include "engine/core/RenderFrame.h"
 #include "game/NavDebug.h"
 #include "game/SceneDesc.h"
+#include "game/SceneTypes.h"  // P2-18: plain-структуры данных сцены (вынесены из этого заголовка)
 #include "engine/core/Texture.h"
 
 class Renderer;
 class CollisionWorld;
 struct CharacterDesc;  // game/CharacterRoster.h (ростер персонажей/мобов)
 
-// Снапшот состояния во времени (для буфера интерполяции чужих игроков).
-struct TimedState {
-    double t = 0.0;  // время приёма (по часам симуляции), сек
-    Vec3 pos{0.0f, 0.0f, 0.0f};
-    float yaw = 0.0f;
-    float anim = 0.0f;
-    float attack = 0.0f;  // остаток времени атаки (для рендера каста чужих)
-};
-
-// Чужая сущность (не свой герой): любой тип из снапшота — герой, генератор,
-// хранилище, враг, … Рендерим по типу; подвижные интерполируем через буфер.
-struct RemoteEntity {
-    uint32_t id = 0;
-    uint8_t type = 0;   // EntityType
-    uint8_t team = 0;
-    uint8_t charType = 0;  // индекс персонажа в ростере (какой моделью рисовать чужого героя)
-    Character ch;       // трансформ для рендера/интерполяции
-    std::vector<TimedState> buffer;
-    float aux = 0.0f;   // ресурс в хранилище и т.п. (последнее значение, без интерполяции)
-    float hp = 0.0f;    // здоровье (ядро/враг) из снапшота
-};
-
-// Отправленная, но ещё не подтверждённая сервером команда (для реплея).
-struct PendingInput {
-    InputCommand cmd;
-    float dt = 0.0f;
-};
-
-// Позиция/поворот/масштаб статичного объекта окружения.
-struct Transform {
-    Vec3 position{0.0f, 0.0f, 0.0f};
-    Vec3 rotation{0.0f, 0.0f, 0.0f};
-    Vec3 scale{1.0f, 1.0f, 1.0f};
-
-    Mat4 matrix() const {
-        return Mat4::translation(position)
-             * Mat4::rotationY(rotation.y)
-             * Mat4::rotationX(rotation.x)
-             * Mat4::rotationZ(rotation.z)
-             * Mat4::scale(scale);
-    }
-};
-
-// Статичный объект окружения (пол, кубы, сферы, кольцо).
-struct GameObject {
-    Transform transform;
-    MeshHandle mesh = 0;
-    MaterialHandle material = 0;
-    float spin = 0.0f;
-    float prevRotY = 0.0f;  // для интерполяции вращения между тиками
-};
+// Структуры данных (TimedState/RemoteEntity/PendingInput/Transform/GameObject/PlayerModel/
+// EntityVisual/DyingMob/SceneEntry/CombatMarker/DamageNumber/ImpactSpark/BuildPoof) — в
+// game/SceneTypes.h (P2-18 шаг 1). Ниже — только сам класс Scene.
 
 /**
  * Игровой мир. Владеет окружением, управляемым персонажем, следящей камерой и
@@ -172,10 +125,11 @@ public:
     // Читаемость боя: worldspace HP-бары + всплывающие числа урона. Scene (game/) только
     // ПРОИЗВОДИТ данные (диф hp из снапшотов, без ImGui); рисует GameUi (engine/render),
     // проецируя мировые точки через view/proj. Чистая клиентская косметика — протокол не трогает.
-    struct CombatMarker { Vec3 pos; float hpFrac; Vec3 color; };       // полоска HP над сущностью
-    struct DamageNumber { Vec3 pos; float amount; float age; Vec3 color; };  // всплывающее число
-    struct ImpactSpark { Vec3 pos; float age; float maxAge; uint32_t seed; };  // вспышка-искры в точке хита
-    struct BuildPoof { Vec3 pos; float age; };  // «пуф» при постройке (расходящееся кольцо)
+    // Определения — в game/SceneTypes.h; алиасы для совместимости с внешним `Scene::X` (GameUi).
+    using CombatMarker = ::CombatMarker;
+    using DamageNumber = ::DamageNumber;
+    using ImpactSpark = ::ImpactSpark;
+    using BuildPoof = ::BuildPoof;
     const std::vector<CombatMarker>& combatMarkers() const { return markers_; }
     const std::vector<DamageNumber>& damageNumbers() const { return damageNumbers_; }
     const std::vector<ImpactSpark>& impactSparks() const { return sparks_; }
@@ -258,27 +212,15 @@ private:
     std::vector<GameObject> objects_;
 
     // Манифест доступных сцен (config/scenes.cfg): путь + отображаемое имя. Меню
-    // перечисляет их и просит платформу перезагрузить мир выбранной.
-    struct SceneEntry { std::string path, name; };
+    // перечисляет их и просит платформу перезагрузить мир выбранной. (SceneEntry — SceneTypes.h)
     std::vector<SceneEntry> sceneList_;
     std::string currentScenePath_;     // путь сцены, которой построен этот Scene
     void loadSceneManifest(AssetSource& assets, const char* path);  // config/scenes.cfg -> sceneList_
 
     // Реестр выбираемых персонажей (грузится в build из config/characters.cfg). ВСЕ модели
     // грузятся один раз -> мгновенное переключение и рендер чужих их моделями без утечек GPU
-    // (у Renderer нет удаления мешей/текстур). Индексы клипов резолвятся ПО ИМЕНИ (findAnimation).
-    struct PlayerModel {
-        std::string id, name;
-        SkinnedModel model;          // данные скелета/анимаций
-        SkinnedHandle mesh = 0;      // GPU-меш (клиентский ресурс)
-        TextureHandle tex = 0;
-        float scale = 1.0f, yawOffset = 0.0f;
-        int idleClip = 0, walkClip = 1, runClip = 2, attackClip = -1, deathClip = -1;
-        float attackClipDur = 0.0f;  // длительность клипа атаки, сек (масштаб под kAttackDuration)
-        float deathClipDur = 0.0f;   // длительность клипа смерти, сек (для «трупа» моба)
-        float hp = 0.0f;             // статы героя (для HUD/предсказания): 0 = дефолт
-        float speed = 0.0f;          // скорость бега героя (client player_.maxSpeed для предсказания)
-    };
+    // (у Renderer нет удаления мешей/текстур). Индексы клипов резолвятся ПО ИМЕНИ. PlayerModel —
+    // в game/SceneTypes.h.
     std::vector<PlayerModel> chars_;   // ростер героев; индекс = charType в снапшоте (сетевой контракт)
     std::vector<PlayerModel> mobs_;    // ростер мобов (config/enemies.cfg); индекс = enemy.charType
     int localCharIndex_ = 0;           // выбранный локальным игроком
@@ -286,13 +228,7 @@ private:
 
     // «Труп» убитого моба: локальная косметика — проигрывает клип смерти на месте гибели и
     // убирается. Заводится, когда враг исчез из снапшота в фазе боя (см. applySnapshot).
-    struct DyingMob {
-        int charType = 0;
-        Vec3 pos{0.0f, 0.0f, 0.0f};
-        float yaw = 0.0f;
-        float t = 0.0f;    // время с начала смерти
-        float dur = 1.0f;  // длительность клипа смерти
-    };
+    // DyingMob — в game/SceneTypes.h.
     std::vector<DyingMob> dyingMobs_;
 
     // Снаряды башен теперь СЕРВЕРНЫЕ сущности (EntityType::Projectile в снапшотах) — рисуем их
@@ -302,15 +238,8 @@ private:
 
     // Клиентский визуал/пикинг по типу сущности — ОДНА таблица вместо разбросанных switch
     // (рендер, пикинг, призрак стройки читают её; yOffset больше НЕ дублируется). Заполняется
-    // в build(); Hero остаётся default (mesh=0 — рисуется отдельно, скиннинг-лиса).
-    struct EntityVisual {
-        MeshHandle mesh = 0;         // 0 = не рисуется generic-путём
-        MaterialHandle material = 0;
-        float yOffset = 0.0f;        // подъём центра над позицией (рендер И пикинг)
-        float pickRadius = 0.0f;     // радиус сферы пикинга
-        bool pickable = false;       // выбирается кликом (Hero — нет)
-        bool building = false;       // занимает клетку сетки (для стройки)
-    };
+    // в build(); Hero остаётся default (mesh=0 — рисуется отдельно, скиннинг). EntityVisual —
+    // в game/SceneTypes.h.
     static constexpr int kEntityVisualCount = (int)EntityType::Core + 1;  // Core — последний тип
     EntityVisual visuals_[kEntityVisualCount];
     const EntityVisual& visual(EntityType t) const;  // доступ по типу (вне диапазона -> пусто)
