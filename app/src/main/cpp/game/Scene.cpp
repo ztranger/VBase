@@ -473,7 +473,7 @@ void Scene::selectCharacter(int i) {
     if (i < 0) i = 0;
     if (i >= (int)chars_.size()) i = (int)chars_.size() - 1;
     localCharIndex_ = i;
-    client_.setCharType((uint8_t)i);  // сервер положит в снапшот -> чужие нарисуют нашей моделью
+    session_.setCharType((uint8_t)i);  // сервер положит в снапшот -> чужие нарисуют нашей моделью
     // Статы выбранного героя: скорость — в предсказание (должна совпадать с сервером, иначе
     // реконсиляция дёргала бы), максимум hp — для HUD (текущий hp авторитетно из снапшота).
     if (chars_[i].speed > 0.0f) player_.maxSpeed = chars_[i].speed;
@@ -574,9 +574,8 @@ void Scene::fixedUpdate(float dt) {
     tickDt_ = dt;
 
     // Отправляем ввод серверу и запоминаем его как неподтверждённый (для реплея).
-    if (client_.connected()) {
-        cmd.seq = ++inputSeq_;
-        client_.sendInput(cmd);
+    if (session_.connected()) {
+        session_.sendInput(cmd);  // проставляет cmd.seq
         pending_.push_back({cmd, dt});
         // P2-03: ограничиваем окно неподтверждённых вводов. При долгом отсутствии ack (обрыв/лаг)
         // буфер рос бы без предела, а реплей реконсиляции — всё дороже (O(N) simulate за снапшот).
@@ -596,35 +595,20 @@ void Scene::fixedUpdate(float dt) {
         if (player_.attackTime < 0.0f) player_.attackTime = 0.0f;
     }
 
-    // Сервер (если хостим) — тем же кодом симуляции, затем рассылка снапшотов.
-    if (host_) {
-        server_.poll();
-        server_.tick(dt);
-    }
-    // Приём: снапшоты -> реконсиляция своего аватара + буфер чужих.
-    client_.poll();
-    if (client_.consumeSnapshot()) {
+    // Пампинг сети (host -> server poll/tick; всегда client poll) + приём снапшотов ->
+    // реконсиляция своего аватара + буфер чужих.
+    if (session_.pump(dt)) {
         applySnapshot();
     }
 
     // Реакция на обрыв. Чужие сущности застыли бы на последнем снапшоте — чистим их
-    // (и неподтверждённые вводы), чтобы на экране не висели «призраки». Для join-сессии
-    // раз в kReconnectPeriod пробуем переподключиться; host к 127.0.0.1 не трогаем.
-    if (client_.status() == NetStatus::Lost) {
+    // (и неподтверждённые вводы), чтобы на экране не висели «призраки», затем сессия сама
+    // пробует переподключиться (для join; host к 127.0.0.1 не трогает).
+    if (session_.status() == NetStatus::Lost) {
         if (!remoteEntities_.empty()) remoteEntities_.clear();
         if (!dyingMobs_.empty()) dyingMobs_.clear();
         if (!pending_.empty()) pending_.clear();
-        if (wantReconnect_) {
-            constexpr float kReconnectPeriod = 2.0f;  // сек между попытками
-            reconnectTimer_ -= dt;
-            if (reconnectTimer_ <= 0.0f) {
-                reconnectTimer_ = kReconnectPeriod;
-                ++reconnectAttempts_;
-                LOGI("Scene: переподключение #%d к %s:%d", reconnectAttempts_, serverIp_, (int)serverPort_);
-                client_.connect(serverIp_, serverPort_);  // connect() сам сбросит клиент
-                inputSeq_ = 0;
-            }
-        }
+        session_.reconnectTick(dt);
     }
 
     simClock_ += dt;
@@ -691,7 +675,7 @@ bool Scene::killerYaw(const Vec3& mobPos, uint32_t mobId, float& outYaw) const {
         float d2 = dx * dx + dz * dz;
         if (d2 < bestD2) { bestD2 = d2; bestSrc = src; have = true; }
     };
-    if (client_.connected() && !heroDead()) consider(player_.position);  // локальный герой
+    if (session_.connected() && !heroDead()) consider(player_.position);  // локальный герой
     for (const RemoteEntity& r : remoteEntities_) {
         if (r.id == mobId) continue;
         EntityType t = (EntityType)r.type;
@@ -706,11 +690,11 @@ bool Scene::killerYaw(const Vec3& mobPos, uint32_t mobId, float& outYaw) const {
 }
 
 void Scene::applySnapshot() {
-    uint32_t myId = client_.myId();
+    uint32_t myId = session_.myId();
     if (myId == 0) return;  // ждём Welcome, иначе примем себя за чужого
 
-    const std::vector<EntityState>& states = client_.states();
-    const uint32_t ack = client_.ackSeq();
+    const std::vector<EntityState>& states = session_.states();
+    const uint32_t ack = session_.ackSeq();
 
     for (const EntityState& s : states) {
         if (s.id == myId) {
@@ -813,7 +797,7 @@ void Scene::applySnapshot() {
 
     // Убрать исчезнувшие сущности (нет в текущем снапшоте). Моб, пропавший в фазе боя, —
     // это убитый враг: оставляем локальный «труп» с анимацией смерти на его месте.
-    const bool playing = (client_.gamePhase() == (uint8_t)GamePhase::Playing);
+    const bool playing = (session_.gamePhase() == (uint8_t)GamePhase::Playing);
     for (size_t i = 0; i < remoteEntities_.size();) {
         bool found = false;
         for (const EntityState& s : states) {
@@ -841,7 +825,7 @@ void Scene::applySnapshot() {
     }
 
     // Звук исхода матча по фронту смены фазы (победа/поражение своей команды).
-    uint8_t phase = client_.gamePhase();
+    uint8_t phase = session_.gamePhase();
     if (phase != prevPhase_) {
         if (phase == (uint8_t)GamePhase::Won) emitSound(SoundId::Victory);
         else if (phase == (uint8_t)GamePhase::Lost) emitSound(SoundId::Defeat);
@@ -931,34 +915,18 @@ void Scene::rebuildNavDebug() {
 }
 
 void Scene::hostGame() {
-    leaveGame();
-    if (server_.start(kNetPort)) {
-        server_.configureWorld(sceneDesc_);  // тот же мир коллизий, что у клиента
-        client_.connect("127.0.0.1", kNetPort);
-        host_ = true;
-        inputSeq_ = 0;
-    }
+    leaveGame();               // сброс мира + прошлой сессии
+    session_.host(sceneDesc_);  // поднять локальный сервер той же геометрией + подключиться
 }
 
 void Scene::joinGame(const char* ip, uint16_t port) {
     leaveGame();
-    std::strncpy(serverIp_, ip, sizeof(serverIp_) - 1);
-    serverIp_[sizeof(serverIp_) - 1] = '\0';
-    serverPort_ = port > 0 ? port : kNetPort;
-    client_.connect(serverIp_, serverPort_);
-    host_ = false;
-    wantReconnect_ = true;  // при обрыве пытаемся вернуться на тот же сервер
-    reconnectTimer_ = 0.0f;
-    reconnectAttempts_ = 0;
-    inputSeq_ = 0;
+    session_.join(ip, port);
 }
 
 void Scene::leaveGame() {
-    client_.disconnect();
-    server_.stop();
-    host_ = false;
-    wantReconnect_ = false;  // сознательный выход — не переподключаемся
-    reconnectTimer_ = 0.0f;
+    session_.leave();  // транспорт: disconnect + stop host-сервера + выкл. реконнект
+    // Мировое состояние (сессия его не знает) чистит Scene.
     remoteEntities_.clear();
     syncBuildingColliders();  // снять все футпринт-боксы зданий (remoteEntities_ уже пуст)
     dyingMobs_.clear();
@@ -1209,7 +1177,7 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
 
     // HUD ставок героя (bitmap-шрифт — только ASCII; кириллический баннер — в ImGui-слое
     // через геттеры heroDead()/heroRespawnLeft()). Верхний левый угол, под FPS.
-    if (client_.connected()) {
+    if (session_.connected()) {
         char buf[48];
         if (heroDead()) {
             std::snprintf(buf, sizeof(buf), "DOWN - respawn %.0f", (double)std::ceil(localRespawn_));
@@ -1247,7 +1215,7 @@ float Scene::resourceCap() const {
     return (float)count * perStorage;
 }
 
-int Scene::matchPhase() const { return (int)client_.gamePhase(); }
+int Scene::matchPhase() const { return (int)session_.gamePhase(); }
 
 float Scene::coreHp() const {
     for (const RemoteEntity& r : remoteEntities_)
@@ -1376,11 +1344,11 @@ void Scene::beginBuild(int type) {
 }
 
 void Scene::confirmBuild() {
-    if (!buildActive_ || !client_.connected()) return;
+    if (!buildActive_ || !session_.connected()) return;
     int cx, cz;
     Vec3 center;
     if (!computeGhost(cx, cz, center)) return;  // невалидно — не шлём запрос
-    client_.sendBuild((uint8_t)buildType_, cx, cz);
+    session_.sendBuild((uint8_t)buildType_, cx, cz);
     emitSound(SoundId::Build);          // оптимистично: шлём только на валидной клетке
     poofs_.push_back({center, 0.0f});   // «пуф» размещения на центре клетки (косметика)
     // Остаёмся в режиме — можно ставить дальше (сервер авторитетно применит/отвергнет).

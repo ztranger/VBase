@@ -8,6 +8,7 @@
 #include "engine/audio/Audio.h"  // SoundId/SoundEvent (портативный словарь; без аудио-движка)
 #include "game/BuildingConfig.h"
 #include "game/Character.h"
+#include "game/ClientSession.h"  // P2-18 шаг 3: сетевая сессия (client/server/reconnect)
 #include "engine/core/FollowCamera.h"
 #include "engine/core/Input.h"
 #include "engine/core/MathUtil.h"
@@ -93,16 +94,16 @@ public:
     void hostGame();
     void joinGame(const char* ip, uint16_t port = kNetPort);
     void leaveGame();
-    bool netConnected() const { return client_.connected(); }
-    bool netHost() const { return host_; }
+    bool netConnected() const { return session_.connected(); }
+    bool netHost() const { return session_.isHost(); }
     // Диагностика соединения (для HUD/панели): пинг + производные от статуса флаги.
-    int netPingMs() const { return client_.pingMs(); }        // RTT до сервера, мс (-1 нет)
-    bool netConnecting() const { return client_.status() == NetStatus::Connecting; }
-    bool netConnectionLost() const { return client_.status() == NetStatus::Lost; }
-    const char* netServerAddress() const { return serverIp_; }  // цель join (для UI)
-    int netServerPort() const { return (int)serverPort_; }
-    int netReconnectAttempts() const { return reconnectAttempts_; }  // попыток реконнекта
-    void netRetryNow() { reconnectTimer_ = 0.0f; }  // форсировать реконнект сейчас
+    int netPingMs() const { return session_.pingMs(); }        // RTT до сервера, мс (-1 нет)
+    bool netConnecting() const { return session_.status() == NetStatus::Connecting; }
+    bool netConnectionLost() const { return session_.status() == NetStatus::Lost; }
+    const char* netServerAddress() const { return session_.serverAddress(); }  // цель join (для UI)
+    int netServerPort() const { return session_.serverPort(); }
+    int netReconnectAttempts() const { return session_.reconnectAttempts(); }  // попыток реконнекта
+    void netRetryNow() { session_.retryNow(); }  // форсировать реконнект сейчас
     int remoteCount() const;  // число ДРУГИХ героев (без зданий/врагов)
 
     // Для ImGui/HUD.
@@ -119,7 +120,7 @@ public:
     // Ставки своего героя.
     float heroHp() const { return localHp_; }
     float heroMaxHp() const { return localMaxHp_; }
-    bool heroDead() const { return client_.connected() && localHp_ <= 0.0f; }
+    bool heroDead() const { return session_.connected() && localHp_ <= 0.0f; }
     float heroRespawnLeft() const { return localRespawn_; }  // секунд до респауна
 
     // Читаемость боя: worldspace HP-бары + всплывающие числа урона. Scene (game/) только
@@ -285,10 +286,9 @@ private:
     // сохранённого sceneDesc_/config_/grid_, не трогая физику/сеть/сессию.
     void createGpuResources(Renderer& renderer, AssetSource& assets);
 
-    // Сеть.
-    NetClient client_;
-    NetServer server_;
-    SceneDesc sceneDesc_;      // сохранённое описание (host-режим отдаёт его серверу)
+    // Сеть — за фасадом ClientSession (транспорт + host-сервер + реконнект). См. P2-18 шаг 3.
+    ClientSession session_;
+    SceneDesc sceneDesc_;      // сохранённое описание (host-режим отдаёт его серверу через session_)
     BuildingConfig config_;    // параметры/тексты типов зданий (из конфига)
     Grid grid_;                // строительная сетка (из описания сцены; та же, что у сервера)
     uint32_t selectedId_ = 0;  // id выделенной кликом сущности (0 = нет)
@@ -329,15 +329,7 @@ private:
     // Призрак: клетка перед героем + мировой центр + валидность. Возвращает валидность.
     bool computeGhost(int& cx, int& cz, Vec3& center) const;
     bool cellOccupied(int cx, int cz) const;  // клетка занята зданием (для сетки и призрака)
-    bool host_ = false;
-    // Авто-реконнект для join-сессии (host к 127.0.0.1 не переподключаем). serverIp_
-    // запоминается в joinGame; при статусе Lost повторяем connect раз в kReconnectPeriod.
-    char serverIp_[64] = {0};
-    uint16_t serverPort_ = kNetPort;   // порт join-сессии (для реконнекта; настраивается в UI)
-    int reconnectAttempts_ = 0;        // счётчик попыток реконнекта (для UI)
-    bool wantReconnect_ = false;
-    float reconnectTimer_ = 0.0f;
-    uint32_t inputSeq_ = 0;
+    // (client_/server_/host_/serverIp_/serverPort_/reconnect*/inputSeq_ переехали в session_.)
     std::vector<RemoteEntity> remoteEntities_;  // все чужие сущности (герои/здания/…)
     std::vector<PendingInput> pending_;  // неподтверждённые вводы (для реплея)
     double simClock_ = 0.0;              // часы симуляции (сек)

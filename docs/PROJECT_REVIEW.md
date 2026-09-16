@@ -614,7 +614,7 @@ Parser должен различать:
 
 ### P2-18. Декомпозиция `Scene`
 
-- [~] **Шаг 1 из 5 сделан** (данные), шаги 2–5 (инверсия владения) — с плейтестом.
+- [~] **Шаги 1 и 3 из 5 сделаны** (данные + сессия сети), шаги 2/4/5 — с плейтестом.
   - [x] **Шаг 1 — структуры данных без изменения ownership.** Все plain-структуры сцены
     (`TimedState`/`RemoteEntity`/`PendingInput`/`Transform`/`GameObject`/`PlayerModel`/`EntityVisual`/
     `DyingMob`/`SceneEntry`/`CombatMarker`/`DamageNumber`/`ImpactSpark`/`BuildPoof`) вынесены из
@@ -623,7 +623,14 @@ Parser должен различать:
     поведение-нейтрально (релокация определений типов). Проверено: десктоп собран + грузит полную
     сцену, `Scene.cpp`/`BattleScreen.cpp` aarch64 чисто.
   - [ ] **Шаг 2 — `WorldPresentation`** (RenderFrame + VFX + audio events).
-  - [ ] **Шаг 3 — `ClientSession`** (join/host/reconnect + транспорт) — верифицируем реальным `--join`.
+  - [x] **Шаг 3 — `ClientSession`** (join/host/reconnect + транспорт). Класс `game/ClientSession.{h,cpp}`
+    владеет `client_`/`server_` + состоянием реконнекта (`serverIp_`/`serverPort_`/`inputSeq_`/…),
+    вынесенными из `Scene`. API: `host(desc)`/`join(ip,port)`/`leave()`/`pump(dt)`/`reconnectTick(dt)`/
+    `sendInput`/`sendBuild`/`setCharType` + геттеры (`connected`/`status`/`states`/`myId`/`ackSeq`/
+    `gamePhase`/пинг/реконнект-UI). `Scene` дёргает `session_` и применяет снапшоты; мировое
+    состояние (remoteEntities/pending) чистит сам. Порядок пампинга и реконнекта сохранён 1:1.
+    **Верифицировано реальной сетью:** сервер + десктоп `--join 127.0.0.1` → клиент `подключён`,
+    сервер `клиент подключён (hero id=…)`; десктоп собран; `ClientSession.cpp`/`Scene.cpp` aarch64 чисто.
   - [ ] **Шаг 4 — `ClientWorld`** (snapshots + prediction + локальная симуляция).
   - [ ] **Шаг 5 — сократить публичный API `Scene`** (тонкий фасад-координатор).
   - Причина поэтапности: шаги 2–5 меняют ownership и затрагивают рендер/предсказание/VFX — их

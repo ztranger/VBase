@@ -37,6 +37,7 @@ add_executable(vbase_desktop
         ${APP}/game/GameWorld.cpp
         ${APP}/game/FlowField.cpp
         ${APP}/game/NavDebug.cpp
+        ${APP}/game/ClientSession.cpp
         ${APP}/engine/assets/Assets.cpp
         ${APP}/engine/assets/Model.cpp
         ${APP}/game/Scene.cpp
