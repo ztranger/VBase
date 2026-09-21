@@ -9,6 +9,7 @@
 #include "game/BuildingConfig.h"
 #include "game/Character.h"
 #include "game/ClientSession.h"  // P2-18 шаг 3: сетевая сессия (client/server/reconnect)
+#include "game/ClientWorld.h"    // P2-18 шаг 4: физика + снапшоты + предсказание
 #include "engine/core/FollowCamera.h"
 #include "engine/core/Input.h"
 #include "engine/core/MathUtil.h"
@@ -19,6 +20,7 @@
 #include "game/NavDebug.h"
 #include "game/SceneDesc.h"
 #include "game/SceneTypes.h"  // P2-18: plain-структуры данных сцены (вынесены из этого заголовка)
+#include "game/WorldPresentation.h"  // P2-18 шаг 2: боевая косметика / звук / вью-матрицы
 #include "engine/core/Texture.h"
 
 class Renderer;
@@ -131,19 +133,19 @@ public:
     using DamageNumber = ::DamageNumber;
     using ImpactSpark = ::ImpactSpark;
     using BuildPoof = ::BuildPoof;
-    const std::vector<CombatMarker>& combatMarkers() const { return markers_; }
-    const std::vector<DamageNumber>& damageNumbers() const { return damageNumbers_; }
-    const std::vector<ImpactSpark>& impactSparks() const { return sparks_; }
-    const std::vector<BuildPoof>& buildPoofs() const { return poofs_; }
+    const std::vector<CombatMarker>& combatMarkers() const { return presentation_.markers; }
+    const std::vector<DamageNumber>& damageNumbers() const { return presentation_.damageNumbers; }
+    const std::vector<ImpactSpark>& impactSparks() const { return presentation_.sparks; }
+    const std::vector<BuildPoof>& buildPoofs() const { return presentation_.poofs; }
     // Мировая позиция выделенного кликом здания (ринг выделения в оверлее). false = нет выделения.
     bool selectedWorldPos(Vec3& out) const;
-    const Mat4& viewMatrix() const { return lastView_; }  // матрицы последнего кадра боя
-    const Mat4& projMatrix() const { return lastProj_; }
+    const Mat4& viewMatrix() const { return presentation_.lastView; }  // матрицы последнего кадра боя
+    const Mat4& projMatrix() const { return presentation_.lastProj; }
 
     // Звуковые события за кадр: Scene накапливает из снапшотов/действий, платформа сливает и
     // проигрывает через Audio, затем чистит. Тут только словарь SoundId — без аудио-движка.
-    const std::vector<SoundEvent>& sounds() const { return sounds_; }
-    void clearSounds() { sounds_.clear(); }
+    const std::vector<SoundEvent>& sounds() const { return presentation_.sounds; }
+    void clearSounds() { presentation_.sounds.clear(); }
 
     float modelScale() const { return chars_.empty() ? 1.0f : chars_[localCharIndex_].scale; }
     void setModelScale(float s) { if (!chars_.empty()) chars_[localCharIndex_].scale = s; }
@@ -227,10 +229,10 @@ private:
     int localCharIndex_ = 0;           // выбранный локальным игроком
     float previewSpin_ = 0.0f;         // накопленный угол вращения модели на экране выбора
 
-    // «Труп» убитого моба: локальная косметика — проигрывает клип смерти на месте гибели и
-    // убирается. Заводится, когда враг исчез из снапшота в фазе боя (см. applySnapshot).
-    // DyingMob — в game/SceneTypes.h.
-    std::vector<DyingMob> dyingMobs_;
+    // Боевая косметика (HP-бары/числа урона/искры/вспышки/тряска), звук, «трупы» мобов и вью-
+    // матрицы последнего кадра — в WorldPresentation (P2-18 шаг 2). Scene ПРОИЗВОДИТ их в
+    // applySnapshot/render и раздаёт геттерами; GameUi рисует.
+    WorldPresentation presentation_;
 
     // Снаряды башен теперь СЕРВЕРНЫЕ сущности (EntityType::Projectile в снапшотах) — рисуем их
     // в remote-цикле этим мешем/материалом (болт). Клиентская симуляция снаряда убрана.
@@ -244,8 +246,8 @@ private:
     static constexpr int kEntityVisualCount = (int)EntityType::Core + 1;  // Core — последний тип
     EntityVisual visuals_[kEntityVisualCount];
     const EntityVisual& visual(EntityType t) const;  // доступ по типу (вне диапазона -> пусто)
-    Character player_;        // управляемый актор (симуляция)
-    std::unique_ptr<CollisionWorld> collision_;  // кинематическая физика (Jolt)
+    Character player_;         // управляемый актор (симуляция; хэндл капсулы — в clientWorld_)
+    ClientWorld clientWorld_;  // физика + снапшоты + предсказание/реконсиляция (P2-18 шаг 4)
     VirtualJoystick joystick_;         // левый стик — движение героя
     VirtualJoystick camJoystick_;      // правый стик — камера (Android)
     int movePointer_ = -1;             // id пальца, владеющего левым стиком (-1 нет)
@@ -297,26 +299,7 @@ private:
     float localMaxHp_ = 100.0f; // макс. hp героя (из конфига)
     float localRespawn_ = 0.0f; // отсчёт респауна при поверженном (из aux сущности)
 
-    // Читаемость боя (клиентская косметика; протокол не трогает). Максимума hp в снапшоте нет —
-    // берём наблюдаемый максимум (сущности спавнятся на полном hp → первое/наибольшее = max).
-    std::vector<CombatMarker> markers_;              // пересобирается каждый render() из интерп. позиций
-    std::vector<DamageNumber> damageNumbers_;        // всплывающие числа урона (живут ~kDmgLife, копятся в applySnapshot)
-    std::unordered_map<uint32_t, float> maxHpSeen_;  // id -> наблюдаемый максимум hp (доля бара)
-    std::unordered_map<uint32_t, float> flash_;      // id -> остаток hit-flash/scale-punch, сек
-    float localFlash_ = 0.0f;                        // hit-flash/punch своего героя
-    Mat4 lastView_, lastProj_;                       // матрицы последнего кадра боя (проекция маркеров в GameUi)
-
-    // Джус/impact (клиентская косметика): искры в точке хита + тряска камеры на крупный урон.
-    std::vector<ImpactSpark> sparks_;  // искры-вспышки (живут ~kSparkLife, рисует GameUi)
-    std::vector<BuildPoof> poofs_;     // «пуфы» постройки (живут ~kPoofLife, рисует GameUi)
-    uint32_t sparkSeed_ = 0x9e3779b9;  // накопитель для псевдослучайных направлений искр
-    float shakeTime_ = 0.0f;           // остаток тряски камеры, сек
-    float shakeAmp_ = 0.0f;            // пиковая амплитуда тряски (world units)
-
-    // Звук (клиентская косметика): очередь событий кадра + фронт фазы матча.
-    std::vector<SoundEvent> sounds_;   // накапливается в applySnapshot/действиях; см. sounds()
-    uint8_t prevPhase_ = 0;            // прошлый GamePhase — звук победы/поражения по фронту
-    void emitSound(SoundId id);        // добавить звук с кэпом повторов за кадр (антиспам)
+    // (Боевая косметика/звук/вью-матрицы — в presentation_ выше; emitSound — метод WorldPresentation.)
 
     // Стройка: активный режим + выбранный тип + материалы призрака (валид/невалид).
     bool buildActive_ = false;
@@ -329,21 +312,8 @@ private:
     // Призрак: клетка перед героем + мировой центр + валидность. Возвращает валидность.
     bool computeGhost(int& cx, int& cz, Vec3& center) const;
     bool cellOccupied(int cx, int cz) const;  // клетка занята зданием (для сетки и призрака)
-    // (client_/server_/host_/serverIp_/serverPort_/reconnect*/inputSeq_ переехали в session_.)
-    std::vector<RemoteEntity> remoteEntities_;  // все чужие сущности (герои/здания/…)
-    std::vector<PendingInput> pending_;  // неподтверждённые вводы (для реплея)
-    double simClock_ = 0.0;              // часы симуляции (сек)
+    // (client_/server_/… переехали в session_; pending_/simClock_/buildingColliders_/collision_ и
+    // applySnapshot/syncBuildingColliders/killerYaw — в clientWorld_.)
+    std::vector<RemoteEntity> remoteEntities_;  // все чужие сущности (герои/здания/…); читаются render/пикингом
     float tickDt_ = kTickDt;             // длительность тика (единый шаг, из engine/net/Net.h)
-
-    // Футпринт-коллайдеры зданий на клиенте (id сущности -> ColliderBoxId). Сервер ставит боксы
-    // блокирующим зданиям (GameWorld::attachFootprint), и предсказание героя должно видеть ту же
-    // геометрию — иначе герой прошёл бы сквозь здание локально, а сервер вытолкнул = rubber-band.
-    // Реконсилируется против remoteEntities_ по снапшотам (см. syncBuildingColliders).
-    std::unordered_map<uint32_t, uint32_t> buildingColliders_;
-
-    void applySnapshot();
-    void syncBuildingColliders();  // добавить/убрать боксы зданий под текущий remoteEntities_
-    // Yaw «лицом к убийце» для корпуса моба: ближайший герой/башня (они и бьют/стреляют мобов).
-    // death-клип бросает НАЗАД от facing → доворот к источнику = бросок ОТ него. false = кандидата нет.
-    bool killerYaw(const Vec3& mobPos, uint32_t mobId, float& outYaw) const;
 };

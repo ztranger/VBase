@@ -228,12 +228,14 @@ int runClient(int backend, GameUiState& ui, DesktopSettings& saved, Audio& audio
         glfwGetFramebufferSize(window, &fbw, &fbh);
         float aspect = fbh > 0 ? (float)fbw / (float)fbh : 1.0f;
 
-        // Рендер-путь по экрану: бой -> мир; выбор персонажа -> 3D-превью; меню -> чистый фон.
-        UiMode uiMode = GameUi::mode();
-        RenderFrame frame =
-            (uiMode == UiMode::Battle)          ? scene.render(alpha, aspect, dt)
-          : (uiMode == UiMode::CharacterSelect) ? scene.renderCharacterPreview(alpha, aspect, dt)
-                                                : scene.renderMenuBackdrop(aspect);
+        // Рендер-путь берём из UI одной таблицей (mode->RenderPath): бой -> мир; выбор
+        // персонажа -> 3D-превью; меню/лобби/лоадинг -> чистый фон. Оверлеи путь не меняют.
+        RenderFrame frame;
+        switch (GameUi::renderPath()) {
+            case RenderPath::World:            frame = scene.render(alpha, aspect, dt); break;
+            case RenderPath::CharacterPreview: frame = scene.renderCharacterPreview(alpha, aspect, dt); break;
+            case RenderPath::MenuBackdrop:     frame = scene.renderMenuBackdrop(aspect); break;
+        }
         frame.deltaTime = dt;
 
         // FPS + латенси/статус сети в одну строку HUD (пинг «вместе с FPS»).

@@ -9,24 +9,6 @@
 
 #include "game/Scene.h"
 
-namespace {
-
-void drawStubBody(UiShell::Ctx& ctx, const char* title, const char* tip) {
-    ImVec2 pos, size;
-    UiShell::menuContentRect(pos, size);  // заякорить на всю область над нав-баром
-    if (!ctx.beginPanelRect(title, pos, size)) {
-        ctx.endPanel();
-        return;
-    }
-    ImGui::TextWrapped("%s", tip);
-    ImGui::Dummy(ImVec2(0, 8));
-    ImGui::TextDisabled("Заглушка — контент появится позже.");
-    if (ctx.btn("На главную")) UiShell::setPanel(MainMenuPanel::Home);
-    ctx.endPanel();
-}
-
-}  // namespace
-
 namespace HomePanel {
 
 void draw(UiShell::Ctx& ctx) {
@@ -146,14 +128,13 @@ void draw(UiShell::Ctx& ctx) {
             int cur = ctx.scene.currentSceneIndex();
             for (int i = 0; i < n; ++i) {
                 bool isCur = (i == cur);
-                if (isCur) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.85f, 0.2f, 1.0f));
                 std::string lbl = (isCur ? "> " : "   ") + std::string(ctx.scene.sceneListName(i));
-                if (ctx.btn(lbl.c_str(), ImVec2(-1, 0)) && !isCur) {
+                // Текущая сцена — selected (подсветка скином); клик по ней — no-op.
+                if (ctx.btn(lbl.c_str(), ImVec2(-1, 0), /*selected=*/isCur) && !isCur) {
                     ctx.scene.leaveGame();  // разорвать сессию до перезагрузки мира
                     std::snprintf(ctx.state.requestScenePath, sizeof(ctx.state.requestScenePath),
                                   "%s", ctx.scene.sceneListPath(i));
                 }
-                if (isCur) ImGui::PopStyleColor();
             }
             ImGui::TextDisabled("Клик — перезагрузить мир этой сценой (до Host).");
         }
@@ -168,23 +149,3 @@ void draw(UiShell::Ctx& ctx) {
 }
 
 }  // namespace HomePanel
-
-namespace MenuStubPanels {
-
-void drawInventory(UiShell::Ctx& ctx) {
-    drawStubBody(ctx, "Инвентарь###uiInvPanel", "Инвентарь героя и расходники.");
-}
-
-void drawQuests(UiShell::Ctx& ctx) {
-    drawStubBody(ctx, "Квесты###uiQuestsPanel", "Журнал заданий и наград.");
-}
-
-void drawShop(UiShell::Ctx& ctx) {
-    drawStubBody(ctx, "Магазин###uiShopPanel", "Покупка построек и улучшений.");
-}
-
-void drawEvents(UiShell::Ctx& ctx) {
-    drawStubBody(ctx, "События###uiEventsPanel", "Временные ивенты и награды.");
-}
-
-}  // namespace MenuStubPanels

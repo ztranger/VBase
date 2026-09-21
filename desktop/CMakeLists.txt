@@ -38,6 +38,7 @@ add_executable(vbase_desktop
         ${APP}/game/FlowField.cpp
         ${APP}/game/NavDebug.cpp
         ${APP}/game/ClientSession.cpp
+        ${APP}/game/ClientWorld.cpp
         ${APP}/engine/assets/Assets.cpp
         ${APP}/engine/assets/Model.cpp
         ${APP}/game/Scene.cpp
@@ -58,6 +59,10 @@ add_executable(vbase_desktop
         ${APP}/engine/render/ui/screens/BattleScreen.cpp
         ${APP}/engine/render/ui/screens/CharacterSelectScreen.cpp
         ${APP}/engine/render/ui/panels/HomePanel.cpp
+        ${APP}/engine/render/ui/panels/InventoryPanel.cpp
+        ${APP}/engine/render/ui/panels/QuestsPanel.cpp
+        ${APP}/engine/render/ui/panels/ShopPanel.cpp
+        ${APP}/engine/render/ui/panels/EventsPanel.cpp
         ${APP}/engine/render/ui/windows/DebugPanel.cpp
         ${APP}/engine/render/ui/windows/BuildingInfo.cpp
         ${APP}/engine/assets/Font.cpp

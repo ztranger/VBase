@@ -26,28 +26,20 @@ bool g_navHeat = false;      // хитмап дистанции до цели
 bool g_navDist = false;      // числа дистанции в клетках
 
 void drawHud(UiShell::Ctx& ctx) {
-    const float m = UiShell::uiMargin();
-    ImGui::SetNextWindowPos(ImVec2(m, m), ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(0.72f);
-    if (ImGui::Begin("##battleHud", nullptr,
-                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize |
-                         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
-                         ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav)) {
+    if (ctx.beginOverlay("##battleHud", UiShell::anchorPos(UiShell::Anchor::TopLeft, ImVec2(0, 0)),
+                         ImVec2(0, 0), 0.72f,
+                         ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoNav)) {
         ImGui::Text("Ресурс: %.0f / %.0f", (double)ctx.scene.resourceCurrent(),
                     (double)ctx.scene.resourceCap());
         if (ctx.scene.netConnected()) {
             ImGui::SameLine();
             ImGui::TextDisabled("| %s", ctx.scene.netHost() ? "HOST" : "CLIENT");
         }
-        if (ctx.btn("Меню")) {
-            UiShell::pushYesNo("Меню", "Вернуться в главное меню?", [](DialogResult r) {
-                if (r == DialogResult::Yes) UiShell::setMode(UiMode::MainMenu);
-            });
-        }
+        if (ctx.btn("Пауза")) UiShell::setOverlay(UiOverlay::Pause);  // оверлей: продолжить / в меню
         ImGui::SameLine();
-        if (ctx.btn(UiShell::isDebugOpen() ? "Debug#" : "Debug")) UiShell::toggleDebug();
+        if (ctx.btn("Debug", ImVec2(0, 0), /*selected=*/UiShell::isDebugOpen())) UiShell::toggleDebug();
     }
-    ImGui::End();
+    ctx.endOverlay();
 }
 
 void drawBuild(UiShell::Ctx& ctx) {

@@ -26,15 +26,13 @@ void draw(UiShell::Ctx& ctx) {
     const int n = ctx.scene.rosterCount();
     for (int i = 0; i < n; ++i) {
         const bool isSel = (i == sel);
-        if (isSel) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.83f, 0.35f, 1.0f));
         char label[128];
         std::snprintf(label, sizeof(label), "%s %s", isSel ? "\xE2\x96\xB6" : "   ",
                       ctx.scene.rosterName(i));
-        if (ctx.btn(label, ImVec2(-1, 0))) {
+        if (ctx.btn(label, ImVec2(-1, 0), /*selected=*/isSel)) {  // подсветка выбранного — через скин
             ctx.scene.selectCharacter(i);
             ctx.state.charIndex = i;  // платформа сохранит выбор в файл (персист между запусками)
         }
-        if (isSel) ImGui::PopStyleColor();
     }
 
     ImGui::Dummy(ImVec2(0, 12));

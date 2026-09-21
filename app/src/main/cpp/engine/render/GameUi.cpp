@@ -59,6 +59,8 @@ bool gameplayActive() { return UiShell::gameplayActive(); }
 
 UiMode mode() { return UiShell::mode(); }
 
+RenderPath renderPath() { return UiShell::renderPath(); }
+
 void requestLoadingScreen() { UiShell::setMode(UiMode::Loading); }
 
 }  // namespace GameUi

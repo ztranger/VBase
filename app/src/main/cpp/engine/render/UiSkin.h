@@ -44,6 +44,9 @@ bool BeginPanel(const char* name, const Assets& skin, bool* p_open = nullptr,
 void EndPanel();
 
 // Кнопка: InvisibleButton (логика) + своя текстура (вид) + подпись шрифтом ImGui.
-bool Button(const char* label, const Assets& skin, const ImVec2& size = ImVec2(0, 0));
+// selected — подсветка «выбрано/активно» (медно-янтарная рамка + «нажатый» вид), для вкладок/
+// списков (обычный PushStyleColor скин игнорит). enabled=false — затемнена и не кликается.
+bool Button(const char* label, const Assets& skin, const ImVec2& size = ImVec2(0, 0),
+            bool selected = false, bool enabled = true);
 
 }  // namespace UiSkin

@@ -2,39 +2,37 @@
 
 #include "imgui.h"
 
+#include "engine/render/ui/panels/EventsPanel.h"
 #include "engine/render/ui/panels/HomePanel.h"
+#include "engine/render/ui/panels/InventoryPanel.h"
+#include "engine/render/ui/panels/QuestsPanel.h"
+#include "engine/render/ui/panels/ShopPanel.h"
 #include "engine/render/ui/windows/DebugPanel.h"
 
 namespace MainMenuScreen {
 namespace {
 
 void drawChrome(UiShell::Ctx& ctx) {
-    ImGuiIO& io = ImGui::GetIO();
     const float font = ImGui::GetFontSize();
     const float barH = UiShell::navBarHeight();
-    ImGui::SetNextWindowPos(ImVec2(0, io.DisplaySize.y - barH), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x, barH), ImGuiCond_Always);
+    const ImVec2 sz(ImGui::GetIO().DisplaySize.x, barH);  // нижний нав-бар на всю ширину
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(font * 0.45f, font * 0.45f));
-    ImGui::Begin("##mainMenuChrome", nullptr,
-                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
-                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse);
-
-    auto nav = [&](const char* label, MainMenuPanel id) {
-        const bool active = UiShell::panel() == id;
-        if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.72f, 0.45f, 0.14f, 1.0f));
-        if (ctx.btn(label, ImVec2(0, barH - font))) UiShell::setPanel(id);
-        if (active) ImGui::PopStyleColor();
-        ImGui::SameLine();
-    };
-
-    nav("Главная", MainMenuPanel::Home);
-    nav("Инвентарь", MainMenuPanel::Inventory);
-    nav("Квесты", MainMenuPanel::Quests);
-    nav("Магазин", MainMenuPanel::Shop);
-    nav("Ивенты", MainMenuPanel::Events);
-
-    ImGui::End();
+    if (ctx.beginOverlay("##mainMenuChrome",
+                         UiShell::anchorPos(UiShell::Anchor::BottomLeft, sz, 0.0f), sz, 0.94f,
+                         ImGuiWindowFlags_NoScrollbar)) {
+        auto nav = [&](const char* label, MainMenuPanel id) {
+            // Активная вкладка — через selected скина (обычный PushStyleColor скин игнорит).
+            if (ctx.btn(label, ImVec2(0, barH - font), /*selected=*/UiShell::panel() == id))
+                UiShell::setPanel(id);
+            ImGui::SameLine();
+        };
+        nav("Главная", MainMenuPanel::Home);
+        nav("Инвентарь", MainMenuPanel::Inventory);
+        nav("Квесты", MainMenuPanel::Quests);
+        nav("Магазин", MainMenuPanel::Shop);
+        nav("Ивенты", MainMenuPanel::Events);
+    }
+    ctx.endOverlay();
     ImGui::PopStyleVar();
 }
 
@@ -48,16 +46,16 @@ void draw(UiShell::Ctx& ctx) {
             HomePanel::draw(ctx);
             break;
         case MainMenuPanel::Inventory:
-            MenuStubPanels::drawInventory(ctx);
+            InventoryPanel::draw(ctx);
             break;
         case MainMenuPanel::Quests:
-            MenuStubPanels::drawQuests(ctx);
+            QuestsPanel::draw(ctx);
             break;
         case MainMenuPanel::Shop:
-            MenuStubPanels::drawShop(ctx);
+            ShopPanel::draw(ctx);
             break;
         case MainMenuPanel::Events:
-            MenuStubPanels::drawEvents(ctx);
+            EventsPanel::draw(ctx);
             break;
     }
 

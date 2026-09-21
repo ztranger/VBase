@@ -7,7 +7,8 @@
 
 | Уровень | Правило | Примеры |
 |---------|---------|---------|
-| **UiMode** | ровно один | `Loading`, `MainMenu`, `Battle` |
+| **UiMode** | ровно один (экран) | `Loading`, `MainMenu`, `Lobby`, `CharacterSelect`, `Battle` |
+| **UiOverlay** | 0…1 поверх режима, не меняет рендер-путь | `None`, `Pause`, `Results` |
 | **Panel (hub)** | 0…1 на экран, взаимоисключающие | `Home`, `Inventory`, `Quests`, `Shop`, `Events` |
 | **Floating** | show/hide, несколько сразу | `Debug`, `BuildingInfo` |
 | **DialogStack** | модалки поверх всего | Ok, YesNo |
@@ -15,13 +16,37 @@
 ```
 GameUi::build
   └─ UiShell::build
-       ├─ switch(mode) → LoadingScreen | MainMenuScreen | BattleScreen
+       ├─ switch(mode) → LoadingScreen | MainMenuScreen | Lobby | CharacterSelect | BattleScreen
        │     MainMenu: chrome + active panel + Debug(float)
        │     Battle:   HUD + build + BuildingInfo + Debug + joysticks
+       ├─ switch(overlay) → Pause | Results   (поверх режима; рендер-путь мира сохраняется)
        └─ DialogStack::draw (всегда сверху)
 ```
 
 Типы: `engine/render/ui/UiTypes.h`.
+
+## Навигация — единый авторитет (UiShell)
+
+Один источник правды о том, где мы. Раньше это было размазано по ~6 файлам, плюс дубль-тернар
+рендер-пути в `desktop/main.cpp` и `platform/main.cpp` — теперь всё из shell:
+
+```cpp
+UiShell::setMode(UiMode::Battle);   // сменить экран: запомнит prevMode, снимет оверлей,
+                                    //   а вход в MainMenu вернёт вкладку хаба на Home
+UiShell::mode();  UiShell::prevMode();
+UiShell::back();                    // назад в предыдущий экран (снимает оверлей); дефолт -> MainMenu
+UiShell::setOverlay(UiOverlay::Pause);  UiShell::overlay();   // оверлей поверх боя
+UiShell::renderPath();              // RenderPath: World | CharacterPreview | MenuBackdrop
+UiShell::gameplayActive();          // ввод в мир: Battle && overlay==None && !hasModal()
+```
+
+**Рендер-путь — одна таблица `mode → RenderPath`** (`UiShell::renderPath()`, форвардится через
+`GameUi::renderPath()`). Платформа (`desktop/main.cpp`, `platform/main.cpp`) выбирает 3D-путь
+`switch`-ем по нему — **не** повторяет тернар по `mode()`. Оверлеи `Pause`/`Results` путь не
+меняют (рисуются поверх `Battle`, мир под ними продолжает рендериться).
+
+**Оверлей vs Mode:** новый экран (лобби, выбор) — это `UiMode`. Пауза/итог матча/модальные
+надстройки поверх боя — это `UiOverlay` (мир под ними виден). Не заводи `UiMode` для паузы.
 
 ## API (кратко)
 
@@ -67,16 +92,45 @@ p_open=nullptr, extraFlags=0)` — он ставит `SetNextWindowPos/Size(...,
 
 Не создавай новый `UiMode` для магазина/инвентаря — это hub panel.
 
+## Как добавить оверлей (пауза/итог/…)
+
+1. Значение в `enum class UiOverlay` (`UiTypes.h`).
+2. Рисующая функция + ветка в `switch(overlay)` внутри `UiShell::build` (сейчас там же лежат
+   `drawPauseOverlay`/`drawResultsOverlay` — заглушки, наполнение в большом проходе по окнам).
+3. Открывать через `UiShell::setOverlay(...)`, закрывать `setOverlay(UiOverlay::None)`.
+
+Оверлей не меняет `renderPath()` — мир под ним продолжает рендериться. Для полноэкранной смены
+контекста (не поверх боя) заводи `UiMode`, а не оверлей.
+
 ## Как добавить окно в бою
 
 1. `engine/render/ui/windows/YourWindow.cpp`.
 2. Вызов из `BattleScreen::draw`.
 3. CMake.
 
-## Как показать диалог
+## Как показать диалог / тост
 
-Только через `UiShell::pushOk` / `pushYesNo`. Не разводить голые `BeginPopupModal`
-вне `Dialogs.cpp` — иначе сломается стек и затемнение.
+Модалки — только через shell, не разводить голые `BeginPopupModal` вне `Dialogs.cpp`
+(иначе сломается стек и затемнение):
+
+```cpp
+UiShell::pushOk("Сеть", "Ошибка", cb);                 // одна кнопка OK
+UiShell::pushYesNo("Выход", "Покинуть бой?", cb);      // Да / Нет
+UiShell::pushDialog("Режим", "Выбери режим:",          // произвольные кнопки
+    {{"Кооп", DialogResult::Yes}, {"PvP", DialogResult::No}, {"Отмена", DialogResult::Cancel}}, cb);
+```
+
+`pushOk`/`pushYesNo` — пресеты поверх `pushDialog` (набор `UiDialogs::Button{label, result}`).
+Крестик окна = `DialogResult::Cancel`. Диалоги — стек: новый рисуется поверх, в т.ч. поверх
+оверлея (пауза).
+
+**Тосты** — недолгие НЕблокирующие плашки (успех/ошибка/инфо), сами гаснут, `hasModal()` их
+не считает, ввод в мир не гейтят:
+
+```cpp
+UiShell::pushToast("Здание построено", UiDialogs::Toast::Kind::Success);
+UiShell::pushToast("Недостаточно ресурса", UiDialogs::Toast::Kind::Danger, 2.0f);
+```
 
 Callback не должен захватывать стековые ссылки (`Ctx&`) — только указатели на
 долгоживущие объекты (`Scene*`) или копируемые значения.
@@ -85,11 +139,16 @@ Callback не должен захватывать стековые ссылки 
 
 ```
 engine/render/ui/
-  UiTypes.h  UiShell.*  Dialogs.*
-  screens/   LoadingScreen.*  MainMenuScreen.*  BattleScreen.*
-  panels/    HomePanel.*   (+ stubs Inventory/Quests/Shop/Events)
+  UiTypes.h  UiShell.*  UiPalette.h  Dialogs.*
+  screens/   LoadingScreen.*  MainMenuScreen.*  CharacterSelectScreen.*  BattleScreen.*
+  panels/    HomePanel.*  InventoryPanel.*  QuestsPanel.*  ShopPanel.*  EventsPanel.*  StubPanel.h
+             (каждый раздел хаба = свой файл; StubPanel.h — общее тело заглушки)
   windows/   DebugPanel.*  BuildingInfo.*
 ```
+
+`Lobby` (UiMode) и оверлеи `Pause`/`Results` пока — **инлайн-заглушки** в `UiShell.cpp`
+(`drawLobbyStub`/`drawPauseOverlay`/`drawResultsOverlay`); при наполнении переедут в
+`screens/LobbyScreen.*` и, при необходимости, `overlays/`.
 
 ## Связанные доки
 

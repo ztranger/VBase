@@ -614,7 +614,7 @@ Parser должен различать:
 
 ### P2-18. Декомпозиция `Scene`
 
-- [~] **Шаги 1 и 3 из 5 сделаны** (данные + сессия сети), шаги 2/4/5 — с плейтестом.
+- [~] **Шаги 1–4 из 5 сделаны** (данные + презентация + сессия + мир/предсказание), остался шаг 5.
   - [x] **Шаг 1 — структуры данных без изменения ownership.** Все plain-структуры сцены
     (`TimedState`/`RemoteEntity`/`PendingInput`/`Transform`/`GameObject`/`PlayerModel`/`EntityVisual`/
     `DyingMob`/`SceneEntry`/`CombatMarker`/`DamageNumber`/`ImpactSpark`/`BuildPoof`) вынесены из
@@ -622,7 +622,17 @@ Parser должен различать:
     `Scene::CombatMarker` и т.п. сохранены `using`-алиасами (GameUi не тронут). Это доказуемо
     поведение-нейтрально (релокация определений типов). Проверено: десктоп собран + грузит полную
     сцену, `Scene.cpp`/`BattleScreen.cpp` aarch64 чисто.
-  - [ ] **Шаг 2 — `WorldPresentation`** (RenderFrame + VFX + audio events).
+  - [x] **Шаг 2 — `WorldPresentation`** (VFX + audio events + вью-матрицы). Структура
+    `game/WorldPresentation.h` владеет боевой косметикой (`markers`/`damageNumbers`/`sparks`/`poofs`/
+    `maxHpSeen`/`flash`/`localFlash`/`shakeTime`/`shakeAmp`/`sparkSeed`), звуковой очередью кадра
+    (`sounds` + метод `emitSound` с антиспамом), «трупами» мобов (`dyingMobs`) и матрицами
+    последнего боевого кадра (`lastView`/`lastProj`). Вынесена из `Scene` (~50 обращений в
+    `applySnapshot`/`render`/`confirmBuild`/`leaveGame` переведены на `presentation_`); геттеры
+    `combatMarkers`/`sounds`/`viewMatrix`/… делегируют. Логика 1:1 (перепроводка ссылок, ловится
+    компилятором). RenderFrame-СБОРКА пока в `Scene::render` (нужен ростер/мир — вычистится после
+    `SceneResources`/шага 5). **Верифицировано:** десктоп собран; сервер + десктоп `--join` 10 c с
+    активным боем (враги спавнятся → путь производства damage/искры/звук в applySnapshot) — без
+    краша; `Scene.cpp`/`BattleScreen.cpp` aarch64 чисто. Визуал баров/чисел/вспышек — на плейтест.
   - [x] **Шаг 3 — `ClientSession`** (join/host/reconnect + транспорт). Класс `game/ClientSession.{h,cpp}`
     владеет `client_`/`server_` + состоянием реконнекта (`serverIp_`/`serverPort_`/`inputSeq_`/…),
     вынесенными из `Scene`. API: `host(desc)`/`join(ip,port)`/`leave()`/`pump(dt)`/`reconnectTick(dt)`/
@@ -631,8 +641,20 @@ Parser должен различать:
     состояние (remoteEntities/pending) чистит сам. Порядок пампинга и реконнекта сохранён 1:1.
     **Верифицировано реальной сетью:** сервер + десктоп `--join 127.0.0.1` → клиент `подключён`,
     сервер `клиент подключён (hero id=…)`; десктоп собран; `ClientSession.cpp`/`Scene.cpp` aarch64 чисто.
-  - [ ] **Шаг 4 — `ClientWorld`** (snapshots + prediction + локальная симуляция).
-  - [ ] **Шаг 5 — сократить публичный API `Scene`** (тонкий фасад-координатор).
+  - [x] **Шаг 4 — `ClientWorld`** (snapshots + prediction + локальная симуляция). Класс
+    `game/ClientWorld.{h,cpp}` владеет физическим «движком»: `CollisionWorld` (collide-and-slide),
+    буфер неподтверждённых вводов (`pending_` + окно P2-03), футпринт-коллайдеры зданий,
+    `simClock_`, копию `Grid`. Методы: `configure(desc, player)` (мир коллизий + капсула героя),
+    `collision()`, `recordInput`, `applySnapshot(player, remotes, session, pres, mobs, localTeam/Hp/
+    Respawn)` (реконсиляция героя + обновление/интерп/удаление чужих + производство косметики в
+    `pres`), `syncBuildingColliders(remotes)`, `killerYaw`. Логика перенесена 1:1. **Граница выбрана
+    так, чтобы НЕ трогать render/пикинг/камеру:** сущности (`player_`, `remoteEntities_`) и ставки
+    героя остаются в `Scene` и передаются в методы по ссылке — рендер/пикинг читают их из `Scene`
+    напрямую, как раньше. Общие боевые константы/предикаты вынесены в `game/CombatFx.h`.
+    **Верифицировано:** десктоп собран; сервер + десктоп `--join` 10 c с активным боем (реконсиляция
+    + чужие + косметика в `applySnapshot`) — без краша; `ClientWorld.cpp`/`Scene.cpp` aarch64 чисто.
+    Корректность предсказания движения (бег у стены без rubber-band) — на плейтест.
+  - [ ] **Шаг 5 — сократить публичный API `Scene`** (тонкий фасад-координатор; косметическая уборка).
   - Причина поэтапности: шаги 2–5 меняют ownership и затрагивают рендер/предсказание/VFX — их
     регрессии геймплейные/визуальные, НЕ ловятся headless-`--selftest` и не видны в smoke без
     скриншотов. Каждый шаг — отдельно, с плейтестом на десктопе И устройстве (док прямо велит так).

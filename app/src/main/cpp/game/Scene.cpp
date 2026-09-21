@@ -16,6 +16,7 @@
 #include "engine/core/Renderer.h"
 #include "game/SceneLoader.h"
 #include "game/BuildRules.h"  // blocksPath/footprintBox — общие с сервером (GameWorld)
+#include "game/CombatFx.h"    // k*/isCombatType/combatHeadHeight — боевая косметика (общие с ClientWorld)
 
 namespace {
 // Запечь статичную OBJ-модель под generic-рендер (он только translation): центрируем по XZ,
@@ -74,8 +75,6 @@ void Scene::loadSceneManifest(AssetSource& assets, const char* path) {
 }
 
 void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath) {
-    collision_ = std::make_unique<CollisionWorld>();  // свежий мир коллизий на каждую сборку
-
     currentScenePath_ = scenePath ? scenePath : "";
     loadSceneManifest(assets, "config/scenes.cfg");  // список сцен для меню (не критично, если нет)
 
@@ -131,21 +130,9 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
     camera_.nearZ = sceneDesc_.camera.nearZ;
     camera_.farZ = sceneDesc_.camera.farZ;
 
-    // --- Статичные коллайдеры физики (санитизированные полуразмеры) ---
-    for (const ColliderSpec& cs : sceneDesc_.colliders) {
-        collision_->addBox(cs.center, cs.half);
-    }
-    collision_->finalize();  // оптимизация broad-phase после всей статики
-    LOGI("Физика: %d статичных коллайдеров", (int)sceneDesc_.colliders.size());
-
-    // --- Кинематический контроллер игрока (санитизированные позиция/капсула) ---
-    if (sceneDesc_.player.present) {
-        player_.position = sceneDesc_.player.pos;
-        player_.collider = collision_->addCharacter(sceneDesc_.player.pos,
-                                                    sceneDesc_.player.colliderRadius,
-                                                    sceneDesc_.player.colliderCylHalf);
-        player_.snapshot();  // prev = curr, чтобы первый кадр не «прыгнул»
-    }
+    // --- Физика + контроллер героя: мир коллизий (боксы сцены) + капсула игрока — в ClientWorld
+    // (P2-18 шаг 4). Санитизированное описание уже в sceneDesc_.
+    clientWorld_.configure(sceneDesc_, player_);
 
     // --- GPU-ресурсы (меши/текстуры/материалы/объекты/визуалы/ростер) ---
     createGpuResources(renderer, assets);
@@ -573,20 +560,14 @@ void Scene::fixedUpdate(float dt) {
 
     tickDt_ = dt;
 
-    // Отправляем ввод серверу и запоминаем его как неподтверждённый (для реплея).
+    // Отправляем ввод серверу и запоминаем его как неподтверждённый (для реплея реконсиляции).
     if (session_.connected()) {
-        session_.sendInput(cmd);  // проставляет cmd.seq
-        pending_.push_back({cmd, dt});
-        // P2-03: ограничиваем окно неподтверждённых вводов. При долгом отсутствии ack (обрыв/лаг)
-        // буфер рос бы без предела, а реплей реконсиляции — всё дороже (O(N) simulate за снапшот).
-        // Сбрасываем самые старые: следующий авторитетный снапшот всё равно поправит позицию.
-        constexpr size_t kMaxPending = 256;  // ~8.5 с при 30 тиках/с
-        if (pending_.size() > kMaxPending)
-            pending_.erase(pending_.begin(), pending_.begin() + (pending_.size() - kMaxPending));
+        session_.sendInput(cmd);       // проставляет cmd.seq
+        clientWorld_.recordInput(cmd, dt);  // окно неподтверждённых ограничено (P2-03)
     }
 
     player_.snapshot();                        // зафиксировать прошлое для интерполяции
-    player_.simulate(dt, cmd, collision_.get());  // локальное предсказание (с коллизиями)
+    player_.simulate(dt, cmd, clientWorld_.collision());  // локальное предсказание (с коллизиями)
     player_.animTime += dt;  // фаза анимации — ровно 1 раз за тик (не в simulate: реплей
                              // реконсиляции зовёт simulate многократно и ускорял бы её)
     player_.locoPhase += dt * locoRate(chars_, localCharIndex_, player_.animParam);  // фаза локомоции
@@ -596,9 +577,11 @@ void Scene::fixedUpdate(float dt) {
     }
 
     // Пампинг сети (host -> server poll/tick; всегда client poll) + приём снапшотов ->
-    // реконсиляция своего аватара + буфер чужих.
+    // реконсиляция своего аватара + буфер чужих (ClientWorld). navDebug держит Scene.
     if (session_.pump(dt)) {
-        applySnapshot();
+        clientWorld_.applySnapshot(player_, remoteEntities_, session_, presentation_, mobs_,
+                                   localTeam_, localHp_, localRespawn_);
+        if (navDebug_) rebuildNavDebug();
     }
 
     // Реакция на обрыв. Чужие сущности застыли бы на последнем снапшоте — чистим их
@@ -606,37 +589,16 @@ void Scene::fixedUpdate(float dt) {
     // пробует переподключиться (для join; host к 127.0.0.1 не трогает).
     if (session_.status() == NetStatus::Lost) {
         if (!remoteEntities_.empty()) remoteEntities_.clear();
-        if (!dyingMobs_.empty()) dyingMobs_.clear();
-        if (!pending_.empty()) pending_.clear();
+        if (!presentation_.dyingMobs.empty()) presentation_.dyingMobs.clear();
+        clientWorld_.clearPending();
         session_.reconnectTick(dt);
     }
 
-    simClock_ += dt;
+    clientWorld_.advanceClock(dt);
 }
 
-// --- Читаемость боя + джус (клиентская косметика) ---
-static constexpr float kFlashDur = 0.12f;     // длительность hit-flash / scale-punch, сек
-static constexpr float kDmgLife = 0.9f;       // время жизни всплывающего числа урона, сек
-static constexpr float kDmgMinAmount = 0.5f;  // порог урона, ниже — число/искры не показываем
-static constexpr float kSparkLife = 0.28f;    // время жизни искр в точке хита, сек
-static constexpr float kPunch = 0.12f;        // амплитуда scale-punch модели при уроне (доля)
-static constexpr float kShakeDur = 0.35f;     // длительность тряски камеры, сек
-static constexpr float kPoofLife = 0.5f;      // время жизни «пуфа» постройки, сек
-
-// Есть ли у типа боевая полоска HP (враги/герои/башни/ядро). Здания-экономика (hp=0) — нет.
-static bool isCombatType(EntityType t) {
-    return t == EntityType::Enemy || t == EntityType::Hero ||
-           t == EntityType::Tower || t == EntityType::Core;
-}
-// Высота точки «над головой» для бара/числа (грубо под визуал типа).
-static float combatHeadHeight(EntityType t) {
-    switch (t) {
-        case EntityType::Tower: return 3.0f;
-        case EntityType::Core:  return 2.6f;
-        case EntityType::Hero:  return 2.4f;
-        default:                return 2.1f;  // Enemy и пр.
-    }
-}
+// --- Читаемость боя + джус (клиентская косметика). Константы/предикаты (kFlashDur/…/isCombatType/
+// combatHeadHeight) — в game/CombatFx.h (общие с ClientWorld::applySnapshot). Здесь — рендер-хелперы. ---
 // Подмешать «горячий» цвет вспышки к базовому по t∈[0..1] (overbright — uColor>1 высветляет).
 static Vec3 flashMix(Vec3 base, float t) {
     if (t < 0.0f) t = 0.0f;
@@ -653,218 +615,7 @@ static void applyHitFx(SkinnedItem& it, float t) {
     it.model = it.model * Mat4::scale({s, s, s});
 }
 
-void Scene::emitSound(SoundId id) {
-    // Антиспам: в бою за один кадр может прилететь много одновременных хитов — не даём
-    // одному звуку задублироваться больше kMax раз (иначе каша/перегруз микса).
-    constexpr int kMax = 4;
-    int n = 0;
-    for (const SoundEvent& e : sounds_)
-        if (e.id == id) ++n;
-    if (n < kMax) sounds_.push_back({id});
-}
 
-bool Scene::killerYaw(const Vec3& mobPos, uint32_t mobId, float& outYaw) const {
-    // Кандидаты в убийцы моба: локальный герой + чужие герои/башни (снаряд летит от стрелка,
-    // поэтому «откуда прилетело» ≈ направление на ближайшего из них). Мобы team 0 враждебны всем,
-    // фильтр по команде не нужен. Берём самую свежую позицию кандидата (из буфера снапшотов).
-    float bestD2 = 1e18f;
-    Vec3 bestSrc{};
-    bool have = false;
-    auto consider = [&](const Vec3& src) {
-        float dx = src.x - mobPos.x, dz = src.z - mobPos.z;
-        float d2 = dx * dx + dz * dz;
-        if (d2 < bestD2) { bestD2 = d2; bestSrc = src; have = true; }
-    };
-    if (session_.connected() && !heroDead()) consider(player_.position);  // локальный герой
-    for (const RemoteEntity& r : remoteEntities_) {
-        if (r.id == mobId) continue;
-        EntityType t = (EntityType)r.type;
-        if (t != EntityType::Hero && t != EntityType::Tower) continue;
-        consider(r.buffer.empty() ? r.ch.position : r.buffer.back().pos);
-    }
-    if (!have) return false;
-    float tx = bestSrc.x - mobPos.x, tz = bestSrc.z - mobPos.z;
-    if (tx * tx + tz * tz < 1e-6f) return false;  // источник на мобе — разворачивать некуда
-    outYaw = std::atan2(tx, tz);  // конвенция кода: yaw = atan2(dir.x, dir.z) — лицом к источнику
-    return true;
-}
-
-void Scene::applySnapshot() {
-    uint32_t myId = session_.myId();
-    if (myId == 0) return;  // ждём Welcome, иначе примем себя за чужого
-
-    const std::vector<EntityState>& states = session_.states();
-    const uint32_t ack = session_.ackSeq();
-
-    for (const EntityState& s : states) {
-        if (s.id == myId) {
-            // Reconciliation: ставим авторитетное состояние сервера и ПЕРЕИГРЫВАЕМ
-            // все вводы, которые сервер ещё не обработал (seq > ack).
-            localTeam_ = s.team;  // своя команда — для ресурса/стройки per-team
-            const float prevLocalHp = localHp_;
-            localHp_ = s.hp;      // ставки: hp своего героя (<=0 = повержен)
-            localRespawn_ = s.aux;  // отсчёт респауна (сервер шлёт в aux при поверженном)
-            // Читаемость: свой герой получил урон — вспышка + красное число (респаун = рост hp, не в счёт).
-            if (prevLocalHp > 0.0f && s.hp < prevLocalHp - kDmgMinAmount) {
-                const float dmg = prevLocalHp - s.hp;
-                Vec3 hit{s.x, s.y + combatHeadHeight(EntityType::Hero), s.z};
-                damageNumbers_.push_back({hit, dmg, 0.0f, {1.0f, 0.45f, 0.40f}});
-                sparks_.push_back({hit, 0.0f, kSparkLife, sparkSeed_ += 0x9e3779b9u});
-                localFlash_ = kFlashDur;
-                emitSound(SoundId::Hit);
-                // Джус: свой герой под ударом — тряска (по урону, скромнее, чем у ядра).
-                float amp = dmg * 0.006f;
-                if (amp > 0.20f) amp = 0.20f;
-                if (amp > 0.03f) { shakeTime_ = kShakeDur; if (amp > shakeAmp_) shakeAmp_ = amp; }
-            }
-            player_.position = {s.x, s.y, s.z};
-            player_.facingYaw = s.yaw;
-            player_.speed01 = s.speed01;
-            player_.animParam = s.animParam;
-            player_.velocityY = s.velY;  // вертикаль тоже сбрасываем на серверную —
-            // иначе реплей считает прыжок от чужой скорости и он дёргается.
-            player_.attackTime = s.attackT;  // авторитетный остаток каста (реплей переиграет триггер)
-            // Синхронизируем контроллер с авторитетной позицией перед реплеем,
-            // иначе collide-and-slide стартует от устаревшей внутренней позиции.
-            if (collision_ && player_.collider != 0) {
-                collision_->setCharacterPosition(player_.collider, player_.position);
-            }
-
-            size_t w = 0;  // выкидываем подтверждённые (seq <= ack)
-            for (size_t i = 0; i < pending_.size(); ++i) {
-                if (pending_[i].cmd.seq > ack) pending_[w++] = pending_[i];
-            }
-            pending_.resize(w);
-            for (const PendingInput& p : pending_) {
-                player_.simulate(p.dt, p.cmd, collision_.get());  // реплей поверх сервера
-            }
-            continue;
-        }
-
-        // Чужая сущность (герой/генератор/хранилище/…): в буфер интерполяции + тип.
-        RemoteEntity* r = nullptr;
-        for (auto& re : remoteEntities_) {
-            if (re.id == s.id) { r = &re; break; }
-        }
-        const float prevHp = (r != nullptr) ? r->hp : 0.0f;  // до перезаписи — для дифа урона
-        const bool created = (r == nullptr);                  // новая сущность в этом снапшоте
-        if (r == nullptr) {
-            RemoteEntity re;
-            re.id = s.id;
-            re.ch.position = {s.x, s.y, s.z};
-            re.ch.facingYaw = s.yaw;
-            remoteEntities_.push_back(re);
-            r = &remoteEntities_.back();
-        }
-        r->type = s.type;
-        r->team = s.team;
-        r->charType = s.charType;  // какой моделью рисовать чужого героя (индекс ростера)
-        r->aux = s.aux;  // ресурс в хранилище и т.п. (последнее значение)
-        r->hp = s.hp;    // здоровье (ядро/враг)
-
-        // Звук выстрела: снаряд появился в снапшоте (маг/башня открыли огонь).
-        const EntityType cet = (EntityType)s.type;
-        if (created && cet == EntityType::Projectile) emitSound(SoundId::Shoot);
-
-        // Читаемость боя: наблюдаемый максимум hp (для доли бара) + число урона/вспышка по дифу.
-        if (isCombatType(cet) && s.hp > 0.0f) {
-            float& mx = maxHpSeen_[s.id];
-            if (s.hp > mx) mx = s.hp;  // спавн на полном → первое значение = максимум
-        }
-        if (isCombatType(cet) && prevHp > 0.0f && s.hp < prevHp - kDmgMinAmount) {
-            const float dmg = prevHp - s.hp;
-            const bool friendly = (cet != EntityType::Enemy) && (s.team == localTeam_);
-            Vec3 dcol = friendly ? Vec3{1.0f, 0.55f, 0.45f}    // урон союзнику/своему ядру — красноватый
-                                 : Vec3{1.0f, 0.92f, 0.55f};   // урон врагу — жёлтый (я нанёс)
-            Vec3 hit{s.x, s.y + combatHeadHeight(cet), s.z};
-            damageNumbers_.push_back({hit, dmg, 0.0f, dcol});
-            sparks_.push_back({hit, 0.0f, kSparkLife, sparkSeed_ += 0x9e3779b9u});  // искры в точке хита
-            flash_[s.id] = kFlashDur;                                               // вспышка + scale-punch
-            emitSound(cet == EntityType::Core ? SoundId::CoreHit : SoundId::Hit);
-            // Джус: удар по ядру — тряска камеры (амплитуда по урону).
-            if (cet == EntityType::Core) {
-                float amp = dmg * 0.012f;
-                if (amp > 0.45f) amp = 0.45f;
-                if (amp > 0.05f) { shakeTime_ = kShakeDur; if (amp > shakeAmp_) shakeAmp_ = amp; }
-            }
-        }
-        r->buffer.push_back({simClock_, {s.x, s.y, s.z}, s.yaw, s.animParam, s.attackT});
-        // Ограничиваем историю (~1 сек), чтобы буфер не рос.
-        while (r->buffer.size() > 2 && r->buffer[1].t < simClock_ - 1.0) {
-            r->buffer.erase(r->buffer.begin());
-        }
-    }
-
-    // Убрать исчезнувшие сущности (нет в текущем снапшоте). Моб, пропавший в фазе боя, —
-    // это убитый враг: оставляем локальный «труп» с анимацией смерти на его месте.
-    const bool playing = (session_.gamePhase() == (uint8_t)GamePhase::Playing);
-    for (size_t i = 0; i < remoteEntities_.size();) {
-        bool found = false;
-        for (const EntityState& s : states) {
-            if (s.id == remoteEntities_[i].id) { found = true; break; }
-        }
-        if (!found) {
-            const RemoteEntity& re = remoteEntities_[i];
-            if (playing && (EntityType)re.type == EntityType::Enemy) emitSound(SoundId::EnemyDeath);
-            if (playing && (EntityType)re.type == EntityType::Enemy && !mobs_.empty()) {
-                int mi = (int)((uint32_t)re.charType % (uint32_t)mobs_.size());
-                if (mobs_[mi].deathClip >= 0 && mobs_[mi].deathClipDur > 0.0f) {
-                    Vec3 p = re.buffer.empty() ? re.ch.position : re.buffer.back().pos;
-                    float yaw = re.buffer.empty() ? re.ch.facingYaw : re.buffer.back().yaw;
-                    float ky;  // мгновенный доворот лицом к убийце (бросок death-клипа — от него)
-                    if (killerYaw(p, re.id, ky)) yaw = ky;
-                    dyingMobs_.push_back({mi, p, yaw, 0.0f, mobs_[mi].deathClipDur});
-                }
-            }
-            maxHpSeen_.erase(re.id);  // чистим косметику боя вместе с сущностью
-            flash_.erase(re.id);
-            remoteEntities_.erase(remoteEntities_.begin() + (long)i);
-        } else {
-            ++i;
-        }
-    }
-
-    // Звук исхода матча по фронту смены фазы (победа/поражение своей команды).
-    uint8_t phase = session_.gamePhase();
-    if (phase != prevPhase_) {
-        if (phase == (uint8_t)GamePhase::Won) emitSound(SoundId::Victory);
-        else if (phase == (uint8_t)GamePhase::Lost) emitSound(SoundId::Defeat);
-        prevPhase_ = phase;
-    }
-
-    // Синхронизируем футпринт-коллайдеры зданий под текущий список сущностей (для предсказания героя).
-    syncBuildingColliders();
-
-    // Отладочный снимок навигации (только при включённом оверлее; пересобирается лишь при
-    // изменении набора зданий/ядер — см. rebuildNavDebug).
-    if (navDebug_) rebuildNavDebug();
-}
-
-void Scene::syncBuildingColliders() {
-    if (!collision_) return;
-    // Здания статичны: бокс ставим один раз по позиции появления, геометрия ТА ЖЕ, что у сервера
-    // (общий footprintBox из game/BuildRules.h). Предикат blocksPath — тоже общий с сервером.
-    for (const RemoteEntity& r : remoteEntities_) {
-        if (!blocksPath((EntityType)r.type)) continue;
-        if (buildingColliders_.count(r.id) != 0) continue;
-        Vec3 c, hf;
-        footprintBox(r.ch.position, grid_.cell, c, hf);
-        uint32_t box = collision_->addBox(c, hf);
-        if (box != 0) buildingColliders_[r.id] = box;
-    }
-    // Убрать боксы зданий, которых больше нет (разрушены / матч-рестарт / выход из сессии).
-    for (auto it = buildingColliders_.begin(); it != buildingColliders_.end();) {
-        bool alive = false;
-        for (const RemoteEntity& r : remoteEntities_)
-            if (r.id == it->first && blocksPath((EntityType)r.type)) { alive = true; break; }
-        if (alive) {
-            ++it;
-        } else {
-            collision_->removeBox(it->second);
-            it = buildingColliders_.erase(it);
-        }
-    }
-}
 
 void Scene::setNavDebugEnabled(bool e) {
     navDebug_ = e;
@@ -928,9 +679,9 @@ void Scene::leaveGame() {
     session_.leave();  // транспорт: disconnect + stop host-сервера + выкл. реконнект
     // Мировое состояние (сессия его не знает) чистит Scene.
     remoteEntities_.clear();
-    syncBuildingColliders();  // снять все футпринт-боксы зданий (remoteEntities_ уже пуст)
-    dyingMobs_.clear();
-    pending_.clear();
+    clientWorld_.syncBuildingColliders(remoteEntities_);  // снять все футпринт-боксы (список пуст)
+    clientWorld_.clearPending();
+    presentation_.dyingMobs.clear();
     localTeam_ = 0;
     localHp_ = 1.0f;      // вне сессии герой «жив» (иначе своя лиса не рисовалась бы)
     localRespawn_ = 0.0f;
@@ -984,42 +735,42 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
     frame.fogDensity = fogDensity_;
 
     // Джус: тряска камеры на крупный урон — затухающий сдвиг в экранной плоскости (нудж по
-    // translation view-матрицы). Применяем ДО сохранения lastView_, чтобы HUD-оверлей (бары/
+    // translation view-матрицы). Применяем ДО сохранения presentation_.lastView, чтобы HUD-оверлей (бары/
     // числа/искры) трясся ВМЕСТЕ с миром, а не разъезжался с ним.
-    if (shakeTime_ > 0.0f) {
-        shakeTime_ = (shakeTime_ > renderDt) ? shakeTime_ - renderDt : 0.0f;
-        float env = shakeTime_ / kShakeDur;          // 1 -> 0
-        float amp = shakeAmp_ * env * env;           // квадратичный спад — резче гаснет
-        float ph = kShakeDur - shakeTime_;           // растущая фаза
+    if (presentation_.shakeTime > 0.0f) {
+        presentation_.shakeTime = (presentation_.shakeTime > renderDt) ? presentation_.shakeTime - renderDt : 0.0f;
+        float env = presentation_.shakeTime / kShakeDur;          // 1 -> 0
+        float amp = presentation_.shakeAmp * env * env;           // квадратичный спад — резче гаснет
+        float ph = kShakeDur - presentation_.shakeTime;           // растущая фаза
         frame.view.m[12] += amp * std::sin(ph * 78.0f);        // гориз. дрожь
         frame.view.m[13] += amp * std::sin(ph * 61.0f + 1.7f); // верт. дрожь (иная частота)
-        if (shakeTime_ <= 0.0f) shakeAmp_ = 0.0f;
+        if (presentation_.shakeTime <= 0.0f) presentation_.shakeAmp = 0.0f;
     }
 
     // Читаемость боя: матрицы кадра для проекции маркеров (GameUi рисует бары/числа/искры),
     // сброс списка маркеров (пересобираем ниже) и продвижение косметических таймеров.
-    lastView_ = frame.view;
-    lastProj_ = frame.proj;
-    markers_.clear();
-    if (localFlash_ > 0.0f) localFlash_ = (localFlash_ > renderDt) ? localFlash_ - renderDt : 0.0f;
-    for (auto it = flash_.begin(); it != flash_.end();) {
+    presentation_.lastView = frame.view;
+    presentation_.lastProj = frame.proj;
+    presentation_.markers.clear();
+    if (presentation_.localFlash > 0.0f) presentation_.localFlash = (presentation_.localFlash > renderDt) ? presentation_.localFlash - renderDt : 0.0f;
+    for (auto it = presentation_.flash.begin(); it != presentation_.flash.end();) {
         it->second -= renderDt;
-        if (it->second <= 0.0f) it = flash_.erase(it);
+        if (it->second <= 0.0f) it = presentation_.flash.erase(it);
         else ++it;
     }
-    for (size_t i = 0; i < damageNumbers_.size();) {
-        damageNumbers_[i].age += renderDt;
-        if (damageNumbers_[i].age >= kDmgLife) damageNumbers_.erase(damageNumbers_.begin() + (long)i);
+    for (size_t i = 0; i < presentation_.damageNumbers.size();) {
+        presentation_.damageNumbers[i].age += renderDt;
+        if (presentation_.damageNumbers[i].age >= kDmgLife) presentation_.damageNumbers.erase(presentation_.damageNumbers.begin() + (long)i);
         else ++i;
     }
-    for (size_t i = 0; i < sparks_.size();) {
-        sparks_[i].age += renderDt;
-        if (sparks_[i].age >= sparks_[i].maxAge) sparks_.erase(sparks_.begin() + (long)i);
+    for (size_t i = 0; i < presentation_.sparks.size();) {
+        presentation_.sparks[i].age += renderDt;
+        if (presentation_.sparks[i].age >= presentation_.sparks[i].maxAge) presentation_.sparks.erase(presentation_.sparks.begin() + (long)i);
         else ++i;
     }
-    for (size_t i = 0; i < poofs_.size();) {
-        poofs_[i].age += renderDt;
-        if (poofs_[i].age >= kPoofLife) poofs_.erase(poofs_.begin() + (long)i);
+    for (size_t i = 0; i < presentation_.poofs.size();) {
+        presentation_.poofs[i].age += renderDt;
+        if (presentation_.poofs[i].age >= kPoofLife) presentation_.poofs.erase(presentation_.poofs.begin() + (long)i);
         else ++i;
     }
 
@@ -1037,14 +788,14 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
         float lp = player_.prevLocoPhase + (player_.locoPhase - player_.prevLocoPhase) * alpha;
         float atk = player_.prevAttackTime + (player_.attackTime - player_.prevAttackTime) * alpha;
         SkinnedItem hi = makeSkinnedItem(chars_, localCharIndex_, p, yaw, ap, at, atk, -1, 0.0f, lp);
-        if (localFlash_ > 0.0f) applyHitFx(hi, localFlash_ / kFlashDur);  // вспышка + punch при уроне
+        if (presentation_.localFlash > 0.0f) applyHitFx(hi, presentation_.localFlash / kFlashDur);  // вспышка + punch при уроне
         frame.skinned.push_back(hi);
     }
 
     // Удалённые игроки: рендерим «прошлое» на kInterpDelay назад, интерполируя
     // между двумя снапшотами из буфера. Это и есть snapshot interpolation.
     const double kInterpDelay = 0.1;  // сек буфера — гасит джиттер/потери
-    double renderTime = simClock_ + (double)(alpha * tickDt_) - kInterpDelay;
+    double renderTime = clientWorld_.simClock() + (double)(alpha * tickDt_) - kInterpDelay;
     for (RemoteEntity& r : remoteEntities_) {
         const std::vector<TimedState>& buf = r.buffer;
         if (!buf.empty()) {
@@ -1083,8 +834,8 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
                                 r.ch.animTime, r.ch.attackTime, -1, 0.0f, r.ch.locoPhase);
             it.color = (r.team == localTeam_) ? Vec3{0.55f, 0.75f, 1.0f}   // союзник
                                               : Vec3{1.0f, 0.45f, 0.45f};  // враг
-            auto fh = flash_.find(r.id);  // вспышка + punch при уроне поверх командного оттенка
-            if (fh != flash_.end()) applyHitFx(it, fh->second / kFlashDur);
+            auto fh = presentation_.flash.find(r.id);  // вспышка + punch при уроне поверх командного оттенка
+            if (fh != presentation_.flash.end()) applyHitFx(it, fh->second / kFlashDur);
             frame.skinned.push_back(it);
         } else if (et == EntityType::Enemy && !mobs_.empty()) {
             // Моб-скелет: тип по charType (сервер выставляет). attackTime>0 (флаг с сервера) —
@@ -1100,8 +851,8 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
                 it = makeSkinnedItem(mobs_, mi, r.ch.position, r.ch.facingYaw, 1.0f /*walk*/,
                                      r.ch.animTime, 0.0f);
             }
-            auto fe = flash_.find(r.id);  // вспышка + punch врага при попадании
-            if (fe != flash_.end()) applyHitFx(it, fe->second / kFlashDur);
+            auto fe = presentation_.flash.find(r.id);  // вспышка + punch врага при попадании
+            if (fe != presentation_.flash.end()) applyHitFx(it, fe->second / kFlashDur);
             frame.skinned.push_back(it);
         } else if (et == EntityType::Projectile && projMesh_ != 0) {
             // Снаряд башни (серверная сущность): тонкий вытянутый болт вдоль полёта (yaw с сервера).
@@ -1117,24 +868,24 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
 
         // HP-бар над боевой сущностью (враг/герой/башня/ядро) — из интерполированной позиции.
         if (isCombatType(et) && r.hp > 0.0f) {
-            auto mit = maxHpSeen_.find(r.id);
-            float mx = (mit != maxHpSeen_.end() && mit->second > 0.0f) ? mit->second : r.hp;
+            auto mit = presentation_.maxHpSeen.find(r.id);
+            float mx = (mit != presentation_.maxHpSeen.end() && mit->second > 0.0f) ? mit->second : r.hp;
             float frac = r.hp / mx;
             if (frac < 0.0f) frac = 0.0f;
             if (frac > 1.0f) frac = 1.0f;
             Vec3 bcol = (et == EntityType::Enemy)  ? Vec3{0.90f, 0.25f, 0.20f}   // враг — красный
                         : (r.team == localTeam_)   ? Vec3{0.40f, 0.85f, 0.40f}   // свой/союзник — зелёный
                                                    : Vec3{0.90f, 0.25f, 0.20f};  // враг-сторона (PvP) — красный
-            markers_.push_back({r.ch.position + Vec3{0.0f, combatHeadHeight(et), 0.0f}, frac, bcol});
+            presentation_.markers.push_back({r.ch.position + Vec3{0.0f, combatHeadHeight(et), 0.0f}, frac, bcol});
         }
     }
 
     // «Трупы» убитых мобов: клип смерти на месте гибели, затем убираем. Чисто клиентская
     // косметика (сервер сущность уже удалил) — заводится в applySnapshot.
-    for (size_t i = 0; i < dyingMobs_.size();) {
-        DyingMob& d = dyingMobs_[i];
+    for (size_t i = 0; i < presentation_.dyingMobs.size();) {
+        DyingMob& d = presentation_.dyingMobs[i];
         d.t += renderDt;
-        if (d.t >= d.dur) { dyingMobs_.erase(dyingMobs_.begin() + (long)i); continue; }
+        if (d.t >= d.dur) { presentation_.dyingMobs.erase(presentation_.dyingMobs.begin() + (long)i); continue; }
         float ct = (d.t < d.dur * 0.999f) ? d.t : d.dur * 0.999f;  // не зацикливать
         frame.skinned.push_back(makeSkinnedItem(mobs_, d.charType, d.pos, d.yaw, 0.0f, 0.0f,
                                                 0.0f, mobs_[d.charType].deathClip, ct));
@@ -1349,7 +1100,7 @@ void Scene::confirmBuild() {
     Vec3 center;
     if (!computeGhost(cx, cz, center)) return;  // невалидно — не шлём запрос
     session_.sendBuild((uint8_t)buildType_, cx, cz);
-    emitSound(SoundId::Build);          // оптимистично: шлём только на валидной клетке
-    poofs_.push_back({center, 0.0f});   // «пуф» размещения на центре клетки (косметика)
+    presentation_.emitSound(SoundId::Build);          // оптимистично: шлём только на валидной клетке
+    presentation_.poofs.push_back({center, 0.0f});   // «пуф» размещения на центре клетки (косметика)
     // Остаёмся в режиме — можно ставить дальше (сервер авторитетно применит/отвергнет).
 }

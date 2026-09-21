@@ -62,6 +62,7 @@ add_library(vbase SHARED
         game/FlowField.cpp
         game/NavDebug.cpp
         game/ClientSession.cpp
+        game/ClientWorld.cpp
         game/Scene.cpp
         game/SceneLoader.cpp
         game/CharacterRoster.cpp
@@ -78,6 +79,10 @@ add_library(vbase SHARED
         engine/render/ui/screens/BattleScreen.cpp
         engine/render/ui/screens/CharacterSelectScreen.cpp
         engine/render/ui/panels/HomePanel.cpp
+        engine/render/ui/panels/InventoryPanel.cpp
+        engine/render/ui/panels/QuestsPanel.cpp
+        engine/render/ui/panels/ShopPanel.cpp
+        engine/render/ui/panels/EventsPanel.cpp
         engine/render/ui/windows/DebugPanel.cpp
         engine/render/ui/windows/BuildingInfo.cpp
         engine/render/VulkanProbe.cpp

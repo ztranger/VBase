@@ -9,6 +9,7 @@
 #include "engine/assets/Assets.h"
 #include "engine/assets/AssetSource.h"
 #include "engine/core/Log.h"
+#include "engine/render/ui/UiPalette.h"
 
 namespace UiSkin {
 namespace {
@@ -307,8 +308,17 @@ void EndPanel() {
     }
 }
 
-bool Button(const char* label, const Assets& skin, const ImVec2& size) {
-    if (!skin.ready) return ImGui::Button(label, size);
+bool Button(const char* label, const Assets& skin, const ImVec2& size, bool selected, bool enabled) {
+    if (!skin.ready) {  // fallback без скина (dev): состояние — штатными средствами ImGui
+        if (!enabled) ImGui::BeginDisabled();
+        if (selected) ImGui::PushStyleColor(ImGuiCol_Button, UiPalette::v4(UiPalette::AmberPress));
+        bool p = ImGui::Button(label, size);
+        if (selected) ImGui::PopStyleColor();
+        if (!enabled) ImGui::EndDisabled();
+        return p;
+    }
+
+    if (!enabled) ImGui::BeginDisabled();  // затемнение через Alpha + блок ввода
 
     const ImVec2 labelSize = ImGui::CalcTextSize(label, nullptr, true);
     const ImVec2 fp = ImGui::GetStyle().FramePadding;
@@ -322,21 +332,27 @@ bool Button(const char* label, const Assets& skin, const ImVec2& size) {
     const bool pressed = ImGui::InvisibleButton(label, sz);
     const bool hovered = ImGui::IsItemHovered();
     const bool held = ImGui::IsItemActive();
-    ImTextureID tex = skin.btnNormal;
+    // selected — «нажатый» вид как база (читается как включённая вкладка); hover/held поверх.
+    ImTextureID tex = selected ? skin.btnActive : skin.btnNormal;
     if (held) tex = skin.btnActive;
     else if (hovered) tex = skin.btnHover;
 
     const ImVec2 rmin = ImGui::GetItemRectMin();
     const ImVec2 rmax = ImGui::GetItemRectMax();
-    const ImU32 col = IM_COL32(255, 255, 255, (int)(255.0f * ImGui::GetStyle().Alpha));
-    ImGui::GetWindowDrawList()->AddImage(ImTextureRef(tex), rmin, rmax, ImVec2(0, 0),
-                                         ImVec2(1, 1), col);
+    const int a = (int)(255.0f * ImGui::GetStyle().Alpha);
+    const ImU32 col = IM_COL32(255, 255, 255, a);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddImage(ImTextureRef(tex), rmin, rmax, ImVec2(0, 0), ImVec2(1, 1), col);
+    // Выделение: медно-янтарная рамка поверх (обычный PushStyleColor скин не читает — см. UI_SYSTEM).
+    if (selected) {
+        dl->AddRect(rmin, rmax, UiPalette::withAlpha(UiPalette::Amber, a), 3.0f, 0, 2.5f);
+    }
 
     const ImVec2 textPos(rmin.x + (rmax.x - rmin.x - labelSize.x) * 0.5f,
                          rmin.y + (rmax.y - rmin.y - labelSize.y) * 0.5f);
-    // Тёмный текст на янтаре — docs/UI_PALETTE.md (text on amber).
-    const int a = (int)(255.0f * ImGui::GetStyle().Alpha);
-    ImGui::GetWindowDrawList()->AddText(textPos, IM_COL32(26, 20, 16, a), label);
+    dl->AddText(textPos, UiPalette::withAlpha(UiPalette::TextOnAmber, a), label);  // тёмный текст на янтаре
+
+    if (!enabled) ImGui::EndDisabled();
     return pressed;
 }
 
