@@ -40,6 +40,7 @@ struct MiniAudioEngine::Impl {
     std::vector<uint8_t> musicData;
     ma_sound music{};
     bool musicInited = false;
+    bool musicPlaying = false;  // желаемое состояние: start/stop идемпотентны (гейт по кадрам дёшев)
     float musicVol = 0.4f;
 };
 
@@ -103,7 +104,10 @@ void MiniAudioEngine::play(SoundId id) {
 void MiniAudioEngine::startMusic() {
     if (!d_->ready || d_->musicData.empty()) return;
     if (d_->musicInited) {
-        ma_sound_start(&d_->music);
+        if (!d_->musicPlaying) {  // идемпотентно: повторный старт уже играющей — no-op
+            ma_sound_start(&d_->music);
+            d_->musicPlaying = true;
+        }
         return;
     }
     // Грузим целиком (не STREAM): стриминговый путь не видит register_encoded_data (-7). Трек
@@ -118,10 +122,14 @@ void MiniAudioEngine::startMusic() {
     ma_sound_set_looping(&d_->music, MA_TRUE);
     ma_sound_set_volume(&d_->music, d_->musicVol);
     ma_sound_start(&d_->music);
+    d_->musicPlaying = true;
 }
 
 void MiniAudioEngine::stopMusic() {
-    if (d_->musicInited) ma_sound_stop(&d_->music);
+    if (d_->musicInited && d_->musicPlaying) {  // идемпотентно
+        ma_sound_stop(&d_->music);
+        d_->musicPlaying = false;
+    }
 }
 
 void MiniAudioEngine::setMasterVolume(float v) {

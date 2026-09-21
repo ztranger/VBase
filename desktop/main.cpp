@@ -267,6 +267,9 @@ int runClient(int backend, GameUiState& ui, DesktopSettings& saved, Audio& audio
         // Звук: громкость из UI (мгновенно из DebugPanel) + слив очереди звуков кадра.
         audio.setMasterVolume(ui.masterVolume);
         audio.setMusicVolume(ui.musicVolume);
+        // Музыка — только в бою (start/stop идемпотентны). В меню/выборе/лоадинге тишина.
+        if (GameUi::mode() == UiMode::Battle) audio.startMusic();
+        else audio.stopMusic();
         for (const SoundEvent& se : scene.sounds()) audio.play(se.id);
         scene.clearSounds();
 
@@ -366,7 +369,8 @@ int main(int argc, char** argv) {
     if (startLoadingPreview) GameUi::requestLoadingScreen();  // --loading: стартуем на лоадинге
 
     // Аудио: одно устройство на весь процесс (переживает перезапуски runClient — без щелчков
-    // при смене бэкенда/сцены). Звуки грузятся из ассетов, музыка стартует и лупится.
+    // при смене бэкенда/сцены). Звуки грузятся из ассетов; музыка НЕ стартует тут — она играет
+    // только в бою (гейт по кадрам в runClient), чтобы в меню не гудело фоном.
     MiniAudioEngine audio;
     audio.init();  // false = звука не будет (не критично, всё no-op)
     {
@@ -375,7 +379,6 @@ int main(int argc, char** argv) {
     }
     audio.setMasterVolume(ui.masterVolume);
     audio.setMusicVolume(ui.musicVolume);
-    audio.startMusic();
 
     // Цикл перезапуска: runClient возвращает следующий бэкенд или -1 (выход).
     // Активная сцена может меняться в рантайме (меню -> ui.requestScenePath).

@@ -317,7 +317,7 @@ extern "C" void android_main(android_app* app) {
         engine.audioLoaded = true;
         engine.audio.setMasterVolume(engine.ui.masterVolume);
         engine.audio.setMusicVolume(engine.ui.musicVolume);
-        engine.audio.startMusic();
+        // Музыку НЕ стартуем тут — только в бою (гейт по кадрам ниже), иначе в меню гудит фоном.
     }
 
     app->userData = &engine;
@@ -404,6 +404,9 @@ extern "C" void android_main(android_app* app) {
             if (engine.audioLoaded) {
                 engine.audio.setMasterVolume(engine.ui.masterVolume);
                 engine.audio.setMusicVolume(engine.ui.musicVolume);
+                // Музыка — только в бою (start/stop идемпотентны). В меню/выборе/лоадинге тишина.
+                if (GameUi::mode() == UiMode::Battle) engine.audio.startMusic();
+                else engine.audio.stopMusic();
                 for (const SoundEvent& se : engine.scene->sounds()) engine.audio.play(se.id);
                 engine.scene->clearSounds();
             }
