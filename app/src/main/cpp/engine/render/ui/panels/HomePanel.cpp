@@ -22,13 +22,13 @@ void draw(UiShell::Ctx& ctx) {
     ImGui::TextWrapped("Главное меню. Выбери раздел внизу или войди в бой.");
     ImGui::Dummy(ImVec2(0, 6));
 
-    if (ctx.btn("В бой", ImVec2(-1, 0))) UiShell::setMode(UiMode::CharacterSelect);
+    if (ctx.btn("В бой", ImVec2(-1, 0))) UiShell::setMode(UiMode::Lobby);
 
     ImGui::SeparatorText("Сеть");
     if (ctx.scene.netConnected()) {
         ImGui::Text("%s | remotes: %d | ping: %d ms", ctx.scene.netHost() ? "HOST" : "CLIENT",
                     ctx.scene.remoteCount(), ctx.scene.netPingMs());
-        if (ctx.btn("В бой (сессия)")) UiShell::setMode(UiMode::CharacterSelect);
+        if (ctx.btn("В бой (сессия)")) UiShell::setMode(UiMode::Lobby);
         ImGui::SameLine();
         if (ctx.btn("Отключиться")) {
             Scene* scene = &ctx.scene;
@@ -108,12 +108,12 @@ void draw(UiShell::Ctx& ctx) {
 
         if (ctx.btn("Host")) {
             ctx.scene.hostGame();
-            UiShell::setMode(UiMode::CharacterSelect);
+            UiShell::setMode(UiMode::Lobby);
         }
         ImGui::SameLine();
         if (ctx.btn("Join")) {
             ctx.scene.joinGame(ctx.state.joinIp, (uint16_t)ctx.state.joinPort);
-            UiShell::setMode(UiMode::CharacterSelect);
+            UiShell::setMode(UiMode::Lobby);
         }
     }
 

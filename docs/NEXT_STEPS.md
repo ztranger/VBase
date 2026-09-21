@@ -830,7 +830,7 @@ attackInterval`, заданы в `enemies.cfg`; `enemies.cfg` грузится �
 
 Мета/награды (🟣) и per-player статы — отдельно, вместе с мета-хабами.
 
-### Дизайн: экран входа в бой = Lobby (staging) — зафиксировано
+### Экран входа в бой = Lobby (staging) ✅ СДЕЛАНО (соло-first)
 
 Решённая модель (по итогам обсуждения): экран входа = **`UiMode::Lobby` (staging)**, он **поглощает
 `CharacterSelect`**. Флоу: `MainMenu` (выбор карты + Host/Join/соло) → **`Lobby`** → `Battle`.
@@ -851,14 +851,24 @@ attackInterval`, заданы в `enemies.cfg`; `enemies.cfg` грузится �
 - мини-карта (🟡) — либо top-down из `SceneDesc` колайдеров в рантайме, либо PNG-ассеты; на первом
   шаге допустима текст-сводка.
 
-Шаги реализации:
-1. `screens/LobbyScreen.*` вместо инлайн-заглушки `drawLobbyStub` в `UiShell.cpp`: колонка героя
-   (перенести из `CharacterSelectScreen`) + колонка брифинга.
-2. Геттеры статов героя в `Scene` (из уже загруженного ростера).
-3. `Scene::sceneBriefing()` — парс `SceneDesc` выбранной сцены в лёгкую структуру (цель/волны/режим/coreHp).
-4. `renderPath()`: `Lobby → CharacterPreview`; «В бой» в `HomePanel` → `setMode(Lobby)` вместо
-   `CharacterSelect`; `CharacterSelect` из флоу убрать (mode удалить или оставить неиспользуемым).
-5. Мини-карта (🟡) и кооп-пати/ready (🟡) — вторым заходом.
+Сделано (соло-first):
+1. `screens/LobbyScreen.*` (колонка героя + колонка брифинга) вместо инлайн-заглушки `drawLobbyStub`.
+2. Геттеры статов героя в `Scene` (`rosterHp/Damage/Range/Speed/Ranged`) из уже загруженного ростера;
+   `PlayerModel` дополнен `damage/range/ranged` (копия из `CharacterDesc` в `loadRosterModels`).
+3. `Scene::sceneBriefing()` — из сохранённого `sceneDesc_` (цель/HP ядра/волны/спавнеры/режим), без GPU-сборки.
+4. `renderPath()`: `Lobby → CharacterPreview`; «В бой» в `HomePanel` → `setMode(Lobby)`;
+   **`CharacterSelect` удалён** (enum/экран/CMake/renderPath) — Lobby его поглотил.
+- **Проверено:** desktop `BUILD_OK`; сервер не тронут (Scene клиентский), `--selftest` 30/30;
+  `LobbyScreen.cpp`/`Scene.cpp` под aarch64 `-fsyntax-only` чисто; GL-смоук 5 c жив. Визуал (статы,
+  брифинг, 3D-превью за панелями) — за пользователем на host/устройстве.
+
+Мини-карта ✅ **сделана**: `Scene::sceneMinimap()` отдаёт плоские данные (границы XZ + стены-
+препятствия AABB + точки интереса: ядро/спавнеры/старт), пол исключается (верх колайдера у земли);
+`LobbyScreen::drawMinimap` рисует top-down в draw-list с равномерным масштабом + легенда цветов.
+Проверено: desktop `BUILD_OK`, `LobbyScreen.cpp`/`Scene.cpp` aarch64 чисто, GL-смоук жив (сам
+top-down — за пользователем в Lobby).
+
+Осталось вторым заходом: **кооп-пати + ready-check** (🟡 — серверный флаг готовности; сейчас соло).
 
 **Ещё не спроектировано (следующая тема):** мета-экраны — реальные Инвентарь/Магазин/Квесты/События
 и онлайн-лобби (создание/поиск игры, пати, ready-check). Данные и лейаут — обсудить перед реализацией.

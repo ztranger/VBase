@@ -77,7 +77,7 @@ add_library(vbase SHARED
         engine/render/ui/screens/LoadingScreen.cpp
         engine/render/ui/screens/MainMenuScreen.cpp
         engine/render/ui/screens/BattleScreen.cpp
-        engine/render/ui/screens/CharacterSelectScreen.cpp
+        engine/render/ui/screens/LobbyScreen.cpp
         engine/render/ui/panels/HomePanel.cpp
         engine/render/ui/panels/InventoryPanel.cpp
         engine/render/ui/panels/QuestsPanel.cpp

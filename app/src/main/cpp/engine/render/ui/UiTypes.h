@@ -8,8 +8,7 @@
 enum class UiMode {
     Loading,
     MainMenu,
-    Lobby,           // создать/найти игру, готовность, команды (кооп/PvP) — между меню и боем
-    CharacterSelect,
+    Lobby,           // экран входа в бой (staging): выбор героя + брифинг сцены -> «В бой»
     Battle,
 };
 

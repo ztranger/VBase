@@ -7,7 +7,7 @@
 
 | Уровень | Правило | Примеры |
 |---------|---------|---------|
-| **UiMode** | ровно один (экран) | `Loading`, `MainMenu`, `Lobby`, `CharacterSelect`, `Battle` |
+| **UiMode** | ровно один (экран) | `Loading`, `MainMenu`, `Lobby` (вход в бой: герой + брифинг), `Battle` |
 | **UiOverlay** | 0…1 поверх режима, не меняет рендер-путь | `None`, `Pause`, `Results` |
 | **Panel (hub)** | 0…1 на экран, взаимоисключающие | `Home`, `Inventory`, `Quests`, `Shop`, `Events` |
 | **Floating** | show/hide, несколько сразу | `Debug`, `BuildingInfo` |
@@ -16,7 +16,7 @@
 ```
 GameUi::build
   └─ UiShell::build
-       ├─ switch(mode) → LoadingScreen | MainMenuScreen | Lobby | CharacterSelect | BattleScreen
+       ├─ switch(mode) → LoadingScreen | MainMenuScreen | LobbyScreen | BattleScreen
        │     MainMenu: chrome + active panel + Debug(float)
        │     Battle:   HUD + build + BuildingInfo + Debug + joysticks
        ├─ switch(overlay) → Pause | Results   (поверх режима; рендер-путь мира сохраняется)
@@ -140,15 +140,17 @@ Callback не должен захватывать стековые ссылки 
 ```
 engine/render/ui/
   UiTypes.h  UiShell.*  UiPalette.h  Dialogs.*
-  screens/   LoadingScreen.*  MainMenuScreen.*  CharacterSelectScreen.*  BattleScreen.*
+  screens/   LoadingScreen.*  MainMenuScreen.*  LobbyScreen.*  BattleScreen.*
   panels/    HomePanel.*  InventoryPanel.*  QuestsPanel.*  ShopPanel.*  EventsPanel.*  StubPanel.h
              (каждый раздел хаба = свой файл; StubPanel.h — общее тело заглушки)
   windows/   DebugPanel.*  BuildingInfo.*
 ```
 
-`Lobby` (UiMode) и оверлеи `Pause`/`Results` пока — **инлайн-заглушки** в `UiShell.cpp`
-(`drawLobbyStub`/`drawPauseOverlay`/`drawResultsOverlay`); при наполнении переедут в
-`screens/LobbyScreen.*` и, при необходимости, `overlays/`.
+`Lobby` — экран входа в бой (`screens/LobbyScreen.*`): слева выбор героя со статами, справа
+read-only брифинг сцены; рендер-путь `CharacterPreview` (3D-герой за панелями). Соло-first;
+мини-карта и кооп-пати/ready — вторым заходом (см. NEXT_STEPS). Оверлеи `Pause`/`Results` пока —
+**инлайн-заглушки** в `UiShell.cpp` (`drawPauseOverlay`/`drawResultsOverlay`); при наполнении
+переедут в `overlays/`.
 
 ## Связанные доки
 

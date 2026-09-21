@@ -57,7 +57,7 @@ add_executable(vbase_desktop
         ${APP}/engine/render/ui/screens/LoadingScreen.cpp
         ${APP}/engine/render/ui/screens/MainMenuScreen.cpp
         ${APP}/engine/render/ui/screens/BattleScreen.cpp
-        ${APP}/engine/render/ui/screens/CharacterSelectScreen.cpp
+        ${APP}/engine/render/ui/screens/LobbyScreen.cpp
         ${APP}/engine/render/ui/panels/HomePanel.cpp
         ${APP}/engine/render/ui/panels/InventoryPanel.cpp
         ${APP}/engine/render/ui/panels/QuestsPanel.cpp

@@ -3,8 +3,8 @@
 #include "imgui.h"
 
 #include "engine/render/ui/screens/BattleScreen.h"
-#include "engine/render/ui/screens/CharacterSelectScreen.h"
 #include "engine/render/ui/screens/LoadingScreen.h"
+#include "engine/render/ui/screens/LobbyScreen.h"
 #include "engine/render/ui/screens/MainMenuScreen.h"
 #include "game/Scene.h"  // drawLobbyStub/Pause оверлей зовут методы сцены (netConnected/leaveGame)
 
@@ -110,11 +110,10 @@ UiOverlay overlay() { return g_overlay; }
 
 RenderPath renderPath() {
     switch (g_mode) {
-        case UiMode::Battle:         return RenderPath::World;
-        case UiMode::CharacterSelect: return RenderPath::CharacterPreview;
+        case UiMode::Battle:   return RenderPath::World;
+        case UiMode::Lobby:    return RenderPath::CharacterPreview;  // 3D-превью героя за панелями
         case UiMode::Loading:
-        case UiMode::MainMenu:
-        case UiMode::Lobby:          return RenderPath::MenuBackdrop;
+        case UiMode::MainMenu: return RenderPath::MenuBackdrop;
     }
     return RenderPath::MenuBackdrop;
 }
@@ -163,22 +162,8 @@ bool hasLoadingArt() { return LoadingScreen::hasArt(); }
 
 namespace {
 
-// Минимальные заглушки лобби/оверлеев — инфраструктура навигатора должна компилироваться и
-// ходить между экранами уже сейчас; наполнение (списки игр, готовность, награды) — в большом
-// проходе по окнам. См. docs/UI_SYSTEM.md и NEXT_STEPS «UI».
-
-void drawLobbyStub(UiShell::Ctx& ctx) {
-    ImVec2 pos, size;
-    menuContentRect(pos, size);
-    if (ctx.beginPanelRect("Лобби", pos, size)) {
-        ImGui::TextUnformatted("Лобби (заглушка): здесь будет создание/поиск игры и готовность.");
-        ImGui::Spacing();
-        if (ctx.btn("В бой")) setMode(UiMode::Battle);
-        ImGui::SameLine();
-        if (ctx.btn("Назад")) back();
-    }
-    ctx.endPanel();
-}
+// Заглушки оверлеев (пауза/итог) — наполнение (награды, статы матча) в большом проходе по окнам.
+// См. docs/UI_SYSTEM.md и NEXT_STEPS «Дизайн: боевой HUD + экран итога».
 
 // Оверлей поверх боя: затемняем экран и рисуем панель по центру. Возвращает выбранное действие
 // косвенно через setMode/setOverlay.
@@ -245,10 +230,7 @@ void build(GameUiState& state, Scene& scene, const UiSkin::Assets& skin) {
             MainMenuScreen::draw(ctx);
             break;
         case UiMode::Lobby:
-            drawLobbyStub(ctx);
-            break;
-        case UiMode::CharacterSelect:
-            CharacterSelectScreen::draw(ctx);
+            LobbyScreen::draw(ctx);
             break;
         case UiMode::Battle:
             BattleScreen::draw(ctx);

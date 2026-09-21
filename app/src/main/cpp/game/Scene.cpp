@@ -360,6 +360,9 @@ void Scene::loadRosterModels(Renderer& renderer, AssetSource& assets,
         pm.yawOffset = c.yawOffset;
         pm.hp = c.hp;          // статы героя (для HUD/предсказания; у мобов не используются)
         pm.speed = c.speed;
+        pm.damage = c.damage;  // для брифинга выбора героя (Lobby); клиент бой не считает
+        pm.range = c.range;
+        pm.ranged = c.ranged;
         const std::vector<std::string>* hide = c.hide.empty() ? nullptr : &c.hide;
         if (loadGltfModel(assets, c.model.c_str(), pm.model, hide)) {
             pm.mesh = renderer.createSkinnedMesh(pm.model);
@@ -467,8 +470,8 @@ void Scene::selectCharacter(int i) {
     if (chars_[i].hp > 0.0f) localMaxHp_ = chars_[i].hp;
 }
 
-// Экран выбора: выбранный персонаж в origin, idle-анимация, медленное вращение. Мир НЕ рисуем —
-// фон = чистый цвет очистки. Главный цикл зовёт это вместо render() в режиме CharacterSelect.
+// Экран входа в бой (Lobby): выбранный персонаж в origin, idle-анимация, медленное вращение.
+// Мир НЕ рисуем — фон = чистый цвет очистки. Главный цикл зовёт это в рендер-пути CharacterPreview.
 RenderFrame Scene::renderCharacterPreview(float alpha, float aspect, float renderDt) {
     (void)alpha;
     previewSpin_ += renderDt;  // накопленное время: и фаза idle, и угол вращения
@@ -975,6 +978,84 @@ float Scene::coreHp() const {
 }
 
 float Scene::coreMaxHp() const { return config_.get(EntityType::Core).hp; }
+
+Scene::SceneBriefing Scene::sceneBriefing() const {
+    // Считаем из сохранённого описания сцены (sceneDesc_), которым уже построен мир.
+    SceneBriefing b;
+    int nonzeroTeam = 0;   // сколько РАЗНЫХ ненулевых команд встретили (>=2 -> PvP)
+    uint8_t firstTeam = 0;
+    auto noteTeam = [&](uint8_t t) {
+        if (t == 0) return;
+        if (nonzeroTeam == 0) { firstTeam = t; nonzeroTeam = 1; }
+        else if (t != firstTeam) nonzeroTeam = 2;
+    };
+    for (const BuildingSpec& bs : sceneDesc_.buildings) {
+        noteTeam(bs.team);
+        if (bs.kind == BuildingSpec::Core) {
+            b.hasCore = true;
+            b.coreHp += bs.hp;
+        } else if (bs.kind == BuildingSpec::Spawner) {
+            b.spawnerCount++;
+            if (bs.waveSize > 0) {
+                b.infiniteWaves = true;
+                b.waveBase += bs.waveSize;
+                b.waveGrow += bs.waveGrow;
+            }
+        }
+    }
+    for (const SpawnSpec& sp : sceneDesc_.spawns) noteTeam(sp.team);
+    b.pvp = (nonzeroTeam >= 2);
+    return b;
+}
+
+Scene::Minimap Scene::sceneMinimap() const {
+    Minimap md;
+    float minX = 1e9f, minZ = 1e9f, maxX = -1e9f, maxZ = -1e9f;
+    auto expand = [&](float x, float z) {
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (z < minZ) minZ = z;
+        if (z > maxZ) maxZ = z;
+    };
+    // Колайдеры: пол исключаем (его верх у земли, ~0); стены/препятствия выше.
+    for (const ColliderSpec& c : sceneDesc_.colliders) {
+        if (c.center.y + c.half.y <= 0.3f) continue;  // пол/приземные плиты — не рисуем
+        md.walls.push_back({c.center.x, c.center.z, c.half.x, c.half.z});
+        expand(c.center.x - c.half.x, c.center.z - c.half.z);
+        expand(c.center.x + c.half.x, c.center.z + c.half.z);
+    }
+    // Точки интереса: ядро, спавнеры врагов.
+    for (const BuildingSpec& bs : sceneDesc_.buildings) {
+        if (bs.kind == BuildingSpec::Core) {
+            md.marks.push_back({bs.pos.x, bs.pos.z, Minimap::Poi::Core});
+            expand(bs.pos.x, bs.pos.z);
+        } else if (bs.kind == BuildingSpec::Spawner) {
+            md.marks.push_back({bs.pos.x, bs.pos.z, Minimap::Poi::Spawner});
+            expand(bs.pos.x, bs.pos.z);
+        }
+    }
+    // Старт героя: точки спавна команд (PvP), иначе позиция игрока из сцены.
+    if (!sceneDesc_.spawns.empty()) {
+        for (const SpawnSpec& s : sceneDesc_.spawns) {
+            md.marks.push_back({s.pos.x, s.pos.z, Minimap::Poi::HeroSpawn});
+            expand(s.pos.x, s.pos.z);
+        }
+    } else if (sceneDesc_.player.present) {
+        md.marks.push_back({sceneDesc_.player.pos.x, sceneDesc_.player.pos.z, Minimap::Poi::HeroSpawn});
+        expand(sceneDesc_.player.pos.x, sceneDesc_.player.pos.z);
+    }
+    if (minX > maxX) {  // ничего не нашли — фолбэк на арену из грида (квадрат)
+        float a = sceneDesc_.grid.arenaHalf > 0.0f ? sceneDesc_.grid.arenaHalf : 12.0f;
+        minX = minZ = -a;
+        maxX = maxZ = a;
+    }
+    md.minX = minX;
+    md.minZ = minZ;
+    md.maxX = maxX;
+    md.maxZ = maxZ;
+    md.valid = true;
+    return md;
+}
 
 const EntityVisual& Scene::visual(EntityType t) const {
     static const EntityVisual kNone;  // неизвестный/вне-диапазона тип -> пусто (не рисуется/не пикается)

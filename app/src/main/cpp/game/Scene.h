@@ -152,13 +152,56 @@ public:
     float modelYawOffset() const { return chars_.empty() ? 0.0f : chars_[localCharIndex_].yawOffset; }
     void setModelYawOffset(float y) { if (!chars_.empty()) chars_[localCharIndex_].yawOffset = y; }
 
-    // Выбор персонажа (экран CharacterSelect).
+    // Выбор персонажа (экран входа в бой / Lobby).
     int rosterCount() const { return (int)chars_.size(); }
     const char* rosterName(int i) const {
         return (i >= 0 && i < (int)chars_.size()) ? chars_[i].name.c_str() : "";
     }
+    // Статы героя для брифинга выбора (из characters.cfg; клиент бой не считает). Вне диапазона -> 0.
+    float rosterHp(int i) const {
+        return (i >= 0 && i < (int)chars_.size()) ? chars_[i].hp : 0.0f;
+    }
+    float rosterDamage(int i) const {
+        return (i >= 0 && i < (int)chars_.size()) ? chars_[i].damage : 0.0f;
+    }
+    float rosterRange(int i) const {
+        return (i >= 0 && i < (int)chars_.size()) ? chars_[i].range : 0.0f;
+    }
+    float rosterSpeed(int i) const {
+        return (i >= 0 && i < (int)chars_.size()) ? chars_[i].speed : 0.0f;
+    }
+    bool rosterRanged(int i) const {
+        return (i >= 0 && i < (int)chars_.size()) && chars_[i].ranged;
+    }
     int selectedCharacter() const { return localCharIndex_; }
     void selectCharacter(int i);  // локальный персонаж + уведомить сервер (для рендера чужими)
+
+    // Брифинг текущей (уже построенной) сцены для экрана входа в бой. Считается из
+    // сохранённого sceneDesc_ (без GPU-сборки): цель, HP ядра, параметры волн, режим.
+    struct SceneBriefing {
+        bool hasCore = false;      // в сцене есть ядро (цель обороны)
+        float coreHp = 0.0f;       // суммарное HP ядер (0 если ядра нет)
+        bool infiniteWaves = false; // есть спавнер с бесконечными волнами (waveSize>0)
+        int waveBase = 0;          // суммарный размер первой волны по всем спавнерам
+        int waveGrow = 0;          // суммарный прирост размера за волну
+        int spawnerCount = 0;      // число спавнеров врагов
+        bool pvp = false;          // в сцене есть враждующие команды (иначе PvE соло/кооп)
+    };
+    SceneBriefing sceneBriefing() const;
+
+    // Мини-карта сцены (top-down, плоскость XZ) для брифинга: границы мира + стены/препятствия
+    // (AABB) + точки интереса. Плоские данные из sceneDesc_ (без рендера) — UI проецирует и рисует.
+    // Пол исключён (колайдеры, чей верх у земли); границы считаются по нарисованным фигурам.
+    struct Minimap {
+        bool valid = false;
+        float minX = 0.0f, minZ = 0.0f, maxX = 0.0f, maxZ = 0.0f;  // мировые границы XZ
+        struct Wall { float cx, cz, hx, hz; };  // AABB стены/препятствия (центр + полуразмеры)
+        enum class Poi { Core, Spawner, HeroSpawn };
+        struct Mark { float x, z; Poi kind; };
+        std::vector<Wall> walls;
+        std::vector<Mark> marks;
+    };
+    Minimap sceneMinimap() const;
 
     // Список доступных сцен (config/scenes.cfg) для выбора в меню. Смена сцены —
     // перезагрузкой мира платформой (десктоп: пересоздание рендера; Android: рекриэйт),
@@ -177,8 +220,8 @@ public:
         return -1;
     }
 
-    // Рендер вне боя (главный цикл выбирает путь по UiMode): 3D-превью выбранного
-    // персонажа (экран выбора) и пустой фон меню (мир не показываем).
+    // Рендер вне боя (главный цикл выбирает путь по renderPath): 3D-превью выбранного
+    // персонажа (экран входа в бой / Lobby) и пустой фон меню (мир не показываем).
     RenderFrame renderCharacterPreview(float alpha, float aspect, float renderDt);
     RenderFrame renderMenuBackdrop(float aspect);
     float cameraDistance() const { return camera_.distance; }
