@@ -1,0 +1,85 @@
+<svg viewBox="0 0 700 872" xmlns="http://www.w3.org/2000/svg" role="img" font-family="system-ui, sans-serif">
+<title>Лейаут боевого HUD и экрана победы/поражения</title>
+<desc>Вайрфрейм двух экранов с подсветкой полей по тиру данных: зелёное доступно сейчас, янтарное требует серверной части, фиолетовое — мета и награды.</desc>
+<rect x="0" y="0" width="700" height="872" fill="#F0ECE4"/>
+
+<g>
+<rect x="20" y="10" width="200" height="16" rx="3" fill="none"/>
+<circle cx="30" cy="18" r="6" fill="#3D9E5A"/><text x="42" y="22" font-size="13" fill="#4a4a48">есть сейчас (снапшот / клиент)</text>
+<circle cx="285" cy="18" r="6" fill="#E8A13A"/><text x="297" y="22" font-size="13" fill="#4a4a48">нужен сервер (бамп протокола)</text>
+<circle cx="560" cy="18" r="6" fill="#A855F7"/><text x="572" y="22" font-size="13" fill="#4a4a48">мета/награды</text>
+</g>
+
+<text x="20" y="52" font-size="17" font-weight="500" fill="#6a6a68">Боевой HUD</text>
+
+<rect x="20" y="60" width="660" height="372" rx="8" fill="#1A1410" stroke="#4A3F35" stroke-width="1.5"/>
+
+<g>
+<rect x="34" y="74" width="236" height="72" rx="6" fill="#241D18" stroke="#3D9E5A" stroke-width="1.5"/>
+<text x="46" y="93" font-size="13" fill="#C4B49C">Ядро (база) — защищаем</text>
+<rect x="46" y="99" width="212" height="11" rx="3" fill="#4A3F35"/><rect x="46" y="99" width="150" height="11" rx="3" fill="#C4A574"/>
+<text x="46" y="132" font-size="13" fill="#F2E6D4">Ресурс</text><text x="258" y="132" font-size="13" text-anchor="end" fill="#E8A13A">120 / 300</text>
+</g>
+
+<g>
+<rect x="284" y="74" width="150" height="52" rx="6" fill="#241D18" stroke="#E8A13A" stroke-width="1.5"/>
+<text x="359" y="96" font-size="16" text-anchor="middle" fill="#F2E6D4">Волна 3</text>
+<text x="359" y="116" font-size="12" text-anchor="middle" fill="#C4B49C">след. волна 0:12</text>
+</g>
+
+<g>
+<rect x="448" y="74" width="218" height="52" rx="6" fill="#241D18" stroke="#3D9E5A" stroke-width="1.5"/>
+<text x="458" y="96" font-size="12" fill="#C4B49C">ping 24 · 2 союзн. · host</text>
+<rect x="458" y="104" width="150" height="14" rx="3" fill="#332820"/>
+<text x="533" y="115" font-size="11" text-anchor="middle" fill="#8a7a68">статус сети</text>
+<rect x="620" y="82" width="36" height="36" rx="5" fill="#332820" stroke="#7A6A58"/>
+<rect x="631" y="91" width="5" height="18" fill="#E8A13A"/><rect x="640" y="91" width="5" height="18" fill="#E8A13A"/>
+</g>
+
+<g>
+<rect x="352" y="196" width="60" height="8" rx="2" fill="#4A3F35"/><rect x="352" y="196" width="38" height="8" rx="2" fill="#C43C32"/>
+<text x="382" y="188" font-size="14" text-anchor="middle" fill="#E8A13A">-12</text>
+<text x="420" y="203" font-size="12" fill="#7A6A58">worldspace: HP-бары + числа урона (готово)</text>
+</g>
+
+<g>
+<rect x="34" y="352" width="256" height="66" rx="6" fill="#241D18" stroke="#3D9E5A" stroke-width="1.5"/>
+<text x="46" y="369" font-size="12" fill="#C4B49C">Строительство</text>
+<rect x="46" y="376" width="76" height="32" rx="5" fill="#332820" stroke="#7A6A58"/><text x="84" y="396" font-size="11" text-anchor="middle" fill="#F2E6D4">Генер. 50</text>
+<rect x="130" y="376" width="76" height="32" rx="5" fill="#332820" stroke="#7A6A58"/><text x="168" y="396" font-size="11" text-anchor="middle" fill="#F2E6D4">Склад 40</text>
+<rect x="214" y="376" width="66" height="32" rx="5" fill="#332820" stroke="#7A6A58"/><text x="247" y="396" font-size="11" text-anchor="middle" fill="#F2E6D4">Башня 80</text>
+</g>
+
+<g>
+<rect x="310" y="380" width="230" height="40" rx="6" fill="#241D18" stroke="#3D9E5A" stroke-width="1.5"/>
+<text x="322" y="404" font-size="14" fill="#C43C32">&#9829;</text>
+<rect x="338" y="396" width="128" height="12" rx="3" fill="#4A3F35"/><rect x="338" y="396" width="92" height="12" rx="3" fill="#3D9E5A"/>
+<text x="474" y="405" font-size="11" fill="#C4B49C">HP героя</text>
+</g>
+<text x="310" y="372" font-size="11" fill="#7A6A58">мёртв → «Возрождение 3с» на месте бара</text>
+
+<text x="20" y="474" font-size="17" font-weight="500" fill="#6a6a68">Экран победы / поражения (оверлей поверх боя)</text>
+
+<rect x="20" y="484" width="660" height="372" rx="8" fill="#0F0C09"/>
+<rect x="20" y="484" width="660" height="372" rx="8" fill="#1A1410" fill-opacity="0.4" stroke="#4A3F35" stroke-width="1.5"/>
+
+<g>
+<rect x="196" y="506" width="308" height="330" rx="10" fill="#2A221C" stroke="#E8A13A" stroke-width="2"/>
+<text x="350" y="546" font-size="24" font-weight="500" text-anchor="middle" fill="#FFD36A">Победа</text>
+<text x="350" y="566" font-size="11" text-anchor="middle" fill="#8a7a68">поражение — тот же лейаут, danger-цвет</text>
+<line x1="216" y1="580" x2="484" y2="580" stroke="#4A3F35"/>
+
+<circle cx="224" cy="606" r="5" fill="#E8A13A"/><text x="238" y="610" font-size="14" fill="#F2E6D4">Волны пройдено</text><text x="484" y="610" font-size="14" text-anchor="end" fill="#F2E6D4">8</text>
+<circle cx="224" cy="634" r="5" fill="#3D9E5A"/><text x="238" y="638" font-size="14" fill="#F2E6D4">Время боя</text><text x="484" y="638" font-size="14" text-anchor="end" fill="#F2E6D4">4:32</text>
+<circle cx="224" cy="662" r="5" fill="#E8A13A"/><text x="238" y="666" font-size="14" fill="#F2E6D4">Врагов убито</text><text x="484" y="666" font-size="14" text-anchor="end" fill="#F2E6D4">142</text>
+<circle cx="224" cy="690" r="5" fill="#3D9E5A"/><text x="238" y="694" font-size="14" fill="#F2E6D4">Ядро осталось</text><text x="484" y="694" font-size="14" text-anchor="end" fill="#F2E6D4">78%</text>
+
+<line x1="216" y1="712" x2="484" y2="712" stroke="#4A3F35"/>
+<circle cx="224" cy="736" r="5" fill="#A855F7"/><text x="350" y="740" font-size="14" text-anchor="middle" fill="#C9A0F7">+120 золота    +350 опыта</text>
+
+<rect x="216" y="764" width="80" height="34" rx="6" fill="#332820" stroke="#E8A13A"/><text x="256" y="786" font-size="12" text-anchor="middle" fill="#E8A13A">Ещё раз</text>
+<rect x="306" y="764" width="80" height="34" rx="6" fill="#332820" stroke="#7A6A58"/><text x="346" y="786" font-size="12" text-anchor="middle" fill="#F2E6D4">В лобби</text>
+<rect x="396" y="764" width="88" height="34" rx="6" fill="#E8A13A"/><text x="440" y="786" font-size="12" text-anchor="middle" fill="#2A221C">В меню</text>
+<text x="350" y="818" font-size="11" text-anchor="middle" fill="#8a7a68">«Ещё раз» / «В лобби» — нужен запрос рестарта на сервер</text>
+</g>
+</svg>

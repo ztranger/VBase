@@ -1,0 +1,62 @@
+<svg viewBox="0 0 700 460" xmlns="http://www.w3.org/2000/svg" role="img" font-family="system-ui, sans-serif">
+<title>Лейаут экрана входа в бой (staging / Lobby)</title>
+<desc>Вайрфрейм: слева выбор героя со статами, в центре 3D-превью, справа брифинг сцены (мини-карта, цель, волны, режим), внизу пати и кнопка входа в бой. Поля размечены по тиру данных.</desc>
+<rect x="0" y="0" width="700" height="460" fill="#F0ECE4"/>
+
+<g>
+<circle cx="30" cy="18" r="6" fill="#3D9E5A"/><text x="42" y="22" font-size="13" fill="#6a6a68">есть сейчас</text>
+<circle cx="150" cy="18" r="6" fill="#E8A13A"/><text x="162" y="22" font-size="13" fill="#6a6a68">нужен сервер / ассет</text>
+<circle cx="330" cy="18" r="6" fill="#A855F7"/><text x="342" y="22" font-size="13" fill="#6a6a68">мета</text>
+</g>
+
+<text x="20" y="52" font-size="17" font-weight="500" fill="#6a6a68">Экран входа в бой (staging / Lobby)</text>
+<rect x="20" y="60" width="660" height="372" rx="8" fill="#1A1410" stroke="#4A3F35" stroke-width="1.5"/>
+
+<g>
+<rect x="34" y="74" width="192" height="298" rx="6" fill="#241D18" stroke="#3D9E5A" stroke-width="1.5"/>
+<text x="46" y="94" font-size="13" fill="#C4B49C">Герой</text>
+<rect x="46" y="102" width="168" height="26" rx="5" fill="#332820" stroke="#E8A13A" stroke-width="1.5"/><text x="56" y="119" font-size="12" fill="#E8A13A">&#9654; Маг</text>
+<rect x="46" y="132" width="168" height="26" rx="5" fill="#2A221C" stroke="#7A6A58"/><text x="56" y="149" font-size="12" fill="#F2E6D4">Воин</text>
+<rect x="46" y="162" width="168" height="26" rx="5" fill="#2A221C" stroke="#7A6A58"/><text x="56" y="179" font-size="12" fill="#F2E6D4">Лучник</text>
+<line x1="46" y1="202" x2="214" y2="202" stroke="#4A3F35"/>
+<text x="46" y="222" font-size="12" fill="#C4B49C">HP</text><text x="214" y="222" font-size="12" text-anchor="end" fill="#F2E6D4">120</text>
+<text x="46" y="242" font-size="12" fill="#C4B49C">Урон</text><text x="214" y="242" font-size="12" text-anchor="end" fill="#F2E6D4">18</text>
+<text x="46" y="262" font-size="12" fill="#C4B49C">Дальность</text><text x="214" y="262" font-size="12" text-anchor="end" fill="#F2E6D4">6 · маг</text>
+<text x="46" y="282" font-size="12" fill="#C4B49C">Скорость</text><text x="214" y="282" font-size="12" text-anchor="end" fill="#F2E6D4">4.5</text>
+<text x="46" y="356" font-size="11" fill="#7A6A58">статы в characters.cfg —</text>
+<text x="46" y="368" font-size="11" fill="#7A6A58">дать геттеры Scene</text>
+</g>
+
+<g>
+<rect x="238" y="92" width="196" height="240" rx="6" fill="none" stroke="#4A3F35" stroke-width="1.5" stroke-dasharray="5 4"/>
+<circle cx="336" cy="168" r="24" fill="#332820"/>
+<rect x="320" y="192" width="32" height="70" rx="12" fill="#332820"/>
+<text x="336" y="300" font-size="13" text-anchor="middle" fill="#C4B49C">3D-превью героя</text>
+<text x="336" y="316" font-size="11" text-anchor="middle" fill="#7A6A58">(готово, вращается)</text>
+</g>
+
+<g>
+<rect x="446" y="74" width="220" height="298" rx="6" fill="#241D18" stroke="#E8A13A" stroke-width="1.5"/>
+<text x="458" y="94" font-size="13" fill="#C4B49C">Брифинг сцены</text>
+<text x="458" y="114" font-size="14" fill="#F2E6D4">Лабиринт: серпантин</text>
+<rect x="458" y="122" width="196" height="90" rx="4" fill="#14100C" stroke="#E8A13A" stroke-dasharray="4 3"/>
+<rect x="486" y="150" width="30" height="10" fill="#4A3F35"/><rect x="560" y="176" width="30" height="10" fill="#4A3F35"/><rect x="512" y="186" width="10" height="24" fill="#4A3F35"/>
+<circle cx="556" cy="167" r="7" fill="#FFD36A"/>
+<path d="M466 132 l16 10 -6 1 3 6" stroke="#C43C32" stroke-width="1.5" fill="none"/>
+<path d="M646 204 l-16 -10 6 -1 -3 -6" stroke="#C43C32" stroke-width="1.5" fill="none"/>
+<text x="556" y="205" font-size="10" text-anchor="middle" fill="#8a7a68">мини-карта из SceneDesc / PNG</text>
+<text x="458" y="234" font-size="12" fill="#C4B49C">Цель</text><text x="654" y="234" font-size="12" text-anchor="end" fill="#F2E6D4">защитить ядро</text>
+<text x="458" y="256" font-size="12" fill="#C4B49C">Волны</text><text x="654" y="256" font-size="12" text-anchor="end" fill="#F2E6D4">беск., +2/волна</text>
+<text x="458" y="278" font-size="12" fill="#C4B49C">Режим</text><text x="654" y="278" font-size="12" text-anchor="end" fill="#F2E6D4">кооп &#8804; 2</text>
+<text x="458" y="300" font-size="12" fill="#C4B49C">Ядро</text><text x="654" y="300" font-size="12" text-anchor="end" fill="#F2E6D4">500 HP</text>
+<circle cx="452" cy="230" r="3" fill="#3D9E5A"/><circle cx="452" cy="252" r="3" fill="#3D9E5A"/><circle cx="452" cy="274" r="3" fill="#3D9E5A"/><circle cx="452" cy="296" r="3" fill="#3D9E5A"/>
+</g>
+
+<g>
+<rect x="34" y="386" width="90" height="36" rx="6" fill="#2A221C" stroke="#7A6A58"/><text x="79" y="409" font-size="13" text-anchor="middle" fill="#F2E6D4">Назад</text>
+<circle cx="300" cy="404" r="14" fill="#332820" stroke="#3D9E5A"/><text x="300" y="408" font-size="11" text-anchor="middle" fill="#3D9E5A">я</text>
+<circle cx="336" cy="404" r="14" fill="#332820" stroke="#E8A13A" stroke-dasharray="3 2"/><text x="336" y="408" font-size="10" text-anchor="middle" fill="#E8A13A">P2</text>
+<text x="360" y="400" font-size="11" fill="#C4B49C">пати / ready-check</text><text x="360" y="413" font-size="11" fill="#7A6A58">— кооп, нужен сервер</text>
+<rect x="518" y="384" width="148" height="40" rx="6" fill="#E8A13A"/><text x="592" y="409" font-size="15" font-weight="500" text-anchor="middle" fill="#2A221C">В бой</text>
+</g>
+</svg>
