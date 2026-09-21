@@ -119,6 +119,9 @@ public:
     int matchPhase() const;    // GamePhase (0 Playing / 1 Won / 2 Lost)
     float coreHp() const;      // текущее здоровье ядра (из снапшотов; -1 если ядра нет)
     float coreMaxHp() const;   // максимум ядра (из конфига)
+    int enemyCount() const;    // живых врагов в снапшотах (для HUD «врагов живо»)
+    float matchTime() const { return matchClock_; }  // длительность текущего боя, сек (для итога)
+    void resetMatchClock() { matchClock_ = 0.0f; prevPhase_ = 0; }  // при входе в бой
     // Ставки своего героя.
     float heroHp() const { return localHp_; }
     float heroMaxHp() const { return localMaxHp_; }
@@ -359,4 +362,8 @@ private:
     // applySnapshot/syncBuildingColliders/killerYaw — в clientWorld_.)
     std::vector<RemoteEntity> remoteEntities_;  // все чужие сущности (герои/здания/…); читаются render/пикингом
     float tickDt_ = kTickDt;             // длительность тика (единый шаг, из engine/net/Net.h)
+    // Часы боя (для экрана итога): тикают в render(), пока фаза Playing; замерзают на исходе;
+    // сбрасываются при (пере)старте матча и при входе в бой (resetMatchClock).
+    float matchClock_ = 0.0f;
+    int prevPhase_ = 0;                  // фаза в прошлом кадре (детект старт/рестарт для часов)
 };

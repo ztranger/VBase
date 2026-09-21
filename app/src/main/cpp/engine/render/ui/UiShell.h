@@ -40,7 +40,7 @@ struct Ctx {
 };
 
 // Якорь окна к краю/центру экрана — единая раскладка вместо захардкоженных позиций (см. #4).
-enum class Anchor { TopLeft, TopRight, BottomLeft, BottomRight, Center };
+enum class Anchor { TopLeft, TopCenter, TopRight, BottomLeft, BottomCenter, BottomRight, Center };
 // Верхний-левый угол окна размера size при якоре a с полем margin (<0 -> uiMargin()).
 ImVec2 anchorPos(Anchor a, const ImVec2& size, float margin = -1.0f);
 

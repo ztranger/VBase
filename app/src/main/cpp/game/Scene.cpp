@@ -714,6 +714,15 @@ void Scene::onTouchUp(int id) {
 }
 
 RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
+    // Часы боя: тикают, пока идёт бой (подключены, фаза Playing); замерзают на исходе; сбрасываются
+    // при переходе исход->Playing (рестарт). Вход в бой сбрасывает извне (resetMatchClock).
+    {
+        int ph = matchPhase();
+        if (ph == 0 && prevPhase_ != 0) matchClock_ = 0.0f;   // рестарт матча в той же сессии
+        if (ph == 0 && session_.connected()) matchClock_ += renderDt;
+        prevPhase_ = ph;
+    }
+
     // Камера ¾-вида следует за ИНТЕРПОЛИРОВАННОЙ позицией цели; азимут/зум двигает игрок
     // (правый стик на Android либо стрелки на десктопе). Наклон камеры фиксирован.
     Vec3 focusPos = player_.prevPosition + (player_.position - player_.prevPosition) * alpha;
@@ -970,6 +979,13 @@ float Scene::resourceCap() const {
 }
 
 int Scene::matchPhase() const { return (int)session_.gamePhase(); }
+
+int Scene::enemyCount() const {
+    int n = 0;
+    for (const RemoteEntity& r : remoteEntities_)
+        if ((EntityType)r.type == EntityType::Enemy) ++n;
+    return n;
+}
 
 float Scene::coreHp() const {
     for (const RemoteEntity& r : remoteEntities_)

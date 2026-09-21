@@ -8,6 +8,7 @@
 #include "imgui.h"
 
 #include "engine/core/Input.h"
+#include "engine/render/ui/UiPalette.h"
 #include "engine/render/ui/windows/BuildingInfo.h"
 #include "engine/render/ui/windows/DebugPanel.h"
 #include "game/BuildingConfig.h"
@@ -25,21 +26,95 @@ bool g_navFlow = true;       // стрелки поля потока к цели
 bool g_navHeat = false;      // хитмап дистанции до цели
 bool g_navDist = false;      // числа дистанции в клетках
 
+// Полоса-стат: подпись слева + бар (трек + заливка) с центрированным числом. Ряд фикс. высоты.
+void statBar(const char* label, float frac, ImU32 fill, const char* overlay) {
+    if (frac < 0.0f) frac = 0.0f;
+    if (frac > 1.0f) frac = 1.0f;
+    const float font = ImGui::GetFontSize();
+    ImGui::TextUnformatted(label);
+    ImGui::SameLine(font * 4.2f);
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float w = ImGui::GetContentRegionAvail().x;
+    const float h = font * 1.05f;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), UiPalette::withAlpha(UiPalette::Stone, 210), 3.0f);
+    if (frac > 0.0f)
+        dl->AddRectFilled(p, ImVec2(p.x + w * frac, p.y + h), fill, 3.0f);
+    if (overlay != nullptr && overlay[0] != '\0') {
+        const ImVec2 ts = ImGui::CalcTextSize(overlay);
+        dl->AddText(ImVec2(p.x + (w - ts.x) * 0.5f, p.y + (h - ts.y) * 0.5f),
+                    UiPalette::withAlpha(UiPalette::Text, 235), overlay);
+    }
+    ImGui::Dummy(ImVec2(w, h));
+}
+
+// Цвет полосы HP героя по доле: низко — danger, средне — amber, высоко — success.
+ImU32 hpColor(float f) {
+    if (f <= 0.25f) return UiPalette::Danger;
+    if (f < 0.6f) return UiPalette::Amber;
+    return UiPalette::Success;
+}
+
 void drawHud(UiShell::Ctx& ctx) {
-    if (ctx.beginOverlay("##battleHud", UiShell::anchorPos(UiShell::Anchor::TopLeft, ImVec2(0, 0)),
-                         ImVec2(0, 0), 0.72f,
-                         ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoNav)) {
-        ImGui::Text("Ресурс: %.0f / %.0f", (double)ctx.scene.resourceCurrent(),
-                    (double)ctx.scene.resourceCap());
-        if (ctx.scene.netConnected()) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("| %s", ctx.scene.netHost() ? "HOST" : "CLIENT");
+    Scene& s = ctx.scene;
+    const float font = ImGui::GetFontSize();
+
+    // Верх-лево: база — HP ядра, ресурс, счётчик живых врагов (всё из снапшотов).
+    if (s.netConnected()) {
+        const ImVec2 baseSz(font * 13.0f, font * 6.2f);
+        if (ctx.beginOverlay("##hudBase", UiShell::anchorPos(UiShell::Anchor::TopLeft, baseSz),
+                             baseSz, 0.72f, ImGuiWindowFlags_NoNav)) {
+            char b[24];
+            const float chp = s.coreHp(), cmax = s.coreMaxHp();
+            if (chp >= 0.0f && cmax > 0.0f) {
+                std::snprintf(b, sizeof(b), "%.0f / %.0f", (double)chp, (double)cmax);
+                statBar("Ядро", chp / cmax, UiPalette::Copper, b);
+            }
+            const float res = s.resourceCurrent(), cap = s.resourceCap();
+            if (cap > 0.0f) {
+                std::snprintf(b, sizeof(b), "%.0f / %.0f", (double)res, (double)cap);
+                statBar("Ресурс", res / cap, UiPalette::Amber, b);
+            } else {
+                ImGui::Text("Ресурс: %.0f", (double)res);
+            }
+            ImGui::Text("Врагов: %d", s.enemyCount());
         }
-        if (ctx.btn("Пауза")) UiShell::setOverlay(UiOverlay::Pause);  // оверлей: продолжить / в меню
+        ctx.endOverlay();
+    }
+
+    // Верх-право: статус сети + пауза + debug (всегда — управление матчем).
+    const ImVec2 sysSz(font * 13.0f, font * 4.6f);
+    if (ctx.beginOverlay("##hudSys", UiShell::anchorPos(UiShell::Anchor::TopRight, sysSz), sysSz,
+                         0.72f, ImGuiWindowFlags_NoNav)) {
+        if (s.netConnected())
+            ImGui::Text("%s · %d союзн. · %d ms", s.netHost() ? "HOST" : "CLIENT", s.remoteCount(),
+                        s.netPingMs());
+        else
+            ImGui::TextDisabled("оффлайн");
+        if (ctx.btn("Пауза")) UiShell::setOverlay(UiOverlay::Pause);
         ImGui::SameLine();
         if (ctx.btn("Debug", ImVec2(0, 0), /*selected=*/UiShell::isDebugOpen())) UiShell::toggleDebug();
     }
     ctx.endOverlay();
+
+    // Низ-центр: HP героя крупной полосой (или таймер респауна, когда мёртв).
+    if (s.netConnected()) {
+        const ImVec2 heroSz(font * 16.0f, font * 3.4f);
+        if (ctx.beginOverlay("##hudHero", UiShell::anchorPos(UiShell::Anchor::BottomCenter, heroSz),
+                             heroSz, 0.72f, ImGuiWindowFlags_NoNav)) {
+            if (s.heroDead()) {
+                ImGui::TextColored(UiPalette::v4(UiPalette::Danger), "Возрождение через %.0f с",
+                                   (double)std::ceil(s.heroRespawnLeft()));
+            } else {
+                const float hp = s.heroHp(), mx = s.heroMaxHp();
+                const float f = (mx > 0.0f) ? hp / mx : 0.0f;
+                char b[24];
+                std::snprintf(b, sizeof(b), "%.0f / %.0f", (double)hp, (double)mx);
+                statBar("Герой", f, hpColor(f), b);
+            }
+        }
+        ctx.endOverlay();
+    }
 }
 
 void drawBuild(UiShell::Ctx& ctx) {
@@ -340,22 +415,6 @@ void drawNavOverlay(Scene& scene) {
     ImGui::End();
 }
 
-void drawMatchBanner(Scene& scene) {
-    int phase = scene.matchPhase();
-    if (phase == 0) return;
-    const char* msg = (phase == 1) ? "ПОБЕДА" : "ПОРАЖЕНИЕ";
-    ImU32 col = (phase == 1) ? IM_COL32(120, 230, 120, 255) : IM_COL32(240, 90, 80, 255);
-    ImDrawList* dl = ImGui::GetForegroundDrawList();
-    ImGuiIO& io = ImGui::GetIO();
-    float scale = 3.0f;
-    float fs = ImGui::GetFontSize() * scale;
-    ImVec2 ts = ImGui::CalcTextSize(msg);
-    ImVec2 pos(io.DisplaySize.x * 0.5f - ts.x * scale * 0.5f,
-               io.DisplaySize.y * 0.32f - fs * 0.5f);
-    dl->AddText(ImGui::GetFont(), fs, ImVec2(pos.x + 3, pos.y + 3), IM_COL32(0, 0, 0, 200), msg);
-    dl->AddText(ImGui::GetFont(), fs, pos, col, msg);
-}
-
 void drawJoysticks(Scene& scene) {
     auto drawStick = [](const VirtualJoystick& js, ImU32 ring, ImU32 knob) {
         if (!js.active) return;
@@ -377,8 +436,7 @@ void draw(UiShell::Ctx& ctx) {
     drawBuild(ctx);
     BuildingInfoWindow::draw(ctx);
     DebugPanel::draw(ctx);
-    drawMatchBanner(ctx.scene);
-    drawJoysticks(ctx.scene);
+    drawJoysticks(ctx.scene);  // исход матча теперь показывает оверлей Results (UiShell)
 }
 
 }  // namespace BattleScreen

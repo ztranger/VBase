@@ -1,7 +1,10 @@
 #include "engine/render/ui/UiShell.h"
 
+#include <cstdio>
+
 #include "imgui.h"
 
+#include "engine/render/ui/UiPalette.h"
 #include "engine/render/ui/screens/BattleScreen.h"
 #include "engine/render/ui/screens/LoadingScreen.h"
 #include "engine/render/ui/screens/LobbyScreen.h"
@@ -65,11 +68,13 @@ ImVec2 anchorPos(Anchor a, const ImVec2& size, float margin) {
     const ImVec2 disp = ImGui::GetIO().DisplaySize;
     const float m = margin < 0.0f ? uiMargin() : margin;
     switch (a) {
-        case Anchor::TopLeft:     return ImVec2(m, m);
-        case Anchor::TopRight:    return ImVec2(disp.x - size.x - m, m);
-        case Anchor::BottomLeft:  return ImVec2(m, disp.y - size.y - m);
-        case Anchor::BottomRight: return ImVec2(disp.x - size.x - m, disp.y - size.y - m);
-        case Anchor::Center:      return ImVec2((disp.x - size.x) * 0.5f, (disp.y - size.y) * 0.5f);
+        case Anchor::TopLeft:      return ImVec2(m, m);
+        case Anchor::TopCenter:    return ImVec2((disp.x - size.x) * 0.5f, m);
+        case Anchor::TopRight:     return ImVec2(disp.x - size.x - m, m);
+        case Anchor::BottomLeft:   return ImVec2(m, disp.y - size.y - m);
+        case Anchor::BottomCenter: return ImVec2((disp.x - size.x) * 0.5f, disp.y - size.y - m);
+        case Anchor::BottomRight:  return ImVec2(disp.x - size.x - m, disp.y - size.y - m);
+        case Anchor::Center:       return ImVec2((disp.x - size.x) * 0.5f, (disp.y - size.y) * 0.5f);
     }
     return ImVec2(m, m);
 }
@@ -196,12 +201,49 @@ void drawPauseOverlay(UiShell::Ctx& ctx) {
 
 void drawResultsOverlay(UiShell::Ctx& ctx) {
     const ImVec2 disp = ImGui::GetIO().DisplaySize;
+    const float font = ImGui::GetFontSize();
     if (ctx.beginOverlay("##resultsDim", ImVec2(0, 0), disp, 0.6f)) {
-        const ImVec2 pSize(ImGui::GetFontSize() * 18.0f, ImGui::GetFontSize() * 11.0f);
-        if (ctx.beginPanelRect("Итог матча", anchorPos(Anchor::Center, pSize, 0.0f), pSize)) {
-            ImGui::TextUnformatted("Итог матча (заглушка): результат и награды.");
-            ImGui::Spacing();
-            if (ctx.btn("В главное меню", ImVec2(-1, 0))) setMode(UiMode::MainMenu);
+        const ImVec2 pSize(font * 18.0f, font * 11.0f);
+        if (ctx.beginPanelRect("Итог матча###uiResults", anchorPos(Anchor::Center, pSize, 0.0f),
+                               pSize)) {
+            const int phase = ctx.scene.matchPhase();
+            const bool won = (phase == 1);
+            // Заголовок исхода: победа — золото, поражение — danger.
+            const char* title = won ? "Победа" : "Поражение";
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                                  UiPalette::v4(won ? UiPalette::Gold : UiPalette::Danger));
+            const float tw = ImGui::CalcTextSize(title).x;
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - tw) * 0.5f);
+            ImGui::TextUnformatted(title);
+            ImGui::PopStyleColor();
+            ImGui::Separator();
+            ImGui::Dummy(ImVec2(0, font * 0.4f));
+
+            auto row = [](const char* label, const char* value) {
+                ImGui::TextUnformatted(label);
+                ImGui::SameLine(ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(value).x);
+                ImGui::TextUnformatted(value);
+            };
+            char buf[32];
+            const int secs = (int)ctx.scene.matchTime();
+            std::snprintf(buf, sizeof(buf), "%d:%02d", secs / 60, secs % 60);
+            row("Время боя", buf);
+            const float chp = ctx.scene.coreHp(), cmax = ctx.scene.coreMaxHp();
+            if (chp >= 0.0f && cmax > 0.0f) {
+                int pct = (int)(chp / cmax * 100.0f + 0.5f);
+                if (pct < 0) pct = 0;
+                std::snprintf(buf, sizeof(buf), "%d%%", pct);
+                row("Ядро осталось", buf);
+            }
+
+            // CTA к низу панели.
+            const float ctaH = font * 2.2f;
+            float y = ImGui::GetWindowHeight() - (ctaH + font * 1.0f);
+            if (y > ImGui::GetCursorPosY()) ImGui::SetCursorPosY(y);
+            if (ctx.btn("В главное меню", ImVec2(-1, ctaH))) {
+                if (ctx.scene.netConnected()) ctx.scene.leaveGame();
+                setMode(UiMode::MainMenu);
+            }
         }
         ctx.endPanel();
     }
@@ -212,6 +254,19 @@ void drawResultsOverlay(UiShell::Ctx& ctx) {
 
 void build(GameUiState& state, Scene& scene, const UiSkin::Assets& skin) {
     Ctx ctx{state, scene, skin};
+
+    // Вход в бой сбрасывает часы боя (для корректного «время боя» на экране итога при любом пути).
+    static UiMode s_lastMode = UiMode::MainMenu;
+    if (g_mode == UiMode::Battle && s_lastMode != UiMode::Battle) scene.resetMatchClock();
+    s_lastMode = g_mode;
+
+    // Матч завершён -> оверлей итога поверх боя. Авто-рестарт (фаза снова Playing) снимает его.
+    // Паузу игрока не трогаем (её ставит игрок вручную).
+    if (g_mode == UiMode::Battle) {
+        const int ph = scene.matchPhase();
+        if (ph != 0 && g_overlay == UiOverlay::None) g_overlay = UiOverlay::Results;
+        else if (ph == 0 && g_overlay == UiOverlay::Results) g_overlay = UiOverlay::None;
+    }
 
     switch (g_mode) {
         case UiMode::Loading: {
