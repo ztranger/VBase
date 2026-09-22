@@ -975,10 +975,35 @@ aarch64 чисто, editor-смоук 5 c жив без краша. Переме
 `--giztest` **OK** (maxErr 0 — фикспойнт `matrix→извлечение→matrix` на углах 0..350°, вкл. >90°, и
 масштабах 0.5/1/2.5); `--savetest` OK; window-смоук 5 c жив. Интерактив — playtest.
 
-**Дальше (фаза 2):** добавить/удалить объект + браузер `.glb` (drag-place) → правка material/shader →
-снап к сетке. **Фаза 3:** пикинг/правка зданий/спавнеров/колайдеров/света/камеры + undo/redo +
-non-uniform scale (потребует `ObjectSpec.scale` -> Vec3 + формат) + полный 3-осевой поворот
-(quaternion/матрица в `Transform`).
+**Фаза 2, шаг 2 — add/delete + браузер `.glb` ✅ СДЕЛАНО:** браузер ассетов — `std::filesystem`
+сканит `assets/models/**` на `.glb/.gltf` (относительные пути), список в панели; клик → **добавить**
+объект в фокус камеры (`cam.target`). Delete/кнопка → **удалить** выбранный. Синхрон doc↔Scene через
+`specIndex` (= индекс в `doc.objects`): add — в конец (`Scene::editorAddObjectModel`: грузит glTF,
+создаёт mesh/material/AABB, `GameObject` в конец), delete — `Scene::editorRemoveObject` (убрать +
+сдвинуть большие индексы вниз, в такт `erase` в `doc.objects`). Save сериализует `doc` — новые/удалённые
+объекты попадают корректно. **Проверено:** `editor`/desktop `BUILD_OK`, `Scene.cpp` aarch64 чисто,
+editor-смоук 5 c жив, браузер нашёл 10 моделей. Интерактив (добавить из браузера, Del) — playtest.
+
+**Фаза 2, шаг 3 — снап к сетке + дублирование ✅ СДЕЛАНО:** снап через параметр `snap` в
+`ImGuizmo::Manipulate` (чекбокс + шаг; по умолчанию шаг = клетка сетки `doc.grid.cell`): перемещение
+снапится к шагу, вращение — 15°, масштаб — 0.25. Дублирование (кнопка / **Ctrl+D**): копия выбранного
+(`model/tex/shader/spin` из `doc`, ЖИВОЙ трансформ из Scene, т.к. `doc` синкается на Save), сдвиг по X,
+через общий `addObjectSpec` (в `doc` + живую сцену, с rot/scale копии). Только glTF-модели.
+**Проверено:** `editor` `BUILD_OK`, смоук 5 c жив (шаг тронул только `editor/main.cpp`).
+
+**Фаза 2, шаг 4 — правка material/shader ✅ СДЕЛАНО:** для glTF-модели в инспекторе — выбор шейдера
+(Lit/Unlit/Phong) и **тинт-цвет** (умножается на текстуру). `ObjectSpec` дополнен `Vec3 color{1,1,1}`
+(ключ `color r g b` в директиве `object model`, сериализуется при != белого — round-trip идемпотентен,
+`[SceneRoundTrip]` 31/31). `GameObject` дополнен `albedo` (хэндл текстуры), чтобы `Scene::
+editorSetObjectMaterial` пересобирал материал под новый shader/цвет, сохраняя текстуру. Кэш glb
+разделён: geometry+albedo кэшируются по пути, материал создаётся на объект (shader/color свои).
+**Проверено:** editor/desktop/server `BUILD_OK`, `Scene.cpp`/`SceneLoader.cpp` aarch64 чисто,
+`--selftest` 31/31 (round-trip с новым полем), editor-смоук 5 c жив.
+
+Итог фазы 2: гизмо перемещение/вращение-Y/масштаб + снап, add/delete/дублирование, браузер `.glb`,
+правка shader/тинта, Save. **Фаза 3 (по желанию):** пикинг/правка зданий/спавнеров/колайдеров/света/
+камеры; undo/redo; non-uniform scale (`ObjectSpec.scale` -> Vec3 + формат); полный 3-осевой поворот
+(quaternion/матрица в `Transform`); внешняя текстура-оверрайд объекта.
 
 ## Принцип
 

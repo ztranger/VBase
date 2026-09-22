@@ -10,10 +10,13 @@
 #include <windows.h>
 #endif
 
+#include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <string>
@@ -28,6 +31,7 @@
 #include "engine/core/MathUtil.h"
 #include "engine/core/Renderer.h"
 #include "engine/render/GlRenderer.h"
+#include "game/GameTypes.h"  // EntityType (типы зданий)
 #include "game/Scene.h"
 #include "game/SceneDesc.h"
 #include "game/SceneLoader.h"
@@ -69,6 +73,17 @@ struct OrbitCamera {
         if (distance > 300.0f) distance = 300.0f;
     }
 };
+
+const char* buildingTypeName(int t) {
+    switch ((EntityType)t) {
+        case EntityType::Core:      return "Ядро";
+        case EntityType::Generator: return "Генератор";
+        case EntityType::Storage:   return "Склад";
+        case EntityType::Spawner:   return "Спавнер";
+        case EntityType::Tower:     return "Башня";
+        default:                    return "?";
+    }
+}
 
 }  // namespace
 
@@ -179,12 +194,41 @@ int main(int argc, char** argv) {
     std::printf("Редактор: сцена %s загружена%s.\n", scenePath.c_str(),
                 docOk ? "" : " (СЫРОЙ ПАРС НЕ УДАЛСЯ — Save отключён)");
 
+    // Браузер ассетов: все .glb/.gltf под assets/models/ (относительные пути для директивы object).
+    std::vector<std::string> glbFiles;
+    {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        const fs::path root = fs::path(assetsDir) / "models";
+        if (fs::exists(root, ec)) {
+            for (fs::recursive_directory_iterator it(root, ec), end; it != end; it.increment(ec)) {
+                if (ec) break;
+                if (!it->is_regular_file(ec)) continue;
+                std::string ext = it->path().extension().string();
+                for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+                if (ext != ".glb" && ext != ".gltf") continue;
+                glbFiles.push_back(fs::relative(it->path(), fs::path(assetsDir), ec).generic_string());
+            }
+        }
+        std::sort(glbFiles.begin(), glbFiles.end());
+        std::printf("Редактор: найдено %u моделей в assets/models/\n", (unsigned)glbFiles.size());
+    }
+
     OrbitCamera cam;
-    int selected = -1;         // specIndex выбранного объекта (-1 = нет)
+    // Выделение: категория + индекс. Объект — specIndex в doc.objects; здание — индекс в
+    // doc.buildings (== sceneDesc_.buildings); спавн — индекс в doc.spawns.
+    enum class SelKind { None, Object, Building, Spawn };
+    SelKind selKind = SelKind::None;
+    int selIdx = -1;
+    auto deselect = [&]() { selKind = SelKind::None; selIdx = -1; };
     // Режим гизмо. Вращение — только Y (сцены/формат используют Y-рот; полный 3-осевой euler
     // разошёлся бы с порядком Transform::matrix() -> дрейф). Масштаб — равномерный (SCALEU),
-    // т.к. ObjectSpec.scale — одно число.
+    // т.к. ObjectSpec.scale — одно число. Для зданий/спавнов гизмо всегда TRANSLATE.
     ImGuizmo::OPERATION gizmoOp = ImGuizmo::TRANSLATE;
+    bool snapOn = false;                                    // снап гизмо к шагу
+    float snapMove = doc.grid.cell > 0.0f ? doc.grid.cell : 1.0f;  // шаг перемещения = клетка сетки
+    const float snapRot = 15.0f;                            // шаг вращения, градусы
+    const float snapScale = 0.25f;                          // шаг масштаба
     bool dirty = false;        // есть несохранённые правки
     std::string saveMsg;       // статус последнего Save (для панели)
     const std::string scenaFull = assetsDir + "/" + scenePath;  // куда пишем при Save
@@ -211,6 +255,89 @@ int main(int argc, char** argv) {
         } else {
             saveMsg = "Ошибка записи: " + scenaFull;
         }
+    };
+
+    // Добавить объект по готовому ObjectSpec — в doc и в живую сцену (с его rot/scale). Выделяет его.
+    auto addObjectSpec = [&](const ObjectSpec& os) {
+        const int idx = (int)doc.objects.size();
+        if (scene.editorAddObjectModel(*renderer, assets, os.model, os.modelTex, os.shader, os.pos,
+                                       idx) < 0)
+            return;  // не загрузилась — doc не трогаем
+        doc.objects.push_back(os);
+        scene.editorSetTransform(idx, os.pos, os.rot, {os.scale, os.scale, os.scale});  // rot/scale копии
+        selKind = SelKind::Object;
+        selIdx = idx;
+        dirty = true;
+    };
+
+    // Добавить свежую модель в позицию (обычно фокус камеры).
+    auto addObject = [&](const std::string& model, const Vec3& pos) {
+        ObjectSpec os;
+        os.model = model;
+        os.pos = pos;
+        os.scale = 1.0f;
+        os.shader = ShaderType::Lit;
+        addObjectSpec(os);
+    };
+
+    // Добавить здание типа type в позицию (в doc.buildings и живую сцену, 1:1). Выделяет.
+    auto addBuilding = [&](int type, const Vec3& pos) {
+        const int idx = scene.editorAddBuilding(type, pos, 0);
+        BuildingSpec b;
+        b.kind = (BuildingSpec::Kind)(
+            type == (int)EntityType::Generator ? BuildingSpec::Generator
+            : type == (int)EntityType::Storage ? BuildingSpec::Storage
+            : type == (int)EntityType::Spawner ? BuildingSpec::Spawner
+            : type == (int)EntityType::Tower   ? BuildingSpec::Tower
+                                               : BuildingSpec::Core);
+        b.pos = pos;
+        doc.buildings.push_back(b);
+        selKind = SelKind::Building;
+        selIdx = idx;
+        dirty = true;
+    };
+
+    // Добавить точку спавна.
+    auto addSpawn = [&](const Vec3& pos, int team) {
+        const int idx = scene.editorAddSpawn(pos, team);
+        SpawnSpec s;
+        s.pos = pos;
+        s.team = (uint8_t)team;
+        doc.spawns.push_back(s);
+        selKind = SelKind::Spawn;
+        selIdx = idx;
+        dirty = true;
+    };
+
+    // Удалить выделенное — из doc и живой сцены (индексы 1:1 в своей категории).
+    auto deleteSelected = [&]() {
+        if (selKind == SelKind::Object && selIdx >= 0 && selIdx < (int)doc.objects.size()) {
+            scene.editorRemoveObject(selIdx);
+            doc.objects.erase(doc.objects.begin() + selIdx);
+        } else if (selKind == SelKind::Building && selIdx >= 0 && selIdx < (int)doc.buildings.size()) {
+            scene.editorRemoveBuilding(selIdx);
+            doc.buildings.erase(doc.buildings.begin() + selIdx);
+        } else if (selKind == SelKind::Spawn && selIdx >= 0 && selIdx < (int)doc.spawns.size()) {
+            scene.editorRemoveSpawn(selIdx);
+            doc.spawns.erase(doc.spawns.begin() + selIdx);
+        } else {
+            return;
+        }
+        deselect();
+        dirty = true;
+    };
+
+    // Дублировать выбранный ОБЪЕКТ: модель/шейдер/цвет из doc, ЖИВОЙ трансформ из Scene, со сдвигом.
+    auto duplicateSelected = [&]() {
+        if (selKind != SelKind::Object || selIdx < 0 || selIdx >= (int)doc.objects.size()) return;
+        if (doc.objects[selIdx].model.empty()) return;  // дублируем только glTF-модели
+        Vec3 pos, rot, scale;
+        if (!scene.editorGetTransform(selIdx, pos, rot, scale)) return;
+        ObjectSpec os = doc.objects[selIdx];  // model/tex/shader/color/spin
+        os.pos = {pos.x + (snapOn ? snapMove : 1.0f), pos.y, pos.z};
+        os.rot = rot;
+        os.scale = scale.x;
+        addObjectSpec(os);
     };
     double prevX = 0.0, prevY = 0.0;
     glfwGetCursorPos(window, &prevX, &prevY);
@@ -260,6 +387,21 @@ int main(int argc, char** argv) {
             else if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) gizmoOp = ImGuizmo::ROTATE_Y;
             else if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS) gizmoOp = ImGuizmo::SCALEU;
         }
+        // Delete — удалить выделенное (по фронту).
+        static bool delPrev = false;
+        const bool delNow = !ImGui::GetIO().WantCaptureKeyboard && selKind != SelKind::None &&
+                            glfwGetKey(window, GLFW_KEY_DELETE) == GLFW_PRESS;
+        if (delNow && !delPrev) deleteSelected();
+        delPrev = delNow;
+
+        // Ctrl+D — дублировать выбранный объект (по фронту).
+        static bool dupPrev = false;
+        const bool dupNow = !ImGui::GetIO().WantCaptureKeyboard && selKind == SelKind::Object &&
+                           (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
+                            glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS) &&
+                           glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS;
+        if (dupNow && !dupPrev) duplicateSelected();
+        dupPrev = dupNow;
 
         double cx = 0.0, cy = 0.0;
         glfwGetCursorPos(window, &cx, &cy);
@@ -296,7 +438,14 @@ int main(int argc, char** argv) {
         if (!lmb && lmbPrev && !dragMoved && !overUi && !ImGuizmo::IsOver()) {
             Vec3 ro, rd;
             screenRay(vmat, pmat, eye, (float)cx, (float)cy, (float)fbw, (float)fbh, ro, rd);
-            selected = scene.editorPick(ro, rd);  // -1 если мимо -> снятие выделения
+            // Ближайшее среди объектов / зданий / спавнов.
+            float best = 1e30f;
+            deselect();
+            int i;
+            float t;
+            if (scene.editorPickObject(ro, rd, i, t) && t < best) { best = t; selKind = SelKind::Object; selIdx = i; }
+            if (scene.editorPickBuilding(ro, rd, i, t) && t < best) { best = t; selKind = SelKind::Building; selIdx = i; }
+            if (scene.editorPickSpawn(ro, rd, i, t) && t < best) { best = t; selKind = SelKind::Spawn; selIdx = i; }
         }
         lmbPrev = lmb;
 
@@ -307,35 +456,64 @@ int main(int argc, char** argv) {
             ImGuizmo::BeginFrame();
             ImGuizmo::SetOrthographic(false);
             ImGuizmo::SetRect(0.0f, 0.0f, ImGui::GetIO().DisplaySize.x, ImGui::GetIO().DisplaySize.y);
-            if (selected >= 0) {
-                Mat4 model;
-                if (scene.editorObjectMatrix(selected, model)) {
+            if (selKind != SelKind::None) {
+                // Модельная матрица + операция гизмо по типу выделения. Объект — полный W/E/R;
+                // здание/спавн — только перемещение (позиционные сущности).
+                Mat4 model = Mat4::translation({0.0f, 0.0f, 0.0f});
+                bool haveModel = false;
+                ImGuizmo::OPERATION op = gizmoOp;
+                if (selKind == SelKind::Object) {
+                    haveModel = scene.editorObjectMatrix(selIdx, model);
+                } else if (selKind == SelKind::Building) {
+                    int type, team; Vec3 bp;
+                    if (scene.editorBuildingInfo(selIdx, type, team, bp)) {
+                        model = Mat4::translation(bp); haveModel = true; op = ImGuizmo::TRANSLATE;
+                    }
+                } else if (selKind == SelKind::Spawn) {
+                    int team; Vec3 sp;
+                    if (scene.editorSpawnInfo(selIdx, team, sp)) {
+                        model = Mat4::translation(sp); haveModel = true; op = ImGuizmo::TRANSLATE;
+                    }
+                }
+                if (haveModel) {
                     Mat4 v = vmat, p = pmat;  // ImGuizmo пишет в model.m при перетаскивании
-                    // Перемещение — в мире, вращение/масштаб — в локале объекта.
                     const ImGuizmo::MODE mode =
-                        (gizmoOp == ImGuizmo::TRANSLATE) ? ImGuizmo::WORLD : ImGuizmo::LOCAL;
-                    if (ImGuizmo::Manipulate(v.m, p.m, gizmoOp, mode, model.m)) {
-                        // Извлекаем прямо из матрицы (точный обратный к T*Ry*S; полный 360° по Y,
-                        // без клампа euler-decompose). col0 = (m0,m1,m2) — X-базис*масштаб.
+                        (op == ImGuizmo::TRANSLATE) ? ImGuizmo::WORLD : ImGuizmo::LOCAL;
+                    const float step = (op == ImGuizmo::TRANSLATE) ? snapMove
+                                       : (op == ImGuizmo::ROTATE_Y) ? snapRot : snapScale;
+                    const float snap[3] = {step, step, step};
+                    if (ImGuizmo::Manipulate(v.m, p.m, op, mode, model.m, nullptr,
+                                             snapOn ? snap : nullptr)) {
                         const float* m = model.m;
-                        Vec3 pos, rot, scale;
-                        scene.editorGetTransform(selected, pos, rot, scale);
-                        if (gizmoOp == ImGuizmo::TRANSLATE) {
-                            pos = {m[12], m[13], m[14]};
-                        } else if (gizmoOp == ImGuizmo::ROTATE_Y) {
-                            rot.y = std::atan2(-m[2], m[0]);  // Ry: col0=(s*cosθ,0,-s*sinθ)
-                        } else {  // SCALEU: равномерный масштаб = длина базисного столбца
-                            float su = std::sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
-                            if (su < 1e-4f) su = 1e-4f;
-                            scale = {su, su, su};
+                        const Vec3 np{m[12], m[13], m[14]};
+                        if (selKind == SelKind::Object) {
+                            // Извлекаем прямо из матрицы (точный обратный к T*Ry*S; полный 360° по Y).
+                            Vec3 pos, rot, scale;
+                            scene.editorGetTransform(selIdx, pos, rot, scale);
+                            if (op == ImGuizmo::TRANSLATE) pos = np;
+                            else if (op == ImGuizmo::ROTATE_Y) rot.y = std::atan2(-m[2], m[0]);
+                            else {
+                                float su = std::sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
+                                scale = {su < 1e-4f ? 1e-4f : su, su < 1e-4f ? 1e-4f : su,
+                                         su < 1e-4f ? 1e-4f : su};
+                            }
+                            scene.editorSetTransform(selIdx, pos, rot, scale);
+                        } else if (selKind == SelKind::Building) {
+                            scene.editorSetBuildingPos(selIdx, np);
+                            if (selIdx < (int)doc.buildings.size()) doc.buildings[selIdx].pos = np;
+                        } else {  // Spawn
+                            scene.editorSetSpawnPos(selIdx, np);
+                            if (selIdx < (int)doc.spawns.size()) doc.spawns[selIdx].pos = np;
                         }
-                        scene.editorSetTransform(selected, pos, rot, scale);
                         dirty = true;
                     }
                 }
                 // Подсветка выделения — рамка мирового AABB (проекция 8 углов в экран).
                 Vec3 mn, mx;
-                if (scene.editorWorldAABB(selected, mn, mx)) {
+                bool haveBox = (selKind == SelKind::Object)   ? scene.editorWorldAABB(selIdx, mn, mx)
+                             : (selKind == SelKind::Building) ? scene.editorBuildingWorldAABB(selIdx, mn, mx)
+                                                              : scene.editorSpawnWorldAABB(selIdx, mn, mx);
+                if (haveBox) {
                     const Mat4 vp = pmat * vmat;
                     auto proj = [&](Vec3 wp, ImVec2& out) -> bool {
                         const float* m = vp.m;
@@ -382,11 +560,16 @@ int main(int argc, char** argv) {
                 if (ImGui::RadioButton("Вращение Y (E)", opIdx == 1)) gizmoOp = ImGuizmo::ROTATE_Y;
                 ImGui::SameLine();
                 if (ImGui::RadioButton("Масштаб (R)", opIdx == 2)) gizmoOp = ImGuizmo::SCALEU;
+                ImGui::Checkbox("Снап к сетке", &snapOn);
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(90.0f);
+                ImGui::DragFloat("шаг", &snapMove, 0.1f, 0.1f, 100.0f);
+                ImGui::TextDisabled("снап: перемещ. — шаг, вращ. — 15°, масштаб — 0.25");
                 ImGui::Separator();
-                if (selected >= 0) {
+                if (selKind == SelKind::Object && selIdx >= 0 && selIdx < (int)doc.objects.size()) {
                     Vec3 pos, rot, scale;
-                    scene.editorGetTransform(selected, pos, rot, scale);
-                    ImGui::Text("Объект #%d", selected);
+                    scene.editorGetTransform(selIdx, pos, rot, scale);
+                    ImGui::Text("Объект #%d", selIdx);
                     bool ch = false;
                     ch |= ImGui::DragFloat3("Позиция", &pos.x, 0.05f);
                     float yawDeg = rot.y * (180.0f / 3.14159265358979f);
@@ -400,15 +583,81 @@ int main(int argc, char** argv) {
                         ch = true;
                     }
                     if (ch) {
-                        scene.editorSetTransform(selected, pos, rot, scale);
+                        scene.editorSetTransform(selIdx, pos, rot, scale);
                         dirty = true;
                     }
-                    ImGui::TextDisabled("Тащи гизмо или правь поля");
+                    if (!doc.objects[selIdx].model.empty()) {  // material/shader — только для glTF-моделей
+                        ObjectSpec& os = doc.objects[selIdx];
+                        const char* shaders[] = {"Lit", "Unlit", "Phong"};  // порядок ShaderType
+                        int sh = (int)os.shader;
+                        if (ImGui::Combo("Шейдер", &sh, shaders, 3)) {
+                            os.shader = (ShaderType)sh;
+                            scene.editorSetObjectMaterial(*renderer, selIdx, os.shader, os.color);
+                            dirty = true;
+                        }
+                        if (ImGui::ColorEdit3("Тинт", &os.color.x)) {
+                            scene.editorSetObjectMaterial(*renderer, selIdx, os.shader, os.color);
+                            dirty = true;
+                        }
+                    }
+                    if (ImGui::Button("Дублировать (Ctrl+D)")) duplicateSelected();
+                    ImGui::SameLine();
+                    if (ImGui::Button("Удалить (Del)")) deleteSelected();
+                } else if (selKind == SelKind::Building) {
+                    int type, team; Vec3 bp;
+                    if (scene.editorBuildingInfo(selIdx, type, team, bp)) {
+                        ImGui::Text("Здание #%d — %s", selIdx, buildingTypeName(type));
+                        if (ImGui::DragFloat3("Позиция", &bp.x, 0.05f)) {
+                            scene.editorSetBuildingPos(selIdx, bp);
+                            if (selIdx < (int)doc.buildings.size()) doc.buildings[selIdx].pos = bp;
+                            dirty = true;
+                        }
+                        if (ImGui::DragInt("Команда", &team, 0.05f, 0, 2)) {
+                            scene.editorSetBuildingTeam(selIdx, team);
+                            if (selIdx < (int)doc.buildings.size()) doc.buildings[selIdx].team = (uint8_t)team;
+                            dirty = true;
+                        }
+                        if (ImGui::Button("Удалить (Del)")) deleteSelected();
+                        ImGui::TextDisabled("Параметры (hp/rate/…) — из config/buildings.cfg");
+                    }
+                } else if (selKind == SelKind::Spawn) {
+                    int team; Vec3 sp;
+                    if (scene.editorSpawnInfo(selIdx, team, sp)) {
+                        ImGui::Text("Точка спавна #%d", selIdx);
+                        if (ImGui::DragFloat3("Позиция", &sp.x, 0.05f)) {
+                            scene.editorSetSpawnPos(selIdx, sp);
+                            if (selIdx < (int)doc.spawns.size()) doc.spawns[selIdx].pos = sp;
+                            dirty = true;
+                        }
+                        if (ImGui::DragInt("Команда", &team, 0.05f, 0, 2)) {
+                            scene.editorSetSpawnTeam(selIdx, team);
+                            if (selIdx < (int)doc.spawns.size()) doc.spawns[selIdx].team = (uint8_t)team;
+                            dirty = true;
+                        }
+                        if (ImGui::Button("Удалить (Del)")) deleteSelected();
+                    }
                 } else {
-                    ImGui::TextDisabled("Кликни объект, чтобы выбрать");
+                    ImGui::TextDisabled("Кликни объект / здание / спавн, чтобы выбрать");
                 }
                 ImGui::Separator();
-                ImGui::TextDisabled("Дальше: вращение/масштаб, добавить/удалить, Save");
+                ImGui::TextUnformatted("Добавить в фокус камеры:");
+                if (ImGui::Button("Ядро")) addBuilding((int)EntityType::Core, cam.target);
+                ImGui::SameLine();
+                if (ImGui::Button("Генератор")) addBuilding((int)EntityType::Generator, cam.target);
+                ImGui::SameLine();
+                if (ImGui::Button("Склад")) addBuilding((int)EntityType::Storage, cam.target);
+                if (ImGui::Button("Спавнер")) addBuilding((int)EntityType::Spawner, cam.target);
+                ImGui::SameLine();
+                if (ImGui::Button("Башня")) addBuilding((int)EntityType::Tower, cam.target);
+                ImGui::SameLine();
+                if (ImGui::Button("Точка спавна")) addSpawn(cam.target, 0);
+                ImGui::Separator();
+                ImGui::TextUnformatted("Объект (.glb) в фокус камеры:");
+                ImGui::BeginChild("glblist", ImVec2(0, 130), true);
+                if (glbFiles.empty()) ImGui::TextDisabled("Нет .glb в assets/models/");
+                for (const std::string& f : glbFiles)
+                    if (ImGui::Selectable(f.c_str())) addObject(f, cam.target);
+                ImGui::EndChild();
             }
             ImGui::End();
         };

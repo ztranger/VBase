@@ -46,6 +46,7 @@ struct ObjectSpec {
     std::string model;     // путь к .glb/.gltf (пусто = процедурный меш по mesh)
     std::string modelTex;  // необяз. внешняя текстура-атлас; пусто = встроенная из glb
     ShaderType shader = ShaderType::Lit;  // шейдер для model-объекта (lit/unlit/phong)
+    Vec3 color{1.0f, 1.0f, 1.0f};  // тинт material (умножается на текстуру); только для model-объекта
     Vec3 pos{0.0f, 0.0f, 0.0f};
     Vec3 rot{0.0f, 0.0f, 0.0f};
     float scale = 1.0f;    // равномерный масштаб

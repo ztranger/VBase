@@ -230,10 +230,12 @@ void Scene::createGpuResources(Renderer& renderer, AssetSource& assets) {
     // --- Объекты (обычные и кольцевые) ---
     // Кэш статичных glTF-пропсов (mesh+material) по ключу path|tex|shader: уровень ставит много
     // копий одного ассета — грузим/заливаем в GPU один раз.
-    struct GlbEntry { MeshHandle mesh = 0; MaterialHandle mat = 0; Vec3 mn, mx; };
+    // Кэшируем geometry + альбедо по glb-пути|tex (материал создаём отдельно — он зависит ещё от
+    // shader/color, которые правит редактор поштучно).
+    struct GlbEntry { MeshHandle mesh = 0; TextureHandle albedo = 0; Vec3 mn, mx; bool ok = false; };
     std::unordered_map<std::string, GlbEntry> glbCache;
-    auto loadGlbObject = [&](const ObjectSpec& os) -> GlbEntry {
-        const std::string key = os.model + "|" + os.modelTex + "|" + std::to_string((int)os.shader);
+    auto loadGlb = [&](const ObjectSpec& os) -> GlbEntry {
+        const std::string key = os.model + "|" + os.modelTex;
         auto it = glbCache.find(key);
         if (it != glbCache.end()) return it->second;
         GlbEntry res;
@@ -243,18 +245,13 @@ void Scene::createGpuResources(Renderer& renderer, AssetSource& assets) {
         if (loadGltfStatic(assets, os.model.c_str(), md, embedded, hasTex)) {
             res.mesh = renderer.createMesh(md);
             aabbOf(md, res.mn, res.mx);
-            TextureHandle tex = 0;
             if (!os.modelTex.empty()) {  // внешняя текстура-атлас переопределяет встроенную
                 TextureData ext;
-                if (loadImageAsset(assets, os.modelTex.c_str(), ext)) tex = renderer.createTexture(ext);
+                if (loadImageAsset(assets, os.modelTex.c_str(), ext)) res.albedo = renderer.createTexture(ext);
             } else if (hasTex) {
-                tex = renderer.createTexture(embedded);
+                res.albedo = renderer.createTexture(embedded);
             }
-            MaterialDesc mat;
-            mat.shader = os.shader;
-            mat.baseColor = {1.0f, 1.0f, 1.0f};  // цвет берётся из текстуры
-            mat.albedo = tex;
-            res.mat = renderer.createMaterial(mat);
+            res.ok = true;
         } else {
             LOGW("Объект: glTF-модель %s не загрузилась — пропущен", os.model.c_str());
         }
@@ -267,14 +264,20 @@ void Scene::createGpuResources(Renderer& renderer, AssetSource& assets) {
         const ObjectSpec& os = desc.objects[si];
         MeshHandle mh = 0;
         MaterialHandle mah = 0;
+        TextureHandle alb = 0;
         Vec3 aabbMn{0.0f, 0.0f, 0.0f}, aabbMx{0.0f, 0.0f, 0.0f};
-        if (!os.model.empty()) {  // glTF-декор: своя geometry + материал со встроенной текстурой
-            GlbEntry e = loadGlbObject(os);
+        if (!os.model.empty()) {  // glTF-декор: своя geometry + материал (shader/color объекта)
+            GlbEntry e = loadGlb(os);
+            if (!e.ok) continue;  // не загрузилась — не плодим пустышки
             mh = e.mesh;
-            mah = e.mat;
+            alb = e.albedo;
             aabbMn = e.mn;
             aabbMx = e.mx;
-            if (mh == 0) continue;  // не загрузилась — не плодим пустышки
+            MaterialDesc mat;
+            mat.shader = os.shader;
+            mat.baseColor = os.color;  // тинт (по умолчанию белый = цвет из текстуры)
+            mat.albedo = alb;
+            mah = renderer.createMaterial(mat);
         } else {
             mh = meshH(os.mesh);
             mah = matH(os.material);
@@ -294,6 +297,7 @@ void Scene::createGpuResources(Renderer& renderer, AssetSource& assets) {
                 c.prevRotY = os.rot.y;
                 c.aabbMin = aabbMn;
                 c.aabbMax = aabbMx;
+                c.albedo = alb;
                 c.specIndex = -1;  // копии кольца не редактируются поштучно (MVP)
                 objects_.push_back(c);
             }
@@ -308,6 +312,7 @@ void Scene::createGpuResources(Renderer& renderer, AssetSource& assets) {
             o.prevRotY = os.rot.y;
             o.aabbMin = aabbMn;
             o.aabbMax = aabbMx;
+            o.albedo = alb;
             o.specIndex = (int)si;
             objects_.push_back(o);
         }
@@ -386,6 +391,14 @@ void Scene::createGpuResources(Renderer& renderer, AssetSource& assets) {
         md.shader = ShaderType::Unlit;
         md.baseColor = {1.0f, 0.85f, 0.30f};  // тёпло-жёлтый болт
         projMat_ = renderer.createMaterial(md);
+    }
+    // Маркер точки спавна (только редактор): маленький куб + яркий Unlit-материал (спавны невидимы).
+    editorMarkerMesh_ = renderer.createMesh(makeCube(0.8f));
+    {
+        MaterialDesc md;
+        md.shader = ShaderType::Unlit;
+        md.baseColor = {0.35f, 0.85f, 1.0f};  // циан-маркер
+        editorMarkerMat_ = renderer.createMaterial(md);
     }
     // Тайл подсветки сетки: плоскость чуть меньше клетки — зазоры дают линии сетки. Один меш
     // инстансится на все клетки (батч по mesh+material), поэтому цвет — в материале, не в тайле.
@@ -615,10 +628,24 @@ RenderFrame Scene::renderEditor(const Mat4& view, const Mat4& proj, const Vec3& 
             frame.items.push_back(
                 {v.mesh, v.material, Mat4::translation(b.pos + Vec3{0.0f, v.yOffset, 0.0f})});
     }
+    // Маркеры точек спавна (невидимы в игре) — маленькие кубы, чтобы их можно было выбрать/двигать.
+    if (editorMarkerMesh_ != 0)
+        for (const SpawnSpec& s : sceneDesc_.spawns)
+            frame.items.push_back({editorMarkerMesh_, editorMarkerMat_,
+                                   Mat4::translation(s.pos + Vec3{0.0f, 0.4f, 0.0f})});
     return frame;
 }
 
 namespace {
+// Локальный AABB меша (перебор вершин).
+void aabbOfMesh(const MeshData& md, Vec3& mn, Vec3& mx) {
+    if (md.vertices.empty()) { mn = mx = Vec3{0.0f, 0.0f, 0.0f}; return; }
+    mn = mx = Vec3{md.vertices[0].px, md.vertices[0].py, md.vertices[0].pz};
+    for (const Vertex& v : md.vertices) {
+        mn.x = std::min(mn.x, v.px); mn.y = std::min(mn.y, v.py); mn.z = std::min(mn.z, v.pz);
+        mx.x = std::max(mx.x, v.px); mx.y = std::max(mx.y, v.py); mx.z = std::max(mx.z, v.pz);
+    }
+}
 // Мировой AABB объекта: 8 углов локального AABB через модельную матрицу -> охватывающий бокс.
 void worldAabb(const Mat4& m, const Vec3& lmn, const Vec3& lmx, Vec3& wmn, Vec3& wmx) {
     bool first = true;
@@ -652,19 +679,52 @@ float rayAabb(const Vec3& ro, const Vec3& rd, const Vec3& mn, const Vec3& mx) {
     }
     return (tmax < 0.0f) ? -1.0f : (tmin >= 0.0f ? tmin : tmax);
 }
+// Пересечение луча со сферой (center,r). Возвращает t входа (>=0) или -1.
+float raySphere(const Vec3& ro, const Vec3& rd, const Vec3& c, float r) {
+    Vec3 oc = ro - c;
+    float b = dot(oc, rd);
+    float cc = dot(oc, oc) - r * r;
+    float disc = b * b - cc;
+    if (disc < 0.0f) return -1.0f;
+    float t = -b - std::sqrt(disc);
+    if (t < 0.0f) t = -b + std::sqrt(disc);
+    return t < 0.0f ? -1.0f : t;
+}
+// EntityType по типу здания сцены (для визуала/пикинга).
+EntityType buildingType(BuildingSpec::Kind k) {
+    switch (k) {
+        case BuildingSpec::Generator: return EntityType::Generator;
+        case BuildingSpec::Storage:   return EntityType::Storage;
+        case BuildingSpec::Spawner:   return EntityType::Spawner;
+        case BuildingSpec::Tower:     return EntityType::Tower;
+        case BuildingSpec::Core:      return EntityType::Core;
+    }
+    return EntityType::Core;
+}
+BuildingSpec::Kind buildingKind(int type) {
+    switch ((EntityType)type) {
+        case EntityType::Generator: return BuildingSpec::Generator;
+        case EntityType::Storage:   return BuildingSpec::Storage;
+        case EntityType::Spawner:   return BuildingSpec::Spawner;
+        case EntityType::Tower:     return BuildingSpec::Tower;
+        default:                    return BuildingSpec::Core;
+    }
+}
 }  // namespace
 
-int Scene::editorPick(const Vec3& rayOrigin, const Vec3& rayDir) const {
+bool Scene::editorPickObject(const Vec3& ro, const Vec3& rd, int& idx, float& t) const {
     int best = -1;
     float bestT = 1e30f;
     for (const GameObject& o : objects_) {
         if (o.specIndex < 0) continue;  // редактируем только одиночные объекты
         Vec3 wmn, wmx;
         worldAabb(o.transform.matrix(), o.aabbMin, o.aabbMax, wmn, wmx);
-        float t = rayAabb(rayOrigin, rayDir, wmn, wmx);
-        if (t >= 0.0f && t < bestT) { bestT = t; best = o.specIndex; }
+        float th = rayAabb(ro, rd, wmn, wmx);
+        if (th >= 0.0f && th < bestT) { bestT = th; best = o.specIndex; }
     }
-    return best;
+    idx = best;
+    t = bestT;
+    return best >= 0;
 }
 
 bool Scene::editorObjectMatrix(int specIndex, Mat4& out) const {
@@ -702,6 +762,173 @@ bool Scene::editorWorldAABB(int specIndex, Vec3& mn, Vec3& mx) const {
             return true;
         }
     return false;
+}
+
+int Scene::editorAddObjectModel(Renderer& renderer, AssetSource& assets, const std::string& model,
+                                const std::string& tex, ShaderType shader, const Vec3& pos,
+                                int specIndex) {
+    MeshData md;
+    TextureData embedded;
+    bool hasTex = false;
+    if (!loadGltfStatic(assets, model.c_str(), md, embedded, hasTex)) {
+        LOGW("Editor: модель %s не загрузилась — объект не добавлен", model.c_str());
+        return -1;
+    }
+    GameObject o;
+    o.mesh = renderer.createMesh(md);
+    TextureHandle t = 0;
+    if (!tex.empty()) {
+        TextureData ext;
+        if (loadImageAsset(assets, tex.c_str(), ext)) t = renderer.createTexture(ext);
+    } else if (hasTex) {
+        t = renderer.createTexture(embedded);
+    }
+    MaterialDesc mat;
+    mat.shader = shader;
+    mat.baseColor = {1.0f, 1.0f, 1.0f};
+    mat.albedo = t;
+    o.material = renderer.createMaterial(mat);
+    o.albedo = t;  // для последующей смены shader/color в редакторе
+    aabbOfMesh(md, o.aabbMin, o.aabbMax);
+    o.transform.position = pos;
+    o.transform.scale = {1.0f, 1.0f, 1.0f};
+    o.specIndex = specIndex;
+    objects_.push_back(o);
+    return specIndex;
+}
+
+void Scene::editorSetObjectMaterial(Renderer& renderer, int specIndex, ShaderType shader,
+                                    const Vec3& color) {
+    for (GameObject& o : objects_)
+        if (o.specIndex == specIndex) {
+            MaterialDesc mat;
+            mat.shader = shader;
+            mat.baseColor = color;
+            mat.albedo = o.albedo;  // сохраняем текстуру объекта, меняем только shader/тинт
+            o.material = renderer.createMaterial(mat);
+            return;
+        }
+}
+
+// --- Здания ---
+namespace {
+// Центр и радиус пикинга здания i (из визуала; фолбэк, если pickRadius не задан).
+float buildingPickRadius(const EntityVisual& v) { return v.pickRadius > 0.1f ? v.pickRadius : 1.2f; }
+}  // namespace
+
+bool Scene::editorPickBuilding(const Vec3& ro, const Vec3& rd, int& idx, float& t) const {
+    int best = -1;
+    float bestT = 1e30f;
+    for (size_t i = 0; i < sceneDesc_.buildings.size(); ++i) {
+        const BuildingSpec& b = sceneDesc_.buildings[i];
+        const EntityVisual& v = visual(buildingType(b.kind));
+        Vec3 c = b.pos + Vec3{0.0f, v.yOffset, 0.0f};
+        float th = raySphere(ro, rd, c, buildingPickRadius(v));
+        if (th >= 0.0f && th < bestT) { bestT = th; best = (int)i; }
+    }
+    idx = best;
+    t = bestT;
+    return best >= 0;
+}
+
+bool Scene::editorBuildingInfo(int i, int& type, int& team, Vec3& pos) const {
+    if (i < 0 || i >= (int)sceneDesc_.buildings.size()) return false;
+    const BuildingSpec& b = sceneDesc_.buildings[i];
+    type = (int)buildingType(b.kind);
+    team = (int)b.team;
+    pos = b.pos;
+    return true;
+}
+
+void Scene::editorSetBuildingPos(int i, const Vec3& pos) {
+    if (i >= 0 && i < (int)sceneDesc_.buildings.size()) sceneDesc_.buildings[i].pos = pos;
+}
+
+void Scene::editorSetBuildingTeam(int i, int team) {
+    if (i >= 0 && i < (int)sceneDesc_.buildings.size()) sceneDesc_.buildings[i].team = (uint8_t)team;
+}
+
+bool Scene::editorBuildingWorldAABB(int i, Vec3& mn, Vec3& mx) const {
+    if (i < 0 || i >= (int)sceneDesc_.buildings.size()) return false;
+    const BuildingSpec& b = sceneDesc_.buildings[i];
+    const EntityVisual& v = visual(buildingType(b.kind));
+    float r = buildingPickRadius(v);
+    Vec3 c = b.pos + Vec3{0.0f, v.yOffset, 0.0f};
+    mn = c - Vec3{r, r, r};
+    mx = c + Vec3{r, r, r};
+    return true;
+}
+
+int Scene::editorAddBuilding(int type, const Vec3& pos, int team) {
+    BuildingSpec b;
+    b.kind = buildingKind(type);
+    b.pos = pos;
+    b.team = (uint8_t)team;
+    sceneDesc_.buildings.push_back(b);
+    return (int)sceneDesc_.buildings.size() - 1;
+}
+
+void Scene::editorRemoveBuilding(int i) {
+    if (i >= 0 && i < (int)sceneDesc_.buildings.size())
+        sceneDesc_.buildings.erase(sceneDesc_.buildings.begin() + i);
+}
+
+// --- Точки спавна ---
+bool Scene::editorPickSpawn(const Vec3& ro, const Vec3& rd, int& idx, float& t) const {
+    int best = -1;
+    float bestT = 1e30f;
+    for (size_t i = 0; i < sceneDesc_.spawns.size(); ++i) {
+        Vec3 c = sceneDesc_.spawns[i].pos + Vec3{0.0f, 0.4f, 0.0f};
+        float th = raySphere(ro, rd, c, 0.7f);
+        if (th >= 0.0f && th < bestT) { bestT = th; best = (int)i; }
+    }
+    idx = best;
+    t = bestT;
+    return best >= 0;
+}
+
+bool Scene::editorSpawnInfo(int i, int& team, Vec3& pos) const {
+    if (i < 0 || i >= (int)sceneDesc_.spawns.size()) return false;
+    team = (int)sceneDesc_.spawns[i].team;
+    pos = sceneDesc_.spawns[i].pos;
+    return true;
+}
+
+void Scene::editorSetSpawnPos(int i, const Vec3& pos) {
+    if (i >= 0 && i < (int)sceneDesc_.spawns.size()) sceneDesc_.spawns[i].pos = pos;
+}
+
+void Scene::editorSetSpawnTeam(int i, int team) {
+    if (i >= 0 && i < (int)sceneDesc_.spawns.size()) sceneDesc_.spawns[i].team = (uint8_t)team;
+}
+
+bool Scene::editorSpawnWorldAABB(int i, Vec3& mn, Vec3& mx) const {
+    if (i < 0 || i >= (int)sceneDesc_.spawns.size()) return false;
+    Vec3 c = sceneDesc_.spawns[i].pos + Vec3{0.0f, 0.4f, 0.0f};
+    mn = c - Vec3{0.6f, 0.6f, 0.6f};
+    mx = c + Vec3{0.6f, 0.6f, 0.6f};
+    return true;
+}
+
+int Scene::editorAddSpawn(const Vec3& pos, int team) {
+    SpawnSpec s;
+    s.pos = pos;
+    s.team = (uint8_t)team;
+    sceneDesc_.spawns.push_back(s);
+    return (int)sceneDesc_.spawns.size() - 1;
+}
+
+void Scene::editorRemoveSpawn(int i) {
+    if (i >= 0 && i < (int)sceneDesc_.spawns.size())
+        sceneDesc_.spawns.erase(sceneDesc_.spawns.begin() + i);
+}
+
+void Scene::editorRemoveObject(int specIndex) {
+    objects_.erase(std::remove_if(objects_.begin(), objects_.end(),
+                                  [&](const GameObject& o) { return o.specIndex == specIndex; }),
+                   objects_.end());
+    for (GameObject& o : objects_)
+        if (o.specIndex > specIndex) o.specIndex--;  // держим specIndex == индексу в doc.objects
 }
 
 void Scene::setUiScale(float s) {

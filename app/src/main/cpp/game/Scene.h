@@ -233,15 +233,48 @@ public:
     // симуляции, героя и интерполяции. Свет/тени/туман — из сцены. Только чтение (const).
     RenderFrame renderEditor(const Mat4& view, const Mat4& proj, const Vec3& eye) const;
 
-    // --- Пикинг/трансформ объектов для редактора сцен ---
-    // Все идентифицируются specIndex (индекс в sceneDesc_.objects; совпадает с сырым SceneDesc,
-    // которым редактор сохраняет). Кольцевые копии не редактируются (specIndex=-1).
-    // Луч мировой (из экрана): ближайший объект под лучом -> его specIndex; -1 если мимо.
-    int editorPick(const Vec3& rayOrigin, const Vec3& rayDir) const;
+    // --- Пикинг/трансформ для редактора сцен ---
+    // Три категории: объекты (specIndex в doc.objects), здания (индекс в sceneDesc_.buildings ==
+    // doc.buildings), точки спавна (индекс в sceneDesc_.spawns == doc.spawns). Пик-функции дают
+    // дистанцию t луча -> редактор выбирает глобально ближайшую категорию. Луч мировой.
+    bool editorPickObject(const Vec3& ro, const Vec3& rd, int& idx, float& t) const;
+    bool editorPickBuilding(const Vec3& ro, const Vec3& rd, int& idx, float& t) const;
+    bool editorPickSpawn(const Vec3& ro, const Vec3& rd, int& idx, float& t) const;
     bool editorObjectMatrix(int specIndex, Mat4& out) const;  // модельная матрица (для ImGuizmo)
     bool editorGetTransform(int specIndex, Vec3& pos, Vec3& rot, Vec3& scale) const;
     void editorSetTransform(int specIndex, const Vec3& pos, const Vec3& rot, const Vec3& scale);
     bool editorWorldAABB(int specIndex, Vec3& mn, Vec3& mx) const;  // для подсветки выделения
+    // Добавить объект-модель (glTF) в КОНЕЦ списка. specIndex — его индекс в doc.objects редактора
+    // (append -> последний). Возвращает specIndex или -1, если модель не загрузилась.
+    int editorAddObjectModel(Renderer& renderer, AssetSource& assets, const std::string& model,
+                             const std::string& tex, ShaderType shader, const Vec3& pos,
+                             int specIndex);
+    // Удалить объект по specIndex: убрать его GameObject + сдвинуть большие индексы вниз (в такт
+    // erase в doc.objects редактора, чтобы specIndex == индексу в doc сохранялся).
+    void editorRemoveObject(int specIndex);
+    // Пересобрать материал объекта под новый shader/тинт (текстура сохраняется). Для model-объектов.
+    void editorSetObjectMaterial(Renderer& renderer, int specIndex, ShaderType shader,
+                                 const Vec3& color);
+
+    // --- Здания (sceneDesc_.buildings; редактор держит doc.buildings 1:1) ---
+    int editorBuildingCount() const { return (int)sceneDesc_.buildings.size(); }
+    // Тип (EntityType), команда и позиция здания i. false — вне диапазона.
+    bool editorBuildingInfo(int i, int& type, int& team, Vec3& pos) const;
+    void editorSetBuildingPos(int i, const Vec3& pos);
+    void editorSetBuildingTeam(int i, int team);
+    bool editorBuildingWorldAABB(int i, Vec3& mn, Vec3& mx) const;
+    int editorAddBuilding(int type, const Vec3& pos, int team);  // -> индекс нового
+    void editorRemoveBuilding(int i);
+
+    // --- Точки спавна (sceneDesc_.spawns; редактор держит doc.spawns 1:1) ---
+    int editorSpawnCount() const { return (int)sceneDesc_.spawns.size(); }
+    bool editorSpawnInfo(int i, int& team, Vec3& pos) const;
+    void editorSetSpawnPos(int i, const Vec3& pos);
+    void editorSetSpawnTeam(int i, int team);
+    bool editorSpawnWorldAABB(int i, Vec3& mn, Vec3& mx) const;
+    int editorAddSpawn(const Vec3& pos, int team);  // -> индекс нового
+    void editorRemoveSpawn(int i);
+
     float cameraDistance() const { return camera_.distance; }
     void setCameraDistance(float d) { camera_.distance = d; }
     float cameraPitch() const { return camera_.pitch; }
@@ -299,6 +332,8 @@ private:
     // в remote-цикле этим мешем/материалом (болт). Клиентская симуляция снаряда убрана.
     MeshHandle projMesh_ = 0;        // меш болта (единичный куб, масштабируется в вытянутый)
     MaterialHandle projMat_ = 0;     // материал болта (Unlit, свечение)
+    MeshHandle editorMarkerMesh_ = 0;      // маркер точки спавна (редактор)
+    MaterialHandle editorMarkerMat_ = 0;
 
     // Клиентский визуал/пикинг по типу сущности — ОДНА таблица вместо разбросанных switch
     // (рендер, пикинг, призрак стройки читают её; yOffset больше НЕ дублируется). Заполняется

@@ -44,6 +44,7 @@ struct GameObject {
     Vec3 aabbMin{0.0f, 0.0f, 0.0f};
     Vec3 aabbMax{0.0f, 0.0f, 0.0f};
     int specIndex = -1;
+    TextureHandle albedo = 0;  // альбедо модели (чтобы редактор пересобрал материал под новый шейдер/цвет)
 };
 
 // Реестр выбираемых персонажей/мобов (грузится один раз в build; индекс = charType в снапшоте).

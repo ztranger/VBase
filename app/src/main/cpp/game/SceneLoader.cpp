@@ -165,6 +165,7 @@ bool parseSceneDesc(const std::string& text, SceneDesc& out) {
                 std::string k = t[i++];
                 if (k == "mat") { if (!readStr(t, i, line, o.material)) return false; }
                 else if (k == "tex") { if (!readStr(t, i, line, o.modelTex)) return false; }
+                else if (k == "color") { if (!readVec3(t, i, line, o.color)) return false; }  // тинт model
                 else if (k == "shader") {
                     std::string s;
                     if (!readStr(t, i, line, s) || !parseShader(s, line, o.shader)) return false;
@@ -373,6 +374,8 @@ std::string serializeSceneDesc(const SceneDesc& d) {
             o << "model " << os.model;
             if (!os.modelTex.empty()) o << " tex " << os.modelTex;
             o << " shader " << shaderName(os.shader);
+            if (os.color.x != 1.0f || os.color.y != 1.0f || os.color.z != 1.0f)
+                o << " color " << fnum(os.color.x) << " " << fnum(os.color.y) << " " << fnum(os.color.z);
         } else {
             o << os.mesh;
             if (!os.material.empty()) o << " mat " << os.material;
