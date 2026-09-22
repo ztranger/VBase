@@ -239,7 +239,7 @@ bool ClientWorld::killerYaw(const std::vector<RemoteEntity>& remotes, const Vec3
     for (const RemoteEntity& r : remotes) {
         if (r.id == mobId) continue;
         EntityType t = (EntityType)r.type;
-        if (t != EntityType::Hero && t != EntityType::Tower) continue;
+        if (t != EntityType::Hero && t != EntityType::Tower && t != EntityType::Trap) continue;
         consider(r.buffer.empty() ? r.ch.position : r.buffer.back().pos);
     }
     if (!have) return false;

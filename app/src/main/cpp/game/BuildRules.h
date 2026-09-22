@@ -8,13 +8,16 @@
 // совпадать с сервером»). Платформонезависимо: без рендера/платформы.
 
 // Занимает ли тип клетку сетки (проверка коллизии размещения на сервере). Спавнер занимает.
+// Ловушка (Trap) — тоже: на одной клетке нельзя ставить две постройки, хотя путь она не блокирует.
 inline bool isBuildingType(EntityType t) {
     return t == EntityType::Generator || t == EntityType::Storage ||
-           t == EntityType::Spawner || t == EntityType::Tower || t == EntityType::Core;
+           t == EntityType::Spawner || t == EntityType::Tower || t == EntityType::Core ||
+           t == EntityType::Trap;
 }
 
 // Блокирует ли тип путь мобов (футпринт + occupancy навсетки). Спавнер — НЕТ (из него
-// выходят враги), враг/герой — тоже нет. Занимает клетку в поле потока и в предсказании героя.
+// выходят враги), враг/герой — тоже нет. Ловушка (Trap) — НЕТ: мобы проходят по ней (в этом
+// весь смысл). Занимает клетку в поле потока и в предсказании героя.
 inline bool blocksPath(EntityType t) {
     return t == EntityType::Generator || t == EntityType::Storage ||
            t == EntityType::Tower || t == EntityType::Core;

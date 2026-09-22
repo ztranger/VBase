@@ -26,7 +26,9 @@ constexpr float kTickDt = 1.0f / kTickHz;
 // v4: атака — InputMsg.attack + EntityState.attackT (дискретная анимация каста).
 // v5: выбор персонажа — InputMsg.charType + EntityState.charType (индекс модели в ростере).
 // v6: снаряды башен как сущность (EntityType::Projectile в снапшотах).
-constexpr uint32_t kProtocolVersion = 6;
+// v7: виды башен/ловушек — MSG_BUILD получил байт вида (kind), новые MSG_UPGRADE/MSG_DEMOLISH;
+//     у Tower/Trap EntityState.charType кодирует вид (младший ниббл) + тир (старший). EntityType::Trap.
+constexpr uint32_t kProtocolVersion = 7;
 
 // Жёсткий предел числа сущностей в мире. Страховка: (1) от бесконтрольного роста/DoS (спавн
 // врагов/снарядов/зданий на нём стопается), (2) от переполнения счётчиков снапшота — они uint16,
@@ -74,7 +76,10 @@ public:
 
     void sendInput(const InputCommand& cmd);
     void setCharType(uint8_t charType);  // выбранный персонаж (шлётся в каждом InputMsg)
-    void sendBuild(uint8_t buildType, int cellX, int cellZ);  // запрос постройки (надёжно)
+    // Запрос постройки (надёжно). Для Tower/Trap `kind` — вид из towers.cfg (иначе игнорируется).
+    void sendBuild(uint8_t buildType, uint8_t kind, int cellX, int cellZ);
+    void sendUpgrade(uint32_t targetId);   // апгрейд башни/ловушки (надёжно)
+    void sendDemolish(uint32_t targetId);  // снос своей постройки с возвратом ресурса (надёжно)
     // Отправить произвольные байты серверу (надёжно). ТОЛЬКО для негативных тестов протокола
     // (усечённые/раздутые/неизвестные сообщения) — обычный код шлёт типизированные send*.
     void debugSendRaw(const void* data, size_t len);

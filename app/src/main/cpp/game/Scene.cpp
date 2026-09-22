@@ -13,6 +13,7 @@
 #include "engine/assets/Assets.h"
 #include "engine/physics/CollisionWorld.h"
 #include "game/CharacterRoster.h"
+#include "game/TowerRoster.h"
 #include "game/Grid.h"
 #include "engine/core/Log.h"
 #include "engine/core/Renderer.h"
@@ -114,6 +115,10 @@ void Scene::build(Renderer& renderer, AssetSource& assets, const char* scenePath
         if (loadCharacterRoster(assets, "config/enemies.cfg", mobRoster))
             sceneDesc_.enemyTypes = mobRoster;
     }
+
+    // Виды башен/ловушек (towers.cfg): нужны и клиенту (цена/палитра/тинт), и локальному
+    // серверу в host-режиме (host отдаёт sceneDesc_ серверу). Индекс = сетевой вид (kind).
+    loadTowerRoster(assets, "config/towers.cfg", sceneDesc_.towerTypes);
 
     // P2-12: санитизируем недоверенное описание ДО использования (сетка-делитель, коллайдеры/
     // капсула в Jolt, статы). Дальше читаем ТОЛЬКО из sceneDesc_ (уже безопасного).
@@ -352,6 +357,7 @@ void Scene::createGpuResources(Renderer& renderer, AssetSource& assets) {
                 v.pickRadius = bi.pickRadius;
                 v.pickable = true;
                 v.building = (EntityType)t != EntityType::Enemy;
+                if ((EntityType)t == EntityType::Tower) towerTex_ = tex;  // атлас для тинта видов башен
                 LOGI("Здание тип %d: модель %s (%d верш.)", t, bi.model.c_str(), (int)mesh.vertices.size());
                 continue;
             }
@@ -423,6 +429,30 @@ void Scene::createGpuResources(Renderer& renderer, AssetSource& assets) {
         loadRosterModels(renderer, assets, sceneDesc_.heroTypes, chars_);
     if (!sceneDesc_.enemyTypes.empty())
         loadRosterModels(renderer, assets, sceneDesc_.enemyTypes, mobs_);
+
+    // --- Материалы видов защиты (towers.cfg): тинт башни (модель-пилон + атлас) и болта; плита
+    // ловушки. Индекс = kind. Башни красим тинтом поверх атласа (towerTex_), ловушки/болты —
+    // сплошным цветом. Создаём даже без ростера пустыми (рендер тогда откатится на базовый). ---
+    trapMesh_ = renderer.createMesh(makeCube(1.0f));  // масштабируется в низкую плиту в рендере
+    towerKindMat_.clear();
+    projKindMat_.clear();
+    for (const TowerDesc& d : sceneDesc_.towerTypes) {
+        MaterialDesc tm;  // корпус башни/ловушки
+        if (d.entity == EntityType::Tower && towerTex_ != 0) {
+            tm.shader = ShaderType::Phong;
+            tm.albedo = towerTex_;      // атлас пилона, крашеный тинтом вида
+            tm.baseColor = d.color;
+        } else {
+            tm.shader = ShaderType::Lit;  // ловушка (или башня без атласа) — сплошной цвет
+            tm.baseColor = d.color;
+        }
+        towerKindMat_.push_back(renderer.createMaterial(tm));
+
+        MaterialDesc pm;  // болт
+        pm.shader = ShaderType::Unlit;
+        pm.baseColor = d.color;
+        projKindMat_.push_back(renderer.createMaterial(pm));
+    }
 }
 
 void Scene::editorReloadFromDesc(const SceneDesc& desc, Renderer& renderer, AssetSource& assets) {
@@ -1293,10 +1323,37 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
             if (fe != presentation_.flash.end()) applyHitFx(it, fe->second / kFlashDur);
             frame.skinned.push_back(it);
         } else if (et == EntityType::Projectile && projMesh_ != 0) {
-            // Снаряд башни (серверная сущность): тонкий вытянутый болт вдоль полёта (yaw с сервера).
+            // Снаряд (серверная сущность): тонкий вытянутый болт вдоль полёта (yaw с сервера).
+            // Цвет — по виду башни (charType); снаряд героя (0xFF) -> базовый жёлтый болт.
+            const int pk = (int)r.charType;
+            MaterialHandle pmat = (pk >= 0 && pk < (int)projKindMat_.size()) ? projKindMat_[pk] : projMat_;
             Mat4 m = Mat4::translation(r.ch.position) * Mat4::rotationY(r.ch.facingYaw) *
                      Mat4::scale({0.08f, 0.08f, 0.6f});
-            frame.items.push_back({projMesh_, projMat_, m});
+            frame.items.push_back({projMesh_, pmat, m});
+        } else if (et == EntityType::Tower) {
+            // Башня: пилон, крашеный тинтом вида (kind в младшем ниббле charType), масштаб растёт
+            // с тиром (старший ниббл). Откат на базовый материал/меш, если ростер/тинт не собран.
+            const int kind = r.charType & 0x0F;
+            int tier = (r.charType >> 4); if (tier < 1) tier = 1;
+            const EntityVisual& v = visual(EntityType::Tower);
+            if (v.mesh != 0) {
+                MaterialHandle mat = (kind < (int)towerKindMat_.size() && towerKindMat_[kind] != 0)
+                                         ? towerKindMat_[kind] : v.material;
+                const float s = 1.0f + 0.12f * (float)(tier - 1);
+                frame.items.push_back({v.mesh, mat,
+                    Mat4::translation(r.ch.position + Vec3{0.0f, v.yOffset, 0.0f}) *
+                        Mat4::scale({s, s, s})});
+            }
+        } else if (et == EntityType::Trap && trapMesh_ != 0) {
+            // Ловушка: низкая широкая плита на полу, цвет вида; тир слегка увеличивает.
+            const int kind = r.charType & 0x0F;
+            int tier = (r.charType >> 4); if (tier < 1) tier = 1;
+            MaterialHandle mat = (kind < (int)towerKindMat_.size() && towerKindMat_[kind] != 0)
+                                     ? towerKindMat_[kind] : projMat_;
+            const float w = grid_.cell * 0.72f * (1.0f + 0.12f * (float)(tier - 1));
+            frame.items.push_back({trapMesh_, mat,
+                Mat4::translation(r.ch.position + Vec3{0.0f, 0.11f, 0.0f}) *
+                    Mat4::scale({w, 0.2f, w})});
         } else {
             const EntityVisual& v = visual(et);
             if (v.mesh != 0)
@@ -1358,10 +1415,18 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
                 Vec3 c = grid_.cellCenter(cx, cz);
                 frame.items.push_back({gridTileMesh_, mat, Mat4::translation({c.x, 0.02f, c.z})});
             }
-        // Призрак типа на целевой клетке (куб/сфера), зелёный/красный.
-        const EntityVisual& v = visual(buildType_);
-        frame.items.push_back({v.mesh, valid ? ghostOkMat_ : ghostBadMat_,
-                               Mat4::translation(tcenter + Vec3{0.0f, v.yOffset, 0.0f})});
+        // Призрак типа на целевой клетке, зелёный/красный. Ловушка — плита (не в visuals_).
+        MaterialHandle gmat = valid ? ghostOkMat_ : ghostBadMat_;
+        if (buildType_ == EntityType::Trap && trapMesh_ != 0) {
+            const float w = grid_.cell * 0.72f;
+            frame.items.push_back({trapMesh_, gmat,
+                Mat4::translation(tcenter + Vec3{0.0f, 0.11f, 0.0f}) * Mat4::scale({w, 0.2f, w})});
+        } else {
+            const EntityVisual& v = visual(buildType_);
+            if (v.mesh != 0)
+                frame.items.push_back({v.mesh, gmat,
+                    Mat4::translation(tcenter + Vec3{0.0f, v.yOffset, 0.0f})});
+        }
     }
 
     // HUD ставок героя (bitmap-шрифт — только ASCII; кириллический баннер — в ImGui-слое
@@ -1529,12 +1594,21 @@ void Scene::onClick(float x, float y, float vw, float vh) {
     uint32_t best = 0;
     float bestT = 1e30f;
     for (const RemoteEntity& r : remoteEntities_) {
-        const EntityVisual& v = visual((EntityType)r.type);
-        if (!v.pickable) continue;
-        Vec3 c = r.ch.position + Vec3{0.0f, v.yOffset, 0.0f};
+        // Ловушка не в таблице визуалов (рисуется своей плитой) — пикаем её сферой над клеткой.
+        float pickRadius, yOff;
+        if ((EntityType)r.type == EntityType::Trap) {
+            pickRadius = grid_.cell * 0.6f;
+            yOff = 0.2f;
+        } else {
+            const EntityVisual& v = visual((EntityType)r.type);
+            if (!v.pickable) continue;
+            pickRadius = v.pickRadius;
+            yOff = v.yOffset;
+        }
+        Vec3 c = r.ch.position + Vec3{0.0f, yOff, 0.0f};
         Vec3 oc = origin - c;
         float b = dot(oc, dir);
-        float cc = dot(oc, oc) - v.pickRadius * v.pickRadius;
+        float cc = dot(oc, oc) - pickRadius * pickRadius;
         float disc = b * b - cc;
         if (disc < 0.0f) continue;
         float sq = std::sqrt(disc);
@@ -1554,7 +1628,7 @@ int Scene::selectedEntityType() const {
 
 const BuildingInfo* Scene::selectedInfo() const {
     int t = selectedEntityType();
-    if (t < 0) return nullptr;
+    if (t < 0 || t >= 8) return nullptr;  // Trap (8) — не в BuildingConfig (см. selectedDefense*)
     const BuildingInfo& bi = config_.get((EntityType)t);
     return bi.defined ? &bi : nullptr;
 }
@@ -1587,13 +1661,21 @@ bool Scene::computeGhost(int& cx, int& cz, Vec3& center) const {
 
     if (!grid_.inArena(cx, cz)) return false;             // вне зоны строительства
     if (cellOccupied(cx, cz)) return false;               // клетка занята зданием
-    if (resourceCurrent() < config_.get(buildType_).cost) return false;  // не хватает ресурса
+    // Цена: защита (Tower/Trap) — из ростера towers.cfg по виду; прочее — из BuildingConfig.
+    float cost;
+    if (buildType_ == EntityType::Tower || buildType_ == EntityType::Trap) {
+        if (buildKind_ < 0 || buildKind_ >= (int)sceneDesc_.towerTypes.size()) return false;
+        cost = sceneDesc_.towerTypes[buildKind_].cost;
+    } else {
+        cost = config_.get(buildType_).cost;
+    }
+    if (resourceCurrent() < cost) return false;           // не хватает ресурса
     return true;
 }
 
 bool Scene::cellOccupied(int cx, int cz) const {
     for (const RemoteEntity& r : remoteEntities_) {
-        if (!visual((EntityType)r.type).building) continue;  // враг не занимает клетку
+        if (!isBuildingType((EntityType)r.type)) continue;  // враг/снаряд не занимают клетку (Trap — да)
         if (grid_.cellOf(r.ch.position.x) == cx && grid_.cellOf(r.ch.position.z) == cz)
             return true;
     }
@@ -1611,8 +1693,9 @@ const BuildingInfo* Scene::buildInfo(int type) const {
     return &config_.get((EntityType)type);
 }
 
-void Scene::beginBuild(int type) {
+void Scene::beginBuild(int type, int kind) {
     buildType_ = (EntityType)type;
+    buildKind_ = kind;  // вид защиты (для Tower/Trap); иначе не используется
     buildActive_ = true;
     clearSelection();
 }
@@ -1622,8 +1705,118 @@ void Scene::confirmBuild() {
     int cx, cz;
     Vec3 center;
     if (!computeGhost(cx, cz, center)) return;  // невалидно — не шлём запрос
-    session_.sendBuild((uint8_t)buildType_, cx, cz);
+    session_.sendBuild((uint8_t)buildType_, (uint8_t)buildKind_, cx, cz);
     presentation_.emitSound(SoundId::Build);          // оптимистично: шлём только на валидной клетке
     presentation_.poofs.push_back({center, 0.0f});   // «пуф» размещения на центре клетки (косметика)
     // Остаёмся в режиме — можно ставить дальше (сервер авторитетно применит/отвергнет).
+}
+
+// --- Выделенная защита: апгрейд / снос ------------------------------------------------------
+bool Scene::selectedIsDefense() const {
+    int t = selectedEntityType();
+    return t == (int)EntityType::Tower || t == (int)EntityType::Trap;
+}
+
+bool Scene::selectedMine() const {
+    for (const RemoteEntity& r : remoteEntities_)
+        if (r.id == selectedId_) return r.team == localTeam_;
+    return false;
+}
+
+const char* Scene::selectedDefenseName() const {
+    if (!selectedIsDefense()) return "";
+    int kind = -1;
+    for (const RemoteEntity& r : remoteEntities_)
+        if (r.id == selectedId_) { kind = r.charType & 0x0F; break; }
+    if (kind < 0 || kind >= (int)sceneDesc_.towerTypes.size()) return "";
+    return sceneDesc_.towerTypes[kind].name.c_str();
+}
+
+int Scene::selectedTier() const {
+    if (!selectedIsDefense()) return 0;
+    for (const RemoteEntity& r : remoteEntities_)
+        if (r.id == selectedId_) { int tr = (r.charType >> 4); return tr < 1 ? 1 : tr; }
+    return 0;
+}
+
+int Scene::selectedMaxTier() const {
+    if (!selectedIsDefense()) return 0;
+    for (const RemoteEntity& r : remoteEntities_)
+        if (r.id == selectedId_) {
+            int kind = r.charType & 0x0F;
+            if (kind >= 0 && kind < (int)sceneDesc_.towerTypes.size())
+                return sceneDesc_.towerTypes[kind].maxTier;
+        }
+    return 0;
+}
+
+float Scene::selectedUpgradeCost() const {
+    if (!selectedIsDefense()) return 0.0f;
+    for (const RemoteEntity& r : remoteEntities_)
+        if (r.id == selectedId_) {
+            int kind = r.charType & 0x0F;
+            int tier = (r.charType >> 4); if (tier < 1) tier = 1;
+            if (kind < 0 || kind >= (int)sceneDesc_.towerTypes.size()) return 0.0f;
+            return towerUpgradeCost(sceneDesc_.towerTypes[kind], tier);
+        }
+    return 0.0f;
+}
+
+bool Scene::selectedCanUpgrade() const {
+    if (!selectedMine()) return false;
+    float c = selectedUpgradeCost();
+    return c > 0.0f && resourceCurrent() >= c;
+}
+
+bool Scene::selectedDemolishable() const {
+    if (!selectedMine()) return false;
+    int t = selectedEntityType();
+    return t == (int)EntityType::Tower || t == (int)EntityType::Trap ||
+           t == (int)EntityType::Generator || t == (int)EntityType::Storage;
+}
+
+float Scene::selectedRefund() const {
+    if (!selectedDemolishable()) return 0.0f;
+    // Оценка вложенного (как на сервере spent): защита — cost + сумма апгрейдов до тира; прочее —
+    // цена постройки. Возврат — kDemolishRefund (0.6). Совпадает с сервером при простой истории.
+    constexpr float kRefund = 0.6f;
+    int t = selectedEntityType();
+    if (t == (int)EntityType::Tower || t == (int)EntityType::Trap) {
+        int kind = -1, tier = 1;
+        for (const RemoteEntity& r : remoteEntities_)
+            if (r.id == selectedId_) { kind = r.charType & 0x0F; tier = (r.charType >> 4); break; }
+        if (tier < 1) tier = 1;
+        if (kind < 0 || kind >= (int)sceneDesc_.towerTypes.size()) return 0.0f;
+        const TowerDesc& d = sceneDesc_.towerTypes[kind];
+        float spent = d.cost;
+        for (int tt = 1; tt < tier; ++tt) spent += towerUpgradeCost(d, tt);
+        return spent * kRefund;
+    }
+    return config_.get((EntityType)t).cost * kRefund;
+}
+
+void Scene::upgradeSelected() {
+    if (selectedId_ != 0 && session_.connected() && selectedIsDefense()) session_.sendUpgrade(selectedId_);
+}
+
+void Scene::demolishSelected() {
+    if (selectedId_ != 0 && session_.connected() && selectedDemolishable()) session_.sendDemolish(selectedId_);
+}
+
+// --- Палитра защиты (ростер towers.cfg) -----------------------------------------------------
+int Scene::defenseCount() const { return (int)sceneDesc_.towerTypes.size(); }
+
+const char* Scene::defenseName(int kind) const {
+    if (kind < 0 || kind >= (int)sceneDesc_.towerTypes.size()) return "";
+    return sceneDesc_.towerTypes[kind].name.c_str();
+}
+
+int Scene::defenseCost(int kind) const {
+    if (kind < 0 || kind >= (int)sceneDesc_.towerTypes.size()) return 0;
+    return (int)sceneDesc_.towerTypes[kind].cost;
+}
+
+int Scene::defenseEntityType(int kind) const {
+    if (kind < 0 || kind >= (int)sceneDesc_.towerTypes.size()) return -1;
+    return (int)sceneDesc_.towerTypes[kind].entity;
 }

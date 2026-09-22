@@ -19,7 +19,11 @@ enum class EntityType : uint8_t {
     Tower,
     Core,
     Projectile,  // снаряд башни (серверная сущность): летит к цели, урон по попаданию
+    Trap,        // напольная ловушка (шипы): НЕ блокирует путь мобов, периодический AoE-урон
 };
+
+// Число значений EntityType (для массивов-по-типу и валидации сетевого тега).
+constexpr int kEntityTypeCount = (int)EntityType::Trap + 1;
 
 // Фаза матча (жизненный цикл). Глобальна (не per-entity) — шлётся в заголовке снапшота.
 enum class GamePhase : uint8_t {

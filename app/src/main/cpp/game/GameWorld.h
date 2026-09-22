@@ -46,6 +46,15 @@ struct Entity {
     uint32_t footprint = 0; // статичный бокс футпринта здания (ColliderBoxId; 0 = нет)
     uint8_t mobGoal = 0;   // enemy: MobGoal (core / building)
     bool heroStatsApplied = false; // hero: применены ли статы выбранного персонажа (по charType)
+    // Башни/ловушки: вид (kind) держим в charType (как у мобов), тир — отдельно. `spent` копит
+    // потраченный ресурс (постройка + апгрейды) для частичного возврата при сносе.
+    uint8_t tier = 1;      // tower/trap: уровень апгрейда (1..maxTier)
+    float spent = 0.0f;    // tower/trap/здание: сколько ресурса вложено (для возврата при сносе)
+    // Эффекты на враге (накладывают снаряды/ловушки; тикают в системе движения врага).
+    float slowTimer = 0.0f;   // enemy: осталось секунд замедления
+    float slowFactor = 1.0f;  // enemy: множитель скорости, пока slowTimer>0 (мороз)
+    float burnTimer = 0.0f;   // enemy: осталось секунд горения
+    float burnDps = 0.0f;     // enemy: урон/сек от горения (огонь)
 };
 
 // Буфер ввода героя. Клиент шлёт по одному InputCommand за тик; сервер НЕ перезаписывает
@@ -82,7 +91,12 @@ public:
     void setHeroCharType(uint32_t heroId, uint8_t charType);  // выбранный персонаж (для снапшота)
     // Попытка возвести здание героем на клетке сетки. Валидирует (тип buildable, хватает
     // ресурса, клетка в арене и свободна), тратит ресурс, спавнит сущность. false = отказ.
-    bool tryBuild(uint32_t builderId, EntityType type, int cellX, int cellZ);
+    // Для Tower/Trap `kind` — вид из ростера towers.cfg (для остальных типов игнорируется).
+    bool tryBuild(uint32_t builderId, EntityType type, uint8_t kind, int cellX, int cellZ);
+    // Апгрейд башни/ловушки: поднять тир за ресурс (урон/радиус растут). false = отказ.
+    bool tryUpgrade(uint32_t builderId, uint32_t targetId);
+    // Снос своей постройки (башня/ловушка/генератор/хранилище) с частичным возвратом ресурса.
+    bool tryDemolish(uint32_t builderId, uint32_t targetId);
     void step(float dt);                      // прогнать все игровые системы на шаг dt
     void writeStates(std::vector<EntityState>& out) const;  // состояние всех сущностей -> сеть
 
@@ -128,6 +142,7 @@ private:
     EnemySpec enemyStats_;                    // дефолтные hp/урон/интервал врага (fallback)
     std::vector<CharacterDesc> enemyTypes_;   // статы по типу моба (config/enemies.cfg); индекс = charType
     std::vector<CharacterDesc> heroTypes_;    // статы по типу героя (config/characters.cfg); индекс = charType
+    std::vector<TowerDesc> towerTypes_;       // виды башен/ловушек (config/towers.cfg); индекс = kind
     BuildTemplate buildTemplates_[8];         // шаблоны построек героя по EntityType (из сцены)
     float heroHp_ = 100.0f;                   // здоровье героя при спавне/респауне (из конфига)
     float heroRespawn_ = 5.0f;                // задержка респауна героя, сек (из конфига)

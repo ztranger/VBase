@@ -32,6 +32,7 @@ constexpr float kProjMaxLife = 2.5f;     // сек до самоуничтоже
 constexpr float kTowerMuzzleY = 2.2f;    // высота вылета снаряда над башней
 constexpr float kHeroMuzzleY = 1.4f;     // высота вылета снаряда героя (грудь/посох)
 constexpr float kEnemyAimY = 0.8f;       // куда целимся по высоте (центр врага)
+constexpr float kDemolishRefund = 0.6f;  // доля вложенного ресурса, возвращаемая при сносе
 
 // Очередь ввода героя (см. HeroInputBuf). Целевая глубина буфера сглаживает джиттер;
 // при бэклоге выше неё догоняем на +1 ввод/тик, чтобы буфер не превращался в постоянную
@@ -54,6 +55,19 @@ void footprintBox(const Entity& e, float cell, Vec3& center, Vec3& half) {
 bool hostile(uint8_t a, uint8_t b) {
     if (a == 0 && b == 0) return true;  // чистый PvE — прежнее поведение
     return a != b;
+}
+
+// Наложить эффект вида башни/ловушки на цель (мороз — замедление, огонь — горение). Splash —
+// позиционный, применяется в системе снарядов (нужны список врагов и точка попадания), тут нет.
+void applyTowerEffect(const TowerDesc* d, Entity& target) {
+    if (d == nullptr) return;
+    if (d->effect == TowerDesc::Effect::Slow) {
+        target.slowTimer = d->effectDur;
+        target.slowFactor = d->slowFactor;
+    } else if (d->effect == TowerDesc::Effect::Burn) {
+        target.burnTimer = d->effectDur;
+        target.burnDps = d->burnDps;
+    }
 }
 }  // namespace
 
@@ -89,6 +103,7 @@ void GameWorld::reset() {
     enemyStats_ = EnemySpec{};
     enemyTypes_.clear();
     heroTypes_.clear();
+    towerTypes_.clear();
     for (BuildTemplate& t : buildTemplates_) t = BuildTemplate{};
     heroHp_ = 100.0f;
     heroRespawn_ = 5.0f;
@@ -127,6 +142,7 @@ void GameWorld::configure(const SceneDesc& descIn) {
     enemyStats_ = desc.enemy;  // дефолтные статы врага (fallback, если нет типов)
     enemyTypes_ = desc.enemyTypes;  // статы по типу моба (индекс = charType); пусто -> все по enemyStats_
     heroTypes_ = desc.heroTypes;    // статы по типу героя (hp/speed); пусто -> дефолт (heroHp_/6)
+    towerTypes_ = desc.towerTypes;  // виды башен/ловушек (индекс = kind); пусто -> рантайм-башни недоступны
     for (int i = 0; i < 8; ++i) buildTemplates_[i] = desc.build[i];  // шаблоны построек героя
     heroHp_ = desc.player.hp;
     heroRespawn_ = desc.player.respawnDelay > 0.0f ? desc.player.respawnDelay : 5.0f;
@@ -387,42 +403,122 @@ void GameWorld::ensureFlowField(uint8_t team) {
     nav_->toBuildings[team].compute(nav_->map, buildings);
 }
 
-bool GameWorld::tryBuild(uint32_t builderId, EntityType type, int cellX, int cellZ) {
+bool GameWorld::tryBuild(uint32_t builderId, EntityType type, uint8_t kind, int cellX, int cellZ) {
     if (decided_) return false;  // матч завершён — стройку авторитетно отклоняем (UI-проверки мало)
     if (atEntityCap()) return false;  // жёсткий лимит мира
-    if ((int)type < 0 || (int)type >= 8) return false;
-    const BuildTemplate& t = buildTemplates_[(int)type];
-    if (!t.buildable) return false;          // тип нельзя ставить (нет cost в конфиге)
 
     uint8_t team = 0;  // команда строителя — из неё тратим ресурс и ей же принадлежит здание
     const Entity* builder = entityById(builderId);
     if (builder != nullptr) team = builder->team;
     if (team >= kMaxTeams) return false;
-    if (resourcePerTeam_[team] < t.cost) return false;  // не хватает ресурса команды
+
+    // Параметры: башни/ловушки — из ростера towers.cfg по виду (kind); прочее — из шаблонов сцены.
+    const bool defense = (type == EntityType::Tower || type == EntityType::Trap);
+    float cost = 0.0f, rate = 0.0f, cap = 0.0f, hp = 0.0f, damage = 0.0f, range = 0.0f;
+    if (defense) {
+        if (!towerTypes_.empty()) {
+            if (kind >= towerTypes_.size()) return false;   // вид вне ростера (недоверенный индекс)
+            const TowerDesc& d = towerTypes_[kind];
+            if (d.entity != type) return false;              // класс вида не совпал с типом (античит)
+            if (!(d.cost > 0.0f)) return false;              // вид без цены — ставить нельзя
+            TowerTierStats st = towerStatsForTier(d, 1);
+            cost = d.cost; hp = d.hp; rate = st.rate; damage = st.damage; range = st.range;
+        } else if (type == EntityType::Tower) {
+            // Легаси (нет towers.cfg): рантайм-башня из шаблона сцены. Вид фиксируем 0, тир 1.
+            const BuildTemplate& t = buildTemplates_[(int)EntityType::Tower];
+            if (!t.buildable) return false;
+            kind = 0;
+            cost = t.cost; rate = t.rate; cap = t.cap; hp = t.hp; damage = t.damage; range = t.range;
+        } else {
+            return false;  // ловушка без ростера ставиться не может
+        }
+    } else {
+        if ((int)type < 0 || (int)type >= 8) return false;
+        const BuildTemplate& t = buildTemplates_[(int)type];
+        if (!t.buildable) return false;                  // тип нельзя ставить (нет cost в конфиге)
+        cost = t.cost; rate = t.rate; cap = t.cap; hp = t.hp; damage = t.damage; range = t.range;
+    }
+    if (resourcePerTeam_[team] < cost) return false;     // не хватает ресурса команды
 
     if (!grid_.inArena(cellX, cellZ)) return false;  // вне зоны строительства
-    for (const Entity& e : entities_) {      // клетка занята другим зданием?
+    for (const Entity& e : entities_) {      // клетка занята другой постройкой?
         if (!isBuildingType(e.type)) continue;
         if (grid_.cellOf(e.move.position.x) == cellX && grid_.cellOf(e.move.position.z) == cellZ)
             return false;
     }
 
-    resourcePerTeam_[team] -= t.cost;
+    resourcePerTeam_[team] -= cost;
     Entity e;
     e.id = nextEntityId_++;
     e.type = type;
     e.team = team;
+    e.charType = defense ? kind : 0;  // вид башни/ловушки держим в charType (как тип у мобов)
+    e.tier = 1;
+    e.spent = cost;
     e.move.position = grid_.cellCenter(cellX, cellZ);
     e.move.snapshot();
-    e.rate = t.rate;
-    e.cap = t.cap;
-    e.hp = e.maxHp = t.hp;
-    e.damage = t.damage;
-    e.range = t.range;
+    e.rate = rate;
+    e.cap = cap;
+    e.hp = e.maxHp = hp;
+    e.damage = damage;
+    e.range = range;
     entities_.push_back(e);
-    attachFootprint(entities_.back());
-    LOGI("GameWorld: возведено type=%d team=%d в клетке (%d,%d), ресурс=%.0f",
-         (int)type, (int)team, cellX, cellZ, (double)resourcePerTeam_[team]);
+    if (blocksPath(type)) attachFootprint(entities_.back());  // Trap не блокирует путь — без футпринта
+    LOGI("GameWorld: возведено type=%d вид=%d team=%d в клетке (%d,%d), ресурс=%.0f",
+         (int)type, (int)kind, (int)team, cellX, cellZ, (double)resourcePerTeam_[team]);
+    return true;
+}
+
+bool GameWorld::tryUpgrade(uint32_t builderId, uint32_t targetId) {
+    if (decided_) return false;
+    Entity* e = entityById(targetId);
+    if (e == nullptr) return false;
+    if (e->type != EntityType::Tower && e->type != EntityType::Trap) return false;  // апгрейд — только защита
+    uint8_t team = 0;
+    const Entity* builder = entityById(builderId);
+    if (builder != nullptr) team = builder->team;
+    if (e->team != team) return false;               // чужое улучшать нельзя
+    if (e->charType >= towerTypes_.size()) return false;
+    const TowerDesc& d = towerTypes_[e->charType];
+    if (e->tier >= d.maxTier) return false;          // уже максимум
+    float upCost = towerUpgradeCost(d, e->tier);
+    if (upCost <= 0.0f || resourcePerTeam_[team] < upCost) return false;
+
+    resourcePerTeam_[team] -= upCost;
+    e->spent += upCost;
+    e->tier = (uint8_t)(e->tier + 1);
+    TowerTierStats st = towerStatsForTier(d, e->tier);
+    // Прочность — доля hp сохраняется при росте maxHp (не «долечиваем» и не режем в бою).
+    float frac = (e->maxHp > 0.0f) ? (e->hp / e->maxHp) : 1.0f;
+    e->maxHp = d.hp;  // прочность вида по тиру не растёт (можно завести отдельный mul при желании)
+    e->hp = e->maxHp * frac;
+    e->rate = st.rate;
+    e->damage = st.damage;
+    e->range = st.range;
+    LOGI("GameWorld: апгрейд id=%u вид=%d -> тир %d (ресурс=%.0f)",
+         targetId, (int)e->charType, (int)e->tier, (double)resourcePerTeam_[team]);
+    return true;
+}
+
+bool GameWorld::tryDemolish(uint32_t builderId, uint32_t targetId) {
+    if (decided_) return false;
+    Entity* e = entityById(targetId);
+    if (e == nullptr) return false;
+    // Сносить можно только СВОИ постройки-стройки (не ядро/спавнер/врагов).
+    const bool demolishable = e->type == EntityType::Tower || e->type == EntityType::Trap ||
+                              e->type == EntityType::Generator || e->type == EntityType::Storage;
+    if (!demolishable) return false;
+    uint8_t team = 0;
+    const Entity* builder = entityById(builderId);
+    if (builder != nullptr) team = builder->team;
+    if (e->team != team || team >= kMaxTeams) return false;
+
+    // Возврат части вложенного ресурса (клампится потолком хранилищ в системе экономики).
+    float refund = e->spent * kDemolishRefund;
+    resourcePerTeam_[team] += refund;
+    LOGI("GameWorld: снос id=%u type=%d, возврат %.0f (ресурс=%.0f)", targetId, (int)e->type,
+         (double)refund, (double)resourcePerTeam_[team]);
+    removeEntity(targetId);  // снимает футпринт/капсулу и помечает навсетку грязной (см. detachPhysics)
     return true;
 }
 
@@ -609,6 +705,18 @@ void GameWorld::step(float dt) {
         const int cz = grid_.cellOf(e.move.position.z);
         const uint8_t team = (e.team < kMaxTeams) ? e.team : 0;
 
+        // Эффекты от башен/ловушек: горение (огонь) бьёт по hp, замедление (мороз) режет скорость
+        // ниже. Таймеры тают на dt (труп убирается общей уборкой врагов в конце тика).
+        if (e.burnTimer > 0.0f) {
+            e.hp -= e.burnDps * dt;
+            e.burnTimer -= dt;
+            if (e.burnTimer < 0.0f) e.burnTimer = 0.0f;
+        }
+        if (e.slowTimer > 0.0f) {
+            e.slowTimer -= dt;
+            if (e.slowTimer <= 0.0f) { e.slowTimer = 0.0f; e.slowFactor = 1.0f; }
+        }
+
         bool smashBuildings = false;
         Vec3 dir{0.0f, 0.0f, 0.0f};
         if (nav_ != nullptr && nav_->map.cellCount() > 0) {
@@ -699,6 +807,7 @@ void GameWorld::step(float dt) {
             if (len > 1e-4f) e.move.facingYaw = std::atan2(to.x / len, to.z / len);
         } else if (dir.x != 0.0f || dir.z != 0.0f) {
             float spd = e.move.maxSpeed > 0.0f ? e.move.maxSpeed : kEnemySpeed;
+            if (e.slowTimer > 0.0f) spd *= e.slowFactor;  // мороз: замедление, пока держится эффект
             vel = dir * spd;
             e.move.facingYaw = std::atan2(dir.x, dir.z);
         }
@@ -721,13 +830,35 @@ void GameWorld::step(float dt) {
             e.move.position = e.move.position + vel * dt;
     }
 
-    // Башни: по кулдауну (rate) выпускают СНАРЯД в ближайшего врага в радиусе (range). Урон
-    // применяется при попадании (см. система снарядов ниже), а не мгновенно.
+    // Защита. Башня (Tower): по кулдауну (rate) выпускает СНАРЯД в ближайшего врага в радиусе;
+    // урон/эффект — при попадании (вид башни едет в снаряде через charType). Ловушка (Trap):
+    // по кулдауну бьёт ВСЕХ врагов в радиусе под собой (AoE-тик, без снаряда).
     std::vector<Entity> projSpawned;  // добавим ПОСЛЕ цикла — push_back инвалидировал бы итерацию
     for (Entity& tw : entities_) {
-        if (tw.type != EntityType::Tower) continue;
+        const bool isTrap = (tw.type == EntityType::Trap);
+        if (tw.type != EntityType::Tower && !isTrap) continue;
         tw.timer += dt;
         if (tw.rate <= 0.0f || tw.timer < tw.rate) continue;
+        // Вид (эффект попадания) — из ростера по charType (kind). Может быть null (сцена без ростера).
+        const TowerDesc* kd = (tw.charType < towerTypes_.size()) ? &towerTypes_[tw.charType] : nullptr;
+
+        if (isTrap) {
+            // Ловушка: AoE-тик по всем врагам в радиусе. Тикаем, только если есть кого бить
+            // (иначе держим заряд готовым — сработает, как только моб зайдёт).
+            bool hitAny = false;
+            const float r2 = tw.range * tw.range;
+            for (Entity* enp : enemies) {
+                if (enp->hp <= 0.0f || !hostile(tw.team, enp->team)) continue;
+                Vec3 dd = enp->move.position - tw.move.position;
+                if (dd.x * dd.x + dd.z * dd.z > r2) continue;
+                enp->hp -= tw.damage;
+                applyTowerEffect(kd, *enp);  // на будущее: морозная/огненная ловушка
+                hitAny = true;
+            }
+            if (hitAny) tw.timer -= tw.rate; else tw.timer = tw.rate;
+            continue;
+        }
+
         Entity* target = nullptr;
         float bestD2 = tw.range * tw.range;
         for (Entity* enp : enemies) {  // список из прохода выше (без скана всего вектора на башню)
@@ -742,6 +873,7 @@ void GameWorld::step(float dt) {
             proj.id = nextEntityId_++;
             proj.type = EntityType::Projectile;
             proj.team = tw.team;
+            proj.charType = tw.charType;  // вид башни -> эффект попадания + цвет болта у клиента
             proj.move.position = tw.move.position + Vec3{0.0f, kTowerMuzzleY, 0.0f};
             proj.move.snapshot();
             proj.damage = tw.damage;
@@ -796,6 +928,7 @@ void GameWorld::step(float dt) {
                 proj.id = nextEntityId_++;
                 proj.type = EntityType::Projectile;
                 proj.team = h->team;
+                proj.charType = 0xFF;  // снаряд героя: не вид башни -> без эффектов + свой цвет болта
                 proj.move.position = h->move.position + Vec3{0.0f, kHeroMuzzleY, 0.0f};
                 proj.move.snapshot();
                 proj.damage = h->damage;
@@ -826,6 +959,20 @@ void GameWorld::step(float dt) {
             float d = std::sqrt(to.x * to.x + to.y * to.y + to.z * to.z);
             if (d <= kProjHitRadius) {          // попадание
                 tgt->hp -= p.damage;
+                // Эффект вида (по charType снаряда): мороз/огонь — на прямую цель; сплэш — по
+                // площади вокруг неё. Снаряды героя несут charType=0xFF -> вид не найден -> без эффекта.
+                const TowerDesc* kd = (p.charType < towerTypes_.size()) ? &towerTypes_[p.charType] : nullptr;
+                applyTowerEffect(kd, *tgt);
+                if (kd != nullptr && kd->effect == TowerDesc::Effect::Splash && kd->splashRadius > 0.0f) {
+                    const float sr2 = kd->splashRadius * kd->splashRadius;
+                    const Vec3 hitPos = tgt->move.position;
+                    for (Entity& o : entities_) {
+                        if (o.type != EntityType::Enemy || o.id == p.targetId || o.hp <= 0.0f) continue;
+                        if (!hostile(p.team, o.team)) continue;
+                        Vec3 dd = o.move.position - hitPos;
+                        if (dd.x * dd.x + dd.z * dd.z <= sr2) o.hp -= p.damage;  // доп. урон по площади
+                    }
+                }
                 p.timer = kProjMaxLife;         // пометить на уборку
                 continue;
             }
@@ -947,7 +1094,12 @@ void GameWorld::writeStates(std::vector<EntityState>& out) const {
         s.hp = e.hp;
         s.aux = e.aux;
         s.attackT = e.move.attackTime;
-        s.charType = e.charType;
+        // Башня/ловушка: вид (kind) в младшем ниббле charType, тир (1..15) — в старшем. Клиент
+        // распаковывает для тинта/масштаба/панели. Прочие типы шлют charType как есть (модель/вид).
+        if (e.type == EntityType::Tower || e.type == EntityType::Trap)
+            s.charType = (uint8_t)((e.charType & 0x0F) | ((e.tier & 0x0F) << 4));
+        else
+            s.charType = e.charType;
     }
 }
 

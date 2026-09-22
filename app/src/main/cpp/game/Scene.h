@@ -80,13 +80,34 @@ public:
     const BuildingInfo* selectedInfo() const;  // тексты/параметры из конфига (или nullptr)
     float selectedAux() const;              // динамика (ресурс в хранилище и т.п.)
 
+    // Выделенная защита (башня/ловушка) — для панели апгрейда/сноса. Все -1/0/false, если
+    // выделено не то (не защита / чужое / нет ростера).
+    bool selectedIsDefense() const;         // выделена башня или ловушка
+    bool selectedMine() const;              // выделенное принадлежит моей команде
+    const char* selectedDefenseName() const;// имя вида (или "")
+    int selectedTier() const;               // тир 1..maxTier (или 0)
+    int selectedMaxTier() const;            // maxTier вида (или 0)
+    float selectedUpgradeCost() const;      // цена апгрейда (0 = нельзя/макс)
+    bool selectedCanUpgrade() const;        // тир<max И хватает ресурса
+    bool selectedDemolishable() const;      // своя башня/ловушка/генератор/хранилище
+    float selectedRefund() const;           // сколько вернётся при сносе (оценка, как на сервере)
+    void upgradeSelected();                 // послать запрос апгрейда выделенного
+    void demolishSelected();                // послать запрос сноса выделенного
+
+    // Палитра защиты (ростер towers.cfg) — для панели строительства.
+    int defenseCount() const;               // число видов в ростере
+    const char* defenseName(int kind) const;// имя вида (или "")
+    int defenseCost(int kind) const;        // цена постройки тира 1
+    int defenseEntityType(int kind) const;  // EntityType вида (Tower/Trap) или -1
+
     // Стройка (G3-B): выбор типа -> призрак перед героем на клетке сетки -> подтверждение.
     // Размещение авторитетно на сервере (клиент лишь шлёт запрос и рисует превью).
-    void beginBuild(int type);
+    void beginBuild(int type, int kind = 0);   // kind — вид защиты (Tower/Trap); иначе игнор
     void cancelBuild() { buildActive_ = false; }
     void confirmBuild();                       // отправить запрос постройки на клетку призрака
     bool buildMode() const { return buildActive_; }
     int buildType() const { return (int)buildType_; }
+    int buildKind() const { return buildKind_; }
     bool buildGhostValid() const;              // клетка призрака валидна (клиентская оценка)
     const BuildingInfo* buildInfo(int type) const;  // имя/стоимость/параметры типа из конфига
 
@@ -335,9 +356,16 @@ private:
     // Снаряды башен теперь СЕРВЕРНЫЕ сущности (EntityType::Projectile в снапшотах) — рисуем их
     // в remote-цикле этим мешем/материалом (болт). Клиентская симуляция снаряда убрана.
     MeshHandle projMesh_ = 0;        // меш болта (единичный куб, масштабируется в вытянутый)
-    MaterialHandle projMat_ = 0;     // материал болта (Unlit, свечение)
+    MaterialHandle projMat_ = 0;     // материал болта по умолчанию (снаряд героя): тёпло-жёлтый
     MeshHandle editorMarkerMesh_ = 0;      // маркер точки спавна (редактор)
     MaterialHandle editorMarkerMat_ = 0;
+
+    // Виды башен/ловушек (towers.cfg): тинт по виду (kind) + плоская плита ловушки + цвет болта.
+    // Индекс = kind (порядок ростера sceneDesc_.towerTypes). Заполняются в createGpuResources.
+    TextureHandle towerTex_ = 0;               // атлас модели башни (для тинтованных материалов)
+    std::vector<MaterialHandle> towerKindMat_; // материал башни/ловушки по виду (тинт из towers.cfg)
+    std::vector<MaterialHandle> projKindMat_;  // материал болта по виду (цвет из towers.cfg)
+    MeshHandle trapMesh_ = 0;                  // плита напольной ловушки (низкий широкий куб)
 
     // Клиентский визуал/пикинг по типу сущности — ОДНА таблица вместо разбросанных switch
     // (рендер, пикинг, призрак стройки читают её; yOffset больше НЕ дублируется). Заполняется
@@ -404,6 +432,7 @@ private:
     // Стройка: активный режим + выбранный тип + материалы призрака (валид/невалид).
     bool buildActive_ = false;
     EntityType buildType_ = EntityType::Tower;
+    int buildKind_ = 0;        // вид защиты (индекс в towers.cfg) при стройке Tower/Trap
     MaterialHandle ghostOkMat_ = 0, ghostBadMat_ = 0;
     // Снап-подсветка сетки (режим стройки): один плоский тайл < клетки, инстансится на все
     // клетки арены; зазоры между тайлами образуют линии сетки. Материалы по состоянию клетки.

@@ -41,6 +41,7 @@ add_executable(vbase_server
         ${APP}/engine/physics/CollisionWorld.cpp
         ${APP}/game/SceneLoader.cpp
         ${APP}/game/CharacterRoster.cpp
+        ${APP}/game/TowerRoster.cpp
         ${ENET}/callbacks.c
         ${ENET}/compress.c
         ${ENET}/host.c

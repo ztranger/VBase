@@ -14,7 +14,11 @@
 namespace {
 
 // --- Протокол ---
-enum : uint8_t { MSG_WELCOME = 1, MSG_INPUT = 2, MSG_SNAPSHOT = 3, MSG_BUILD = 4 };
+enum : uint8_t {
+    MSG_WELCOME = 1, MSG_INPUT = 2, MSG_SNAPSHOT = 3, MSG_BUILD = 4,
+    MSG_UPGRADE = 5,   // {u32 targetId} — поднять тир башни/ловушки
+    MSG_DEMOLISH = 6,  // {u32 targetId} — снести свою постройку (возврат ресурса)
+};
 
 // P2-15: управляющие сообщения (Welcome/Input/Build) сериализуются ЯВНО, побайтно в little-endian
 // (ByteWriter/ByteReader, engine/net/ByteIO.h) — без зависимости от раскладки/паддинга/endianness
@@ -185,14 +189,33 @@ void NetClient::sendInput(const InputCommand& cmd) {
 
 void NetClient::setCharType(uint8_t charType) { impl_->charType = charType; }
 
-void NetClient::sendBuild(uint8_t buildType, int cellX, int cellZ) {
+void NetClient::sendBuild(uint8_t buildType, uint8_t kind, int cellX, int cellZ) {
     if (impl_->peer == nullptr || impl_->status != NetStatus::Connected) return;
     ByteWriter w;  // явная LE-раскладка (P2-15)
     w.u8(MSG_BUILD);
     w.u8(buildType);
+    w.u8(kind);      // v7: вид башни/ловушки (для Tower/Trap; иначе сервер игнорирует)
     w.i32((int32_t)cellX);
     w.i32((int32_t)cellZ);
     // Надёжно: постройка — одноразовое событие, терять нельзя.
+    ENetPacket* pkt = enet_packet_create(w.data(), w.size(), ENET_PACKET_FLAG_RELIABLE);
+    sendPacket(impl_->peer, 0, pkt);
+}
+
+void NetClient::sendUpgrade(uint32_t targetId) {
+    if (impl_->peer == nullptr || impl_->status != NetStatus::Connected) return;
+    ByteWriter w;
+    w.u8(MSG_UPGRADE);
+    w.u32(targetId);
+    ENetPacket* pkt = enet_packet_create(w.data(), w.size(), ENET_PACKET_FLAG_RELIABLE);
+    sendPacket(impl_->peer, 0, pkt);
+}
+
+void NetClient::sendDemolish(uint32_t targetId) {
+    if (impl_->peer == nullptr || impl_->status != NetStatus::Connected) return;
+    ByteWriter w;
+    w.u8(MSG_DEMOLISH);
+    w.u32(targetId);
     ENetPacket* pkt = enet_packet_create(w.data(), w.size(), ENET_PACKET_FLAG_RELIABLE);
     sendPacket(impl_->peer, 0, pkt);
 }
@@ -451,13 +474,25 @@ void NetServer::poll() {
                     ByteReader rd(ev.packet->data, ev.packet->dataLength);
                     rd.u8();  // type
                     const uint8_t bt = rd.u8();
+                    const uint8_t kind = rd.u8();  // v7: вид башни/ловушки (Tower/Trap)
                     const int32_t cx = rd.i32(), cz = rd.i32();
                     Conn* conn = impl_->connByPeer(ev.peer);
                     // P2-04: сверх кэпа стройки за тик — отбрасываем. Валидацию (клетка/ресурс/
-                    // границы) делает GameWorld.
+                    // границы/вид) делает GameWorld.
                     if (rd.ok() && conn != nullptr && conn->buildsThisTick < kMaxBuildsPerTick) {
                         ++conn->buildsThisTick;
-                        impl_->game.tryBuild(conn->heroId, (EntityType)bt, cx, cz);
+                        impl_->game.tryBuild(conn->heroId, (EntityType)bt, kind, cx, cz);
+                    }
+                } else if (msgType == MSG_UPGRADE || msgType == MSG_DEMOLISH) {
+                    ByteReader rd(ev.packet->data, ev.packet->dataLength);
+                    rd.u8();  // type
+                    const uint32_t targetId = rd.u32();
+                    Conn* conn = impl_->connByPeer(ev.peer);
+                    // Тот же кэп «действий стройки за тик» — от флуда апгрейдами/сносами.
+                    if (rd.ok() && conn != nullptr && conn->buildsThisTick < kMaxBuildsPerTick) {
+                        ++conn->buildsThisTick;
+                        if (msgType == MSG_UPGRADE) impl_->game.tryUpgrade(conn->heroId, targetId);
+                        else impl_->game.tryDemolish(conn->heroId, targetId);
                     }
                 }
                 enet_packet_destroy(ev.packet);

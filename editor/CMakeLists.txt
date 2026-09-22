@@ -44,6 +44,7 @@ add_executable(vbase_editor
         ${APP}/game/Scene.cpp
         ${APP}/game/SceneLoader.cpp
         ${APP}/game/CharacterRoster.cpp
+        ${APP}/game/TowerRoster.cpp
         ${APP}/engine/physics/CollisionWorld.cpp
         ${APP}/engine/render/GlRenderer.cpp
         # UI-слой: GlRenderer::init бутстрапит ImGui-шрифт/скин через GameUi (жёсткая связка),

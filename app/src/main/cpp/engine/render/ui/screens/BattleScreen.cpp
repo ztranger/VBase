@@ -129,9 +129,9 @@ void drawBuild(UiShell::Ctx& ctx) {
     }
 
     if (!ctx.scene.buildMode()) {
-        const EntityType kBuildable[] = {EntityType::Generator, EntityType::Storage,
-                                         EntityType::Tower};
-        for (EntityType bt : kBuildable) {
+        // Обычные постройки экономики.
+        const EntityType kGeneric[] = {EntityType::Generator, EntityType::Storage};
+        for (EntityType bt : kGeneric) {
             const BuildingInfo* bi = ctx.scene.buildInfo((int)bt);
             if (bi == nullptr || bi->cost <= 0.0f) continue;
             bool afford = ctx.scene.resourceCurrent() >= bi->cost;
@@ -141,10 +141,29 @@ void drawBuild(UiShell::Ctx& ctx) {
             if (ctx.btn(lbl.c_str())) ctx.scene.beginBuild((int)bt);
             ImGui::EndDisabled();
         }
+        // Виды защиты (башни-стрелки и ловушки) из ростера towers.cfg.
+        const int nd = ctx.scene.defenseCount();
+        if (nd > 0) ImGui::Separator();
+        for (int k = 0; k < nd; ++k) {
+            const int cost = ctx.scene.defenseCost(k);
+            const int et = ctx.scene.defenseEntityType(k);
+            if (cost <= 0 || et < 0) continue;
+            bool afford = ctx.scene.resourceCurrent() >= (float)cost;
+            ImGui::BeginDisabled(!afford);
+            std::string lbl = std::string(ctx.scene.defenseName(k)) + " (" + std::to_string(cost) + ")";
+            if (ctx.btn(lbl.c_str())) ctx.scene.beginBuild(et, k);
+            ImGui::EndDisabled();
+        }
     } else {
-        const BuildingInfo* bi = ctx.scene.buildInfo(ctx.scene.buildType());
-        ImGui::Text("Ставим: %s",
-                    (bi != nullptr && !bi->name.empty()) ? bi->name.c_str() : "Здание");
+        std::string nm;
+        const int bt = ctx.scene.buildType();
+        if (bt == (int)EntityType::Tower || bt == (int)EntityType::Trap) {
+            nm = ctx.scene.defenseName(ctx.scene.buildKind());
+        } else {
+            const BuildingInfo* bi = ctx.scene.buildInfo(bt);
+            nm = (bi != nullptr && !bi->name.empty()) ? bi->name : "Здание";
+        }
+        ImGui::Text("Ставим: %s", nm.c_str());
         bool valid = ctx.scene.buildGhostValid();
         ImGui::TextColored(valid ? ImVec4(0.4f, 0.9f, 0.4f, 1.0f) : ImVec4(0.95f, 0.5f, 0.4f, 1.0f),
                            valid ? "Клетка свободна — ставь" : "Занято / далеко / нет ресурса");

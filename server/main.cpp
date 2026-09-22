@@ -398,11 +398,11 @@ int runBuildTest() {
         server.poll();
         if (client.connected() && client.myId() != 0) { idle.seq = ++seq; client.sendInput(idle); }
         if (!sentValid && server.debugResource() >= 100.0f) {
-            client.sendBuild((uint8_t)EntityType::Tower, 3, 3);  // свободная клетка -> ОК
+            client.sendBuild((uint8_t)EntityType::Tower, 0, 3, 3);  // свободная клетка -> ОК
             sentValid = true;
         } else if (sentValid && !sentBad) {
-            client.sendBuild((uint8_t)EntityType::Tower, 0, 0);        // клетка генератора -> занято
-            client.sendBuild((uint8_t)EntityType::Tower, 100, 100);   // вне арены -> отказ
+            client.sendBuild((uint8_t)EntityType::Tower, 0, 0, 0);        // клетка генератора -> занято
+            client.sendBuild((uint8_t)EntityType::Tower, 0, 100, 100);   // вне арены -> отказ
             sentBad = true;
         }
         server.tick(dt);
@@ -444,7 +444,7 @@ int runTeamEconomyTest() {
     // Строитель команды 1 ставит башню — списывается пул team1, team0 не меняется.
     uint32_t hero1 = world.addHero(1);
     float b0 = world.resource(0), b1 = world.resource(1);
-    bool built = world.tryBuild(hero1, EntityType::Tower, 3, 3);
+    bool built = world.tryBuild(hero1, EntityType::Tower, 0, 3, 3);
     float a0 = world.resource(0), a1 = world.resource(1);
     bool buildOk = built && a0 == b0 && (b1 - a1) > 29.0f && (b1 - a1) < 31.0f;
 
@@ -710,8 +710,8 @@ int runCoopTest() {
         if (a.connected() && a.myId() != 0) { idle.seq = ++sa; a.sendInput(idle); }
         if (b.connected() && b.myId() != 0) { idle.seq = ++sb; b.sendInput(idle); }
         if (server.debugResource() >= 100.0f) {  // накопился общий пул -> оба строят
-            if (!builtA && a.myId() != 0) { a.sendBuild((uint8_t)EntityType::Tower, 3, 3); builtA = true; }
-            if (!builtB && b.myId() != 0) { b.sendBuild((uint8_t)EntityType::Tower, -3, 3); builtB = true; }
+            if (!builtA && a.myId() != 0) { a.sendBuild((uint8_t)EntityType::Tower, 0, 3, 3); builtA = true; }
+            if (!builtB && b.myId() != 0) { b.sendBuild((uint8_t)EntityType::Tower, 0, -3, 3); builtB = true; }
         }
         server.tick(dt);
         a.poll(); b.poll();
@@ -1464,12 +1464,12 @@ int runBuildAfterEndTest() {
 
     const float dt = kTickDt;
     for (int i = 0; i < 60 && world.resource(0) < 100.0f; ++i) world.step(dt);  // копим ресурс
-    bool builtBefore = world.tryBuild(builder, EntityType::Tower, 3, 3);         // базовая линия: работает
+    bool builtBefore = world.tryBuild(builder, EntityType::Tower, 0, 3, 3);      // базовая линия: работает
 
     for (int i = 0; i < 900 && !world.decided(); ++i) world.step(dt);            // ядро падёт -> исход
     bool decided = world.decided();
     float resAfter = world.resource(0);
-    bool builtAfter = world.tryBuild(builder, EntityType::Tower, -3, -3);        // валидная свободная клетка
+    bool builtAfter = world.tryBuild(builder, EntityType::Tower, 0, -3, -3);     // валидная свободная клетка
 
     std::printf("[BuildAfterEnd] до конца built=%s; завершён=%s ресурс=%.0f; после конца built=%s (ждём НЕТ)\n",
                 builtBefore ? "да" : "нет", decided ? "да" : "нет", (double)resAfter, builtAfter ? "да" : "нет");
@@ -1833,6 +1833,127 @@ int runRateLimitTest() {
     return ok ? 0 : 1;
 }
 
+// Виды башен/ловушек (towers.cfg) + апгрейд + снос. Проверяем авторитетные пути GameWorld
+// (сборка по ростеру, античит класса, рост тира/трата ресурса, возврат при сносе, занятость
+// клетки ловушкой, легаси-фолбэк без ростера). Эффекты (мороз/сплэш/огонь) идут по тому же
+// пути снаряда, что и обычный бой (проверяются глазами в игре).
+int runTowerRosterTest() {
+    std::printf("\n=== Самотест: виды башен/ловушек + апгрейд/снос ===\n");
+    int fails = 0;
+
+    auto addTower = [](SceneDesc& d, const char* id, EntityType et, float cost, float dmg,
+                       float range, float rate, TowerDesc::Effect eff, int maxTier) {
+        TowerDesc t;
+        t.id = id; t.name = id; t.entity = et;
+        t.cost = cost; t.hp = 60.0f; t.damage = dmg; t.range = range; t.rate = rate;
+        t.effect = eff; t.maxTier = maxTier;
+        t.tierDamageMul = 1.5f; t.tierRangeMul = 1.1f; t.tierRateMul = 0.9f; t.upgradeCostMul = 0.8f;
+        d.towerTypes.push_back(t);
+    };
+    auto baseWorld = [](SceneDesc& d) {
+        ColliderSpec floor; floor.center = Vec3{0, -0.5f, 0}; floor.half = Vec3{24, 0.5f, 24};
+        d.colliders.push_back(floor);
+        d.grid.cell = 2.0f; d.grid.arenaHalf = 12.0f;
+        BuildingSpec c; c.kind = BuildingSpec::Core; c.pos = d.grid.cellCenter(-4, -4); c.hp = 500; d.buildings.push_back(c);
+        BuildingSpec g; g.kind = BuildingSpec::Generator; g.pos = d.grid.cellCenter(-5, 5); g.rate = 800; d.buildings.push_back(g);
+        BuildingSpec s; s.kind = BuildingSpec::Storage; s.pos = d.grid.cellCenter(5, 5); s.cap = 100000; d.buildings.push_back(s);
+    };
+
+    SceneDesc desc;
+    baseWorld(desc);
+    addTower(desc, "arrow",  EntityType::Tower, 40, 4, 6.0f, 0.8f, TowerDesc::Effect::None, 3);
+    addTower(desc, "frost",  EntityType::Tower, 55, 2, 5.5f, 1.0f, TowerDesc::Effect::Slow, 3);
+    addTower(desc, "cannon", EntityType::Tower, 70, 6, 6.5f, 1.8f, TowerDesc::Effect::Splash, 3);
+    addTower(desc, "fire",   EntityType::Tower, 65, 3, 5.5f, 1.2f, TowerDesc::Effect::Burn, 3);
+    addTower(desc, "spike",  EntityType::Trap,  25, 5, 1.5f, 0.8f, TowerDesc::Effect::None, 3);
+
+    GameWorld world;
+    world.configure(desc);
+    uint32_t hero = world.addHero(0);
+    for (int i = 0; i < 120; ++i) world.step(kTickDt);  // накопить ресурс (генератор 800/с)
+
+    // Единственная защита в снапшоте -> (id, вид, тир). Возвращает их число.
+    auto sole = [&](uint32_t& id, int& kind, int& tier) -> int {
+        std::vector<EntityState> st; world.writeStates(st);
+        int n = 0; id = 0; kind = -1; tier = 0;
+        for (const EntityState& s : st) {
+            EntityType t = (EntityType)s.type;
+            if (t != EntityType::Tower && t != EntityType::Trap) continue;
+            id = s.id; kind = s.charType & 0x0F; tier = (s.charType >> 4); if (tier < 1) tier = 1; ++n;
+        }
+        return n;
+    };
+
+    // (1) Постройка морозной башни (вид 1) на свободной клетке (2,0).
+    float rB = world.resource(0);
+    bool bFrost = world.tryBuild(hero, EntityType::Tower, 1, 2, 0);
+    uint32_t tid; int tk, tt; int nDef = sole(tid, tk, tt);
+    float spent = rB - world.resource(0);
+    bool okFrost = bFrost && nDef == 1 && tk == 1 && tt == 1 && spent > 54.0f && spent < 56.0f;
+    if (!okFrost) ++fails;
+    std::printf("[Towers] мороз: built=%d n=%d вид=%d тир=%d потрачено=%.0f -> %s\n",
+                (int)bFrost, nDef, tk, tt, (double)spent, okFrost ? "OK" : "FAIL");
+
+    // (2) Античит класса: Trap с видом-башней и Tower с видом-ловушкой отклоняются.
+    bool mism1 = world.tryBuild(hero, EntityType::Trap, 1, 0, 2);   // frost — класс tower
+    bool mism2 = world.tryBuild(hero, EntityType::Tower, 4, 0, 2);  // spike — класс trap
+    bool okMismatch = !mism1 && !mism2;
+    if (!okMismatch) ++fails;
+    std::printf("[Towers] класс-mismatch: trap<-tower=%d tower<-trap=%d (ждём 0/0) -> %s\n",
+                (int)mism1, (int)mism2, okMismatch ? "OK" : "FAIL");
+
+    // (3) Апгрейд: тир растёт, ресурс тратится; на максимуме — отказ.
+    float rU0 = world.resource(0);
+    bool up1 = world.tryUpgrade(hero, tid); sole(tid, tk, tt); int ta1 = tt;
+    bool up2 = world.tryUpgrade(hero, tid); sole(tid, tk, tt); int ta2 = tt;
+    bool up3 = world.tryUpgrade(hero, tid); sole(tid, tk, tt); int ta3 = tt;  // уже максимум -> false
+    bool okUp = up1 && up2 && !up3 && ta1 == 2 && ta2 == 3 && ta3 == 3 && world.resource(0) < rU0;
+    if (!okUp) ++fails;
+    std::printf("[Towers] апгрейд: up(%d,%d,%d) тиры(%d,%d,%d) ресурс %.0f->%.0f -> %s\n",
+                (int)up1, (int)up2, (int)up3, ta1, ta2, ta3,
+                (double)rU0, (double)world.resource(0), okUp ? "OK" : "FAIL");
+
+    // (4) Снос: башня исчезает, часть ресурса возвращается.
+    float rD0 = world.resource(0);
+    bool dem = world.tryDemolish(hero, tid);
+    int nAfter = sole(tid, tk, tt);
+    bool okDem = dem && nAfter == 0 && world.resource(0) > rD0;
+    if (!okDem) ++fails;
+    std::printf("[Towers] снос: dem=%d осталось=%d ресурс %.0f->%.0f -> %s\n",
+                (int)dem, nAfter, (double)rD0, (double)world.resource(0), okDem ? "OK" : "FAIL");
+
+    // (5) Ловушка: строится (вид 4, класс trap), занимает клетку — башню на ту же клетку нельзя.
+    bool bSpike = world.tryBuild(hero, EntityType::Trap, 4, 3, 3);
+    int nSpike = sole(tid, tk, tt);
+    bool sameCell = world.tryBuild(hero, EntityType::Tower, 0, 3, 3);  // занято ловушкой
+    bool okTrap = bSpike && nSpike == 1 && tk == 4 && !sameCell;
+    if (!okTrap) ++fails;
+    std::printf("[Towers] ловушка: built=%d n=%d вид=%d занятость=%d (ждём 0) -> %s\n",
+                (int)bSpike, nSpike, tk, (int)sameCell, okTrap ? "OK" : "FAIL");
+
+    // (6) Легаси-фолбэк: без towers.cfg рантайм-башня берётся из BuildTemplate сцены; ловушка — нет.
+    SceneDesc legacy;
+    baseWorld(legacy);
+    legacy.build[(int)EntityType::Tower].buildable = true;
+    legacy.build[(int)EntityType::Tower].cost = 30;
+    legacy.build[(int)EntityType::Tower].hp = 60;
+    legacy.build[(int)EntityType::Tower].rate = 0.8f;
+    legacy.build[(int)EntityType::Tower].damage = 4;
+    legacy.build[(int)EntityType::Tower].range = 6;
+    GameWorld lw; lw.configure(legacy);
+    uint32_t lh = lw.addHero(0);
+    for (int i = 0; i < 120; ++i) lw.step(kTickDt);
+    bool bLegacy = lw.tryBuild(lh, EntityType::Tower, 0, 2, 0);
+    bool bLegacyTrap = lw.tryBuild(lh, EntityType::Trap, 0, 2, 2);  // без ростера — нельзя
+    bool okLegacy = bLegacy && !bLegacyTrap;
+    if (!okLegacy) ++fails;
+    std::printf("[Towers] легаси-фолбэк: башня=%d ловушка=%d (ждём 1/0) -> %s\n",
+                (int)bLegacy, (int)bLegacyTrap, okLegacy ? "OK" : "FAIL");
+
+    std::printf("[Towers] %s\n", fails == 0 ? "OK" : "FAIL");
+    return fails == 0 ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1885,11 +2006,12 @@ int main(int argc, char** argv) {
         int z3 = runConfigValidateTest(); // P1-09: загрузчики отклоняют мусорные конфиги
         int z4 = runHardenDataTest();     // P2-12/P2-14: санитизация описания + безопасность путей
         int z5 = runRateLimitTest();      // P2-04: флудер ввода отключается сервером
+        int tw = runTowerRosterTest();    // виды башен/ловушек + апгрейд/снос (towers.cfg)
         return (a == 0 && b == 0 && c == 0 && d == 0 && e == 0 && f == 0 && g == 0 && h == 0 &&
                 k == 0 && m == 0 && n == 0 && o == 0 && p == 0 && p2 == 0 && q == 0 && r == 0 &&
                 s == 0 && t == 0 && u == 0 && v == 0 && w == 0 && x == 0 && x2 == 0 &&
                 y1 == 0 && y2 == 0 && y3 == 0 &&
-                z1 == 0 && z2 == 0 && z3 == 0 && z4 == 0 && z5 == 0) ? 0 : 1;
+                z1 == 0 && z2 == 0 && z3 == 0 && z4 == 0 && z5 == 0 && tw == 0) ? 0 : 1;
     }
 
     uint16_t port = kNetPort;
@@ -1933,6 +2055,7 @@ int main(int argc, char** argv) {
         applyBuildingConfig(desc, cfg);
         loadCharacterRoster(assets, "config/enemies.cfg", desc.enemyTypes);  // статы типов мобов
         loadCharacterRoster(assets, "config/characters.cfg", desc.heroTypes);  // статы героев (hp/speed)
+        loadTowerRoster(assets, "config/towers.cfg", desc.towerTypes);  // виды башен/ловушек (kind)
         server.configureWorld(desc);
     } else {
         // Fail-fast: без обязательной сцены клиент и сервер симулировали бы РАЗНЫЕ миры

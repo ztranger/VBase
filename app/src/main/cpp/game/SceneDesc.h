@@ -8,6 +8,7 @@
 #include "engine/core/Texture.h"  // ShaderType
 #include "game/CharacterRoster.h" // CharacterDesc (типы мобов: статы + порядок charType)
 #include "game/Grid.h"            // строительная сетка (параметры из сцены)
+#include "game/TowerRoster.h"     // TowerDesc (виды башен/ловушек: статы + порядок kind)
 
 // Декларативное описание сцены (чистые данные, без рендера и платформы).
 // Загружается из текстового файла (см. SceneLoader), затем Scene::build
@@ -149,6 +150,7 @@ struct SceneDesc {
     EnemySpec enemy;                      // боевые статы врага по умолчанию (из конфига)
     std::vector<CharacterDesc> enemyTypes; // типы мобов (config/enemies.cfg): статы; индекс = charType
     std::vector<CharacterDesc> heroTypes;  // типы героев (config/characters.cfg): hp/speed; индекс = charType
+    std::vector<TowerDesc> towerTypes;     // виды башен/ловушек (config/towers.cfg): статы; индекс = kind
     BuildTemplate build[8];               // шаблоны построек героя по EntityType (из конфига)
     Grid grid;                            // строительная сетка (директива `grid` в сцене)
     PlayerSpec player;

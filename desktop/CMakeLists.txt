@@ -44,6 +44,7 @@ add_executable(vbase_desktop
         ${APP}/game/Scene.cpp
         ${APP}/game/SceneLoader.cpp
         ${APP}/game/CharacterRoster.cpp
+        ${APP}/game/TowerRoster.cpp
         ${APP}/engine/physics/CollisionWorld.cpp
         ${APP}/engine/render/GlRenderer.cpp
         ${APP}/engine/render/VkApi.cpp

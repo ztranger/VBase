@@ -66,6 +66,7 @@ add_library(vbase SHARED
         game/Scene.cpp
         game/SceneLoader.cpp
         game/CharacterRoster.cpp
+        game/TowerRoster.cpp
         engine/physics/CollisionWorld.cpp
         engine/audio/MiniAudioEngine.cpp
         engine/audio/miniaudio_impl.c

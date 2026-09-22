@@ -718,4 +718,24 @@ void validateSceneDesc(SceneDesc& desc) {
     };
     for (CharacterDesc& c : desc.heroTypes) sanChar(c);
     for (CharacterDesc& c : desc.enemyTypes) sanChar(c);
+
+    // Ростер башен/ловушек (towers.cfg): статы конечны и в разумных пределах; rate — делитель > 0;
+    // тир и множители не должны уводить в бесконечность/ноль.
+    for (TowerDesc& d : desc.towerTypes) {
+        d.cost = clampF(d.cost, 0.0f, 1e9f, 0.0f);
+        d.hp = clampF(d.hp, 0.0f, 1e9f, 0.0f);
+        d.rate = clampF(d.rate, 0.05f, 1e4f, 1.0f);
+        d.range = clampF(d.range, 0.0f, 1e4f, 0.0f);
+        d.damage = clampF(d.damage, 0.0f, 1e9f, 0.0f);
+        d.slowFactor = clampF(d.slowFactor, 0.05f, 1.0f, 0.5f);
+        d.effectDur = clampF(d.effectDur, 0.0f, 1e4f, 0.0f);
+        d.splashRadius = clampF(d.splashRadius, 0.0f, 1e3f, 0.0f);
+        d.burnDps = clampF(d.burnDps, 0.0f, 1e9f, 0.0f);
+        if (d.maxTier < 1) d.maxTier = 1;
+        if (d.maxTier > 15) d.maxTier = 15;  // тир кодируется 4 битами в сети (charType)
+        d.tierDamageMul = clampF(d.tierDamageMul, 1.0f, 100.0f, 1.6f);
+        d.tierRangeMul = clampF(d.tierRangeMul, 0.5f, 10.0f, 1.12f);
+        d.tierRateMul = clampF(d.tierRateMul, 0.1f, 10.0f, 0.85f);
+        d.upgradeCostMul = clampF(d.upgradeCostMul, 0.0f, 100.0f, 0.8f);
+    }
 }

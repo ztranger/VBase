@@ -30,7 +30,11 @@ public:
 
     // Аплинк. sendInput проставляет seq (inputSeq_) в cmd И отправляет (cmd меняется — по ссылке).
     void sendInput(InputCommand& cmd);
-    void sendBuild(uint8_t buildType, int cellX, int cellZ) { client_.sendBuild(buildType, cellX, cellZ); }
+    void sendBuild(uint8_t buildType, uint8_t kind, int cellX, int cellZ) {
+        client_.sendBuild(buildType, kind, cellX, cellZ);
+    }
+    void sendUpgrade(uint32_t targetId) { client_.sendUpgrade(targetId); }
+    void sendDemolish(uint32_t targetId) { client_.sendDemolish(targetId); }
     void setCharType(uint8_t charType) { client_.setCharType(charType); }
 
     // Даунлинк / состояние (для мира и UI).
