@@ -552,6 +552,42 @@ RenderFrame Scene::renderMenuBackdrop(float aspect) {
     return frame;
 }
 
+RenderFrame Scene::renderEditor(const Mat4& view, const Mat4& proj, const Vec3& eye) const {
+    RenderFrame frame;
+    frame.view = view;
+    frame.proj = proj;
+    frame.cameraPos = eye;
+    frame.lightDir = normalize(lightDir_);
+    frame.shadowsEnabled = shadowsEnabled_;
+    frame.shadowBias = shadowBias_;
+    frame.shadowRadius = shadowRadius_;
+    frame.fogColor = fogColor_;
+    frame.fogDensity = fogDensity_;
+
+    // Статичные объекты сцены (включая пол и glTF-декор) — как есть, без интерполяции спина.
+    for (const GameObject& obj : objects_)
+        frame.items.push_back({obj.mesh, obj.material, obj.transform.matrix()});
+
+    // Здания базы: офлайн (без снапшотов) рисуем по описанию сцены их визуалом из таблицы типов.
+    auto typeOf = [](BuildingSpec::Kind k) -> EntityType {
+        switch (k) {
+            case BuildingSpec::Generator: return EntityType::Generator;
+            case BuildingSpec::Storage:   return EntityType::Storage;
+            case BuildingSpec::Spawner:   return EntityType::Spawner;
+            case BuildingSpec::Tower:     return EntityType::Tower;
+            case BuildingSpec::Core:      return EntityType::Core;
+        }
+        return EntityType::Core;
+    };
+    for (const BuildingSpec& b : sceneDesc_.buildings) {
+        const EntityVisual& v = visual(typeOf(b.kind));
+        if (v.mesh != 0)
+            frame.items.push_back(
+                {v.mesh, v.material, Mat4::translation(b.pos + Vec3{0.0f, v.yOffset, 0.0f})});
+    }
+    return frame;
+}
+
 void Scene::setUiScale(float s) {
     uiScale_ = s;
     joystick_.radius = 120.0f * s;  // джойстик крупнее на плотных экранах

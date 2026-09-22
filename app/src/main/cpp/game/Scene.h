@@ -227,6 +227,11 @@ public:
     // персонажа (экран входа в бой / Lobby) и пустой фон меню (мир не показываем).
     RenderFrame renderCharacterPreview(float alpha, float aspect, float renderDt);
     RenderFrame renderMenuBackdrop(float aspect);
+
+    // Рендер уровня для редактора сцен: вся СТАТИЧНАЯ геометрия (объекты + здания из sceneDesc_
+    // по их визуалам) с ПРОИЗВОЛЬНОЙ камерой (view/proj/eye задаёт редактор — орбита). Без сети,
+    // симуляции, героя и интерполяции. Свет/тени/туман — из сцены. Только чтение (const).
+    RenderFrame renderEditor(const Mat4& view, const Mat4& proj, const Vec3& eye) const;
     float cameraDistance() const { return camera_.distance; }
     void setCameraDistance(float d) { camera_.distance = d; }
     float cameraPitch() const { return camera_.pitch; }

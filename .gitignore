@@ -9,6 +9,7 @@
 /server/build/
 /server/build-asan/
 /desktop/build/
+/editor/build/
 
 # Python bytecode (tools/)
 __pycache__/

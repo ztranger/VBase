@@ -25,6 +25,7 @@
 | Выделенный сервер | `server/` | `server\build.bat` (MSVC) | авторитетный сервер, headless |
 | Сервер в Docker | `server/Dockerfile` | `build-server-docker.cmd` | тот же сервер, Linux-контейнер, UDP 7777 |
 | Десктоп-клиент | `desktop/` | `desktop\build.bat` (MSVC) | GLFW + desktop GL 3.3, переиспользует ядро |
+| Редактор сцен | `editor/` | `editor\build.bat` (MSVC) | GLFW + GL 3.3, орбит-камера, правка `.scene` (в работе) |
 
 Нативный код клиента живёт в `app/src/main/cpp/`, разложен по слоям:
 `platform/` (Android-точка входа), `engine/{core,render,assets,physics,net}`
@@ -34,15 +35,16 @@ Include — **квалифицированные** от корня `cpp/` (на�
 Сервер и десктоп переиспользуют платформонезависимые файлы (симуляция, сеть, загрузчики,
 математика) прямо из этого дерева. Полная карта — ARCHITECTURE §5.
 
-**Сборка из корня:** `build-server.cmd` / `build-desktop.cmd` — тонкие обёртки над
-`server\build.bat` / `desktop\build.bat` (те находят свои пути через `%~dp0`, работают
-из любой директории). Для Android — по-прежнему Android Studio.
+**Сборка из корня:** `build-server.cmd` / `build-desktop.cmd` / `build-editor.cmd` — тонкие обёртки
+над `server\build.bat` / `desktop\build.bat` / `editor\build.bat` (те находят свои пути через `%~dp0`,
+работают из любой директории). Для Android — по-прежнему Android Studio.
 
-**Запуск из корня:** `run-server.cmd` / `run-desktop.cmd` (лаунчеры). Сами заходят в
-`*/build` и вызывают бинарь по полному пути — работают из любой директории и по
+**Запуск из корня:** `run-server.cmd` / `run-desktop.cmd` / `run-editor.cmd` (лаунчеры). Сами заходят
+в `*/build` и вызывают бинарь по полному пути — работают из любой директории и по
 двойному клику (важно: ассеты грузятся относительно рабочей папки `*/build`, поэтому
 голый симлинк на `.exe` в корне НЕ годится). Аргументы пробрасываются: у сервера
-`[port] [assetsDir] [scenePath]`, у десктопа `[serverIp] [assetsDir] [scenePath]`.
+`[port] [assetsDir] [scenePath]`, у десктопа `[serverIp] [assetsDir] [scenePath]`, у редактора
+`[assetsDir] [scenePath]` (сети нет).
 
 **Docker (сервер):** `build-server-docker.cmd` собирает образ `vbase-server`
 (Linux, gcc; не Windows-контейнер), `run-server-docker.cmd` поднимает с
