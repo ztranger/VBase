@@ -107,6 +107,38 @@ int main(int argc, char** argv) {
         return ok ? 0 : 1;
     }
 
+    // Headless-проверка гизмо-математики: извлечение Y-угла/масштаба из матрицы (как в интерактиве)
+    // — точный фикспойнт к Transform::matrix() на всём диапазоне углов (в т.ч. >90°, где euler-
+    // decompose клампит). M0 = T*Ry(θ)*S -> извлечь pos/yaw/scale -> собрать M1 -> M1≈M0.
+    if (argc > 1 && std::string(argv[1]) == "--giztest") {
+        const float D2R = 3.14159265358979f / 180.0f;
+        float maxErr = 0.0f;
+        const float angles[] = {0.0f, 30.0f, 90.0f, 137.0f, 200.0f, 270.0f, 350.0f};
+        const float scales[] = {0.5f, 1.0f, 2.5f};
+        for (float th : angles)
+            for (float s : scales) {
+                Transform t0;
+                t0.position = {1.0f, 2.0f, 3.0f};
+                t0.rotation = {0.0f, th * D2R, 0.0f};
+                t0.scale = {s, s, s};
+                Mat4 M0 = t0.matrix();
+                const float* m = M0.m;
+                Transform t1;
+                t1.position = {m[12], m[13], m[14]};
+                t1.rotation = {0.0f, std::atan2(-m[2], m[0]), 0.0f};
+                float su = std::sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
+                t1.scale = {su, su, su};
+                Mat4 M1 = t1.matrix();
+                for (int i = 0; i < 16; ++i) {
+                    float e = std::fabs(M1.m[i] - M0.m[i]);
+                    if (e > maxErr) maxErr = e;
+                }
+            }
+        const bool ok = maxErr < 1e-3f;
+        std::printf("[GizTest] %s maxErr=%.6f\n", ok ? "OK" : "FAIL", (double)maxErr);
+        return ok ? 0 : 1;
+    }
+
     // Аргументы: [assetsDir] [scenePath] (как у desktop, но без serverIp — сети нет).
     std::string assetsDir = (argc > 1) ? argv[1] : "../../app/src/main/assets";
     std::string scenePath = (argc > 2) ? argv[2] : "scenes/default.scene";
@@ -149,6 +181,10 @@ int main(int argc, char** argv) {
 
     OrbitCamera cam;
     int selected = -1;         // specIndex выбранного объекта (-1 = нет)
+    // Режим гизмо. Вращение — только Y (сцены/формат используют Y-рот; полный 3-осевой euler
+    // разошёлся бы с порядком Transform::matrix() -> дрейф). Масштаб — равномерный (SCALEU),
+    // т.к. ObjectSpec.scale — одно число.
+    ImGuizmo::OPERATION gizmoOp = ImGuizmo::TRANSLATE;
     bool dirty = false;        // есть несохранённые правки
     std::string saveMsg;       // статус последнего Save (для панели)
     const std::string scenaFull = assetsDir + "/" + scenePath;  // куда пишем при Save
@@ -218,6 +254,13 @@ int main(int argc, char** argv) {
         if (sNow && !sPrev) saveScene();
         sPrev = sNow;
 
+        // W/E/R — режим гизмо (перемещение/вращение Y/масштаб), если ImGui не забрал клавиатуру.
+        if (!ImGui::GetIO().WantCaptureKeyboard) {
+            if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) gizmoOp = ImGuizmo::TRANSLATE;
+            else if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) gizmoOp = ImGuizmo::ROTATE_Y;
+            else if (glfwGetKey(window, GLFW_KEY_R) == GLFW_PRESS) gizmoOp = ImGuizmo::SCALEU;
+        }
+
         double cx = 0.0, cy = 0.0;
         glfwGetCursorPos(window, &cx, &cy);
         float dx = (float)(cx - prevX), dy = (float)(cy - prevY);
@@ -268,10 +311,24 @@ int main(int argc, char** argv) {
                 Mat4 model;
                 if (scene.editorObjectMatrix(selected, model)) {
                     Mat4 v = vmat, p = pmat;  // ImGuizmo пишет в model.m при перетаскивании
-                    if (ImGuizmo::Manipulate(v.m, p.m, ImGuizmo::TRANSLATE, ImGuizmo::WORLD, model.m)) {
-                        Vec3 pos{model.m[12], model.m[13], model.m[14]};  // translate-only: берём перенос
-                        Vec3 curPos, rot, scale;
-                        scene.editorGetTransform(selected, curPos, rot, scale);
+                    // Перемещение — в мире, вращение/масштаб — в локале объекта.
+                    const ImGuizmo::MODE mode =
+                        (gizmoOp == ImGuizmo::TRANSLATE) ? ImGuizmo::WORLD : ImGuizmo::LOCAL;
+                    if (ImGuizmo::Manipulate(v.m, p.m, gizmoOp, mode, model.m)) {
+                        // Извлекаем прямо из матрицы (точный обратный к T*Ry*S; полный 360° по Y,
+                        // без клампа euler-decompose). col0 = (m0,m1,m2) — X-базис*масштаб.
+                        const float* m = model.m;
+                        Vec3 pos, rot, scale;
+                        scene.editorGetTransform(selected, pos, rot, scale);
+                        if (gizmoOp == ImGuizmo::TRANSLATE) {
+                            pos = {m[12], m[13], m[14]};
+                        } else if (gizmoOp == ImGuizmo::ROTATE_Y) {
+                            rot.y = std::atan2(-m[2], m[0]);  // Ry: col0=(s*cosθ,0,-s*sinθ)
+                        } else {  // SCALEU: равномерный масштаб = длина базисного столбца
+                            float su = std::sqrt(m[0] * m[0] + m[1] * m[1] + m[2] * m[2]);
+                            if (su < 1e-4f) su = 1e-4f;
+                            scale = {su, su, su};
+                        }
                         scene.editorSetTransform(selected, pos, rot, scale);
                         dirty = true;
                     }
@@ -317,15 +374,36 @@ int main(int argc, char** argv) {
                 ImGui::Text("Камера: dist %.1f", (double)cam.distance);
                 if (ImGui::Button("Сбросить камеру")) cam = OrbitCamera{};
                 ImGui::Separator();
+                // Режим гизмо (W/E/R).
+                int opIdx = (gizmoOp == ImGuizmo::TRANSLATE) ? 0 : (gizmoOp == ImGuizmo::ROTATE_Y ? 1 : 2);
+                ImGui::TextUnformatted("Гизмо:");
+                ImGui::SameLine();
+                if (ImGui::RadioButton("Перемещение (W)", opIdx == 0)) gizmoOp = ImGuizmo::TRANSLATE;
+                if (ImGui::RadioButton("Вращение Y (E)", opIdx == 1)) gizmoOp = ImGuizmo::ROTATE_Y;
+                ImGui::SameLine();
+                if (ImGui::RadioButton("Масштаб (R)", opIdx == 2)) gizmoOp = ImGuizmo::SCALEU;
+                ImGui::Separator();
                 if (selected >= 0) {
                     Vec3 pos, rot, scale;
                     scene.editorGetTransform(selected, pos, rot, scale);
                     ImGui::Text("Объект #%d", selected);
-                    if (ImGui::DragFloat3("Позиция", &pos.x, 0.05f)) {
+                    bool ch = false;
+                    ch |= ImGui::DragFloat3("Позиция", &pos.x, 0.05f);
+                    float yawDeg = rot.y * (180.0f / 3.14159265358979f);
+                    if (ImGui::DragFloat("Поворот Y°", &yawDeg, 1.0f)) {
+                        rot.y = yawDeg * (3.14159265358979f / 180.0f);
+                        ch = true;
+                    }
+                    float su = scale.x;
+                    if (ImGui::DragFloat("Масштаб", &su, 0.01f, 0.01f, 100.0f)) {
+                        scale = {su, su, su};
+                        ch = true;
+                    }
+                    if (ch) {
                         scene.editorSetTransform(selected, pos, rot, scale);
                         dirty = true;
                     }
-                    ImGui::TextDisabled("Тащи стрелки гизмо или правь позицию");
+                    ImGui::TextDisabled("Тащи гизмо или правь поля");
                 } else {
                     ImGui::TextDisabled("Кликни объект, чтобы выбрать");
                 }
