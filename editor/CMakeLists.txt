@@ -69,6 +69,7 @@ add_executable(vbase_editor
         ${IMGUI}/imgui_widgets.cpp
         ${IMGUI}/backends/imgui_impl_opengl3.cpp
         ${IMGUI}/backends/imgui_impl_glfw.cpp
+        ${TP}/imguizmo/ImGuizmo.cpp
         ${ENET}/callbacks.c
         ${ENET}/compress.c
         ${ENET}/host.c
@@ -80,7 +81,7 @@ add_executable(vbase_editor
 
 target_include_directories(vbase_editor PRIVATE
         "${APP}" "${ENET}/include" "${TP}/cgltf" "${TP}/stb" "${IMGUI}" "${IMGUI}/backends"
-        "${TP}/vulkan/include")
+        "${TP}/vulkan/include" "${TP}/imguizmo")
 
 if(MSVC)
     target_compile_options(vbase_editor PRIVATE /utf-8)

@@ -39,6 +39,11 @@ struct GameObject {
     MaterialHandle material = 0;
     float spin = 0.0f;
     float prevRotY = 0.0f;  // для интерполяции вращения между тиками
+    // Для редактора сцен: локальный AABB меша (пикинг/подсветка) + индекс исходного ObjectSpec
+    // в sceneDesc_.objects (-1 = не редактируется поштучно, напр. копии кольца).
+    Vec3 aabbMin{0.0f, 0.0f, 0.0f};
+    Vec3 aabbMax{0.0f, 0.0f, 0.0f};
+    int specIndex = -1;
 };
 
 // Реестр выбираемых персонажей/мобов (грузится один раз в build; индекс = charType в снапшоте).

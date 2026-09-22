@@ -1,11 +1,13 @@
 #include "game/Scene.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <utility>
 
 #include "engine/assets/AssetSource.h"
 #include "engine/assets/Assets.h"
@@ -188,16 +190,30 @@ void Scene::createGpuResources(Renderer& renderer, AssetSource& assets) {
         matMap[ms.name] = renderer.createMaterial(md);
     }
 
+    // Локальный AABB меша (для пикинга/подсветки в редакторе).
+    auto aabbOf = [](const MeshData& md, Vec3& mn, Vec3& mx) {
+        if (md.vertices.empty()) { mn = mx = Vec3{0.0f, 0.0f, 0.0f}; return; }
+        mn = mx = Vec3{md.vertices[0].px, md.vertices[0].py, md.vertices[0].pz};
+        for (const Vertex& v : md.vertices) {
+            mn.x = std::min(mn.x, v.px); mn.y = std::min(mn.y, v.py); mn.z = std::min(mn.z, v.pz);
+            mx.x = std::max(mx.x, v.px); mx.y = std::max(mx.y, v.py); mx.z = std::max(mx.z, v.pz);
+        }
+    };
+
     // --- Меши (имя -> handle) ---
     std::unordered_map<std::string, MeshHandle> meshMap;
+    std::unordered_map<std::string, std::pair<Vec3, Vec3>> meshBounds;  // локальный AABB по имени
     for (const MeshSpec& m : desc.meshes) {
-        MeshHandle h = 0;
+        MeshData md;
         switch (m.kind) {
-            case MeshSpec::Plane:  h = renderer.createMesh(makePlane(m.a, m.b)); break;
-            case MeshSpec::Cube:   h = renderer.createMesh(makeCube(m.a)); break;
-            case MeshSpec::Sphere: h = renderer.createMesh(makeSphere(m.a, m.stacks, m.slices)); break;
+            case MeshSpec::Plane:  md = makePlane(m.a, m.b); break;
+            case MeshSpec::Cube:   md = makeCube(m.a); break;
+            case MeshSpec::Sphere: md = makeSphere(m.a, m.stacks, m.slices); break;
         }
-        meshMap[m.name] = h;
+        meshMap[m.name] = renderer.createMesh(md);
+        Vec3 mn, mx;
+        aabbOf(md, mn, mx);
+        meshBounds[m.name] = {mn, mx};
     }
 
     auto meshH = [&](const std::string& n) -> MeshHandle {
@@ -214,17 +230,19 @@ void Scene::createGpuResources(Renderer& renderer, AssetSource& assets) {
     // --- Объекты (обычные и кольцевые) ---
     // Кэш статичных glTF-пропсов (mesh+material) по ключу path|tex|shader: уровень ставит много
     // копий одного ассета — грузим/заливаем в GPU один раз.
-    std::unordered_map<std::string, std::pair<MeshHandle, MaterialHandle>> glbCache;
-    auto loadGlbObject = [&](const ObjectSpec& os) -> std::pair<MeshHandle, MaterialHandle> {
+    struct GlbEntry { MeshHandle mesh = 0; MaterialHandle mat = 0; Vec3 mn, mx; };
+    std::unordered_map<std::string, GlbEntry> glbCache;
+    auto loadGlbObject = [&](const ObjectSpec& os) -> GlbEntry {
         const std::string key = os.model + "|" + os.modelTex + "|" + std::to_string((int)os.shader);
         auto it = glbCache.find(key);
         if (it != glbCache.end()) return it->second;
-        std::pair<MeshHandle, MaterialHandle> res{0, 0};
+        GlbEntry res;
         MeshData md;
         TextureData embedded;
         bool hasTex = false;
         if (loadGltfStatic(assets, os.model.c_str(), md, embedded, hasTex)) {
-            res.first = renderer.createMesh(md);
+            res.mesh = renderer.createMesh(md);
+            aabbOf(md, res.mn, res.mx);
             TextureHandle tex = 0;
             if (!os.modelTex.empty()) {  // внешняя текстура-атлас переопределяет встроенную
                 TextureData ext;
@@ -236,7 +254,7 @@ void Scene::createGpuResources(Renderer& renderer, AssetSource& assets) {
             mat.shader = os.shader;
             mat.baseColor = {1.0f, 1.0f, 1.0f};  // цвет берётся из текстуры
             mat.albedo = tex;
-            res.second = renderer.createMaterial(mat);
+            res.mat = renderer.createMaterial(mat);
         } else {
             LOGW("Объект: glTF-модель %s не загрузилась — пропущен", os.model.c_str());
         }
@@ -245,17 +263,23 @@ void Scene::createGpuResources(Renderer& renderer, AssetSource& assets) {
     };
 
     const float pi = 3.14159265358979323846f;
-    for (const ObjectSpec& os : desc.objects) {
+    for (size_t si = 0; si < desc.objects.size(); ++si) {
+        const ObjectSpec& os = desc.objects[si];
         MeshHandle mh = 0;
         MaterialHandle mah = 0;
+        Vec3 aabbMn{0.0f, 0.0f, 0.0f}, aabbMx{0.0f, 0.0f, 0.0f};
         if (!os.model.empty()) {  // glTF-декор: своя geometry + материал со встроенной текстурой
-            std::pair<MeshHandle, MaterialHandle> pr = loadGlbObject(os);
-            mh = pr.first;
-            mah = pr.second;
+            GlbEntry e = loadGlbObject(os);
+            mh = e.mesh;
+            mah = e.mat;
+            aabbMn = e.mn;
+            aabbMx = e.mx;
             if (mh == 0) continue;  // не загрузилась — не плодим пустышки
         } else {
             mh = meshH(os.mesh);
             mah = matH(os.material);
+            auto bit = meshBounds.find(os.mesh);
+            if (bit != meshBounds.end()) { aabbMn = bit->second.first; aabbMx = bit->second.second; }
         }
         if (os.ring) {
             for (int k = 0; k < os.ringCount; ++k) {
@@ -268,6 +292,9 @@ void Scene::createGpuResources(Renderer& renderer, AssetSource& assets) {
                 c.transform.scale = {os.scale, os.scale, os.scale};
                 c.spin = os.spin;
                 c.prevRotY = os.rot.y;
+                c.aabbMin = aabbMn;
+                c.aabbMax = aabbMx;
+                c.specIndex = -1;  // копии кольца не редактируются поштучно (MVP)
                 objects_.push_back(c);
             }
         } else {
@@ -279,6 +306,9 @@ void Scene::createGpuResources(Renderer& renderer, AssetSource& assets) {
             o.transform.scale = {os.scale, os.scale, os.scale};
             o.spin = os.spin;
             o.prevRotY = os.rot.y;
+            o.aabbMin = aabbMn;
+            o.aabbMax = aabbMx;
+            o.specIndex = (int)si;
             objects_.push_back(o);
         }
     }
@@ -586,6 +616,92 @@ RenderFrame Scene::renderEditor(const Mat4& view, const Mat4& proj, const Vec3& 
                 {v.mesh, v.material, Mat4::translation(b.pos + Vec3{0.0f, v.yOffset, 0.0f})});
     }
     return frame;
+}
+
+namespace {
+// Мировой AABB объекта: 8 углов локального AABB через модельную матрицу -> охватывающий бокс.
+void worldAabb(const Mat4& m, const Vec3& lmn, const Vec3& lmx, Vec3& wmn, Vec3& wmx) {
+    bool first = true;
+    for (int i = 0; i < 8; ++i) {
+        Vec3 c{(i & 1) ? lmx.x : lmn.x, (i & 2) ? lmx.y : lmn.y, (i & 4) ? lmx.z : lmn.z};
+        Vec3 w{m.m[0] * c.x + m.m[4] * c.y + m.m[8] * c.z + m.m[12],
+               m.m[1] * c.x + m.m[5] * c.y + m.m[9] * c.z + m.m[13],
+               m.m[2] * c.x + m.m[6] * c.y + m.m[10] * c.z + m.m[14]};
+        if (first) { wmn = wmx = w; first = false; }
+        else {
+            wmn.x = std::min(wmn.x, w.x); wmn.y = std::min(wmn.y, w.y); wmn.z = std::min(wmn.z, w.z);
+            wmx.x = std::max(wmx.x, w.x); wmx.y = std::max(wmx.y, w.y); wmx.z = std::max(wmx.z, w.z);
+        }
+    }
+}
+// Пересечение луча с AABB (slab). Возвращает t входа (>=0) или -1, если промах.
+float rayAabb(const Vec3& ro, const Vec3& rd, const Vec3& mn, const Vec3& mx) {
+    float tmin = -1e30f, tmax = 1e30f;
+    const float o[3] = {ro.x, ro.y, ro.z}, d[3] = {rd.x, rd.y, rd.z};
+    const float lo[3] = {mn.x, mn.y, mn.z}, hi[3] = {mx.x, mx.y, mx.z};
+    for (int i = 0; i < 3; ++i) {
+        if (std::fabs(d[i]) < 1e-8f) {
+            if (o[i] < lo[i] || o[i] > hi[i]) return -1.0f;  // параллельно и вне плиты
+        } else {
+            float t1 = (lo[i] - o[i]) / d[i], t2 = (hi[i] - o[i]) / d[i];
+            if (t1 > t2) std::swap(t1, t2);
+            tmin = std::max(tmin, t1);
+            tmax = std::min(tmax, t2);
+            if (tmin > tmax) return -1.0f;
+        }
+    }
+    return (tmax < 0.0f) ? -1.0f : (tmin >= 0.0f ? tmin : tmax);
+}
+}  // namespace
+
+int Scene::editorPick(const Vec3& rayOrigin, const Vec3& rayDir) const {
+    int best = -1;
+    float bestT = 1e30f;
+    for (const GameObject& o : objects_) {
+        if (o.specIndex < 0) continue;  // редактируем только одиночные объекты
+        Vec3 wmn, wmx;
+        worldAabb(o.transform.matrix(), o.aabbMin, o.aabbMax, wmn, wmx);
+        float t = rayAabb(rayOrigin, rayDir, wmn, wmx);
+        if (t >= 0.0f && t < bestT) { bestT = t; best = o.specIndex; }
+    }
+    return best;
+}
+
+bool Scene::editorObjectMatrix(int specIndex, Mat4& out) const {
+    for (const GameObject& o : objects_)
+        if (o.specIndex == specIndex) { out = o.transform.matrix(); return true; }
+    return false;
+}
+
+bool Scene::editorGetTransform(int specIndex, Vec3& pos, Vec3& rot, Vec3& scale) const {
+    for (const GameObject& o : objects_)
+        if (o.specIndex == specIndex) {
+            pos = o.transform.position;
+            rot = o.transform.rotation;
+            scale = o.transform.scale;
+            return true;
+        }
+    return false;
+}
+
+void Scene::editorSetTransform(int specIndex, const Vec3& pos, const Vec3& rot, const Vec3& scale) {
+    for (GameObject& o : objects_)
+        if (o.specIndex == specIndex) {
+            o.transform.position = pos;
+            o.transform.rotation = rot;
+            o.transform.scale = scale;
+            o.prevRotY = rot.y;  // renderEditor без интерполяции, но держим согласованным
+            return;
+        }
+}
+
+bool Scene::editorWorldAABB(int specIndex, Vec3& mn, Vec3& mx) const {
+    for (const GameObject& o : objects_)
+        if (o.specIndex == specIndex) {
+            worldAabb(o.transform.matrix(), o.aabbMin, o.aabbMax, mn, mx);
+            return true;
+        }
+    return false;
 }
 
 void Scene::setUiScale(float s) {

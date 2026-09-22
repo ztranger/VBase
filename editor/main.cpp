@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "imgui.h"
+#include "ImGuizmo.h"
 #include "backends/imgui_impl_glfw.h"
 
 #include "engine/assets/AssetSource.h"
@@ -110,53 +111,148 @@ int main(int argc, char** argv) {
     std::printf("Редактор: сцена %s загружена.\n", scenePath.c_str());
 
     OrbitCamera cam;
+    int selected = -1;         // specIndex выбранного объекта (-1 = нет)
     double prevX = 0.0, prevY = 0.0;
     glfwGetCursorPos(window, &prevX, &prevY);
+    bool lmbPrev = false;
+    double downX = 0.0, downY = 0.0;
+    bool dragMoved = false;
     float scrollAccum = 0.0f;
     glfwSetWindowUserPointer(window, &scrollAccum);
     glfwSetScrollCallback(window, [](GLFWwindow* w, double, double yoff) {
         *(float*)glfwGetWindowUserPointer(w) += (float)yoff;
     });
 
+    // Луч из точки экрана (пиксели) в мир: unproject NDC через inverse(proj*view).
+    auto screenRay = [](const Mat4& view, const Mat4& proj, const Vec3& eye, float mx, float my,
+                        float w, float h, Vec3& ro, Vec3& rd) {
+        const float nx = 2.0f * mx / w - 1.0f, ny = 1.0f - 2.0f * my / h;
+        const Mat4 inv = inverse(proj * view);
+        auto un = [&](float z) {
+            const float* m = inv.m;
+            float x = m[0] * nx + m[4] * ny + m[8] * z + m[12];
+            float y = m[1] * nx + m[5] * ny + m[9] * z + m[13];
+            float zz = m[2] * nx + m[6] * ny + m[10] * z + m[14];
+            float ww = m[3] * nx + m[7] * ny + m[11] * z + m[15];
+            if (std::fabs(ww) < 1e-8f) ww = 1e-8f;
+            return Vec3{x / ww, y / ww, zz / ww};
+        };
+        ro = eye;
+        rd = normalize(un(1.0f) - eye);  // к дальней плоскости
+    };
+
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
         if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) break;
 
-        // Ввод камеры мышью (если ImGui не забрал мышь).
         double cx = 0.0, cy = 0.0;
         glfwGetCursorPos(window, &cx, &cy);
         float dx = (float)(cx - prevX), dy = (float)(cy - prevY);
         prevX = cx;
         prevY = cy;
-        const bool overUi = ImGui::GetIO().WantCaptureMouse;
-        if (!overUi) {
-            if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS) cam.orbit(dx, dy);
-            else if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS ||
-                     glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS)
-                cam.pan(dx, dy);
-            if (scrollAccum != 0.0f) cam.zoom(scrollAccum);
-        }
-        scrollAccum = 0.0f;
 
         int fbw = 0, fbh = 0;
         glfwGetFramebufferSize(window, &fbw, &fbh);
         const float aspect = fbh > 0 ? (float)fbw / (float)fbh : 1.0f;
+        const Mat4 vmat = cam.view();
+        const Mat4 pmat = cam.proj(aspect);
+        const Vec3 eye = cam.eye();
 
-        RenderFrame frame = scene.renderEditor(cam.view(), cam.proj(aspect), cam.eye());
+        const bool overUi = ImGui::GetIO().WantCaptureMouse;
+        // Гизмо перехватывает мышь (состояние прошлого кадра) — тогда камеру/пикинг не трогаем.
+        const bool gizmo = ImGuizmo::IsUsing() || ImGuizmo::IsOver();
 
-        // Минимальная панель редактора (наращиваем: outliner/inspector/Save).
+        // Камера: ЛКМ-драг — орбита (если не над UI/гизмо), ПКМ/СКМ — пан, колесо — зум.
+        if (!overUi && !gizmo &&
+            glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS)
+            cam.orbit(dx, dy);
+        if (!overUi &&
+            (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS ||
+             glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS))
+            cam.pan(dx, dy);
+        if (!overUi && scrollAccum != 0.0f) cam.zoom(scrollAccum);
+        scrollAccum = 0.0f;
+
+        // Пикинг: ЛКМ-клик (без драга, не над UI/гизмо) — луч в сцену -> выбранный объект.
+        const bool lmb = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+        if (lmb && !lmbPrev) { downX = cx; downY = cy; dragMoved = false; }
+        if (lmb && (std::fabs(cx - downX) + std::fabs(cy - downY) > 4.0)) dragMoved = true;
+        if (!lmb && lmbPrev && !dragMoved && !overUi && !ImGuizmo::IsOver()) {
+            Vec3 ro, rd;
+            screenRay(vmat, pmat, eye, (float)cx, (float)cy, (float)fbw, (float)fbh, ro, rd);
+            selected = scene.editorPick(ro, rd);  // -1 если мимо -> снятие выделения
+        }
+        lmbPrev = lmb;
+
+        RenderFrame frame = scene.renderEditor(vmat, pmat, eye);
+
         frame.ui = [&]() {
+            // ImGuizmo — внутри кадра ImGui (после NewFrame), рисует в его draw-list.
+            ImGuizmo::BeginFrame();
+            ImGuizmo::SetOrthographic(false);
+            ImGuizmo::SetRect(0.0f, 0.0f, ImGui::GetIO().DisplaySize.x, ImGui::GetIO().DisplaySize.y);
+            if (selected >= 0) {
+                Mat4 model;
+                if (scene.editorObjectMatrix(selected, model)) {
+                    Mat4 v = vmat, p = pmat;  // ImGuizmo пишет в model.m при перетаскивании
+                    if (ImGuizmo::Manipulate(v.m, p.m, ImGuizmo::TRANSLATE, ImGuizmo::WORLD, model.m)) {
+                        Vec3 pos{model.m[12], model.m[13], model.m[14]};  // translate-only: берём перенос
+                        Vec3 curPos, rot, scale;
+                        scene.editorGetTransform(selected, curPos, rot, scale);
+                        scene.editorSetTransform(selected, pos, rot, scale);
+                    }
+                }
+                // Подсветка выделения — рамка мирового AABB (проекция 8 углов в экран).
+                Vec3 mn, mx;
+                if (scene.editorWorldAABB(selected, mn, mx)) {
+                    const Mat4 vp = pmat * vmat;
+                    auto proj = [&](Vec3 wp, ImVec2& out) -> bool {
+                        const float* m = vp.m;
+                        float x = m[0] * wp.x + m[4] * wp.y + m[8] * wp.z + m[12];
+                        float y = m[1] * wp.x + m[5] * wp.y + m[9] * wp.z + m[13];
+                        float w = m[3] * wp.x + m[7] * wp.y + m[11] * wp.z + m[15];
+                        if (w <= 1e-5f) return false;
+                        const ImVec2 d = ImGui::GetIO().DisplaySize;
+                        out = ImVec2((x / w * 0.5f + 0.5f) * d.x, (1.0f - (y / w * 0.5f + 0.5f)) * d.y);
+                        return true;
+                    };
+                    ImVec2 c[8];
+                    bool ok = true;
+                    for (int i = 0; i < 8; ++i) {
+                        Vec3 wp{(i & 1) ? mx.x : mn.x, (i & 2) ? mx.y : mn.y, (i & 4) ? mx.z : mn.z};
+                        ok = ok && proj(wp, c[i]);
+                    }
+                    if (ok) {
+                        ImDrawList* dl = ImGui::GetForegroundDrawList();
+                        const ImU32 col = IM_COL32(232, 161, 58, 235);  // amber
+                        const int edges[12][2] = {{0,1},{1,3},{3,2},{2,0},{4,5},{5,7},{7,6},{6,4},
+                                                  {0,4},{1,5},{2,6},{3,7}};
+                        for (auto& e : edges) dl->AddLine(c[e[0]], c[e[1]], col, 1.5f);
+                    }
+                }
+            }
+
             ImGui::SetNextWindowPos(ImVec2(12, 12), ImGuiCond_FirstUseEver);
-            ImGui::SetNextWindowSize(ImVec2(300, 0), ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowSize(ImVec2(320, 0), ImGuiCond_FirstUseEver);
             if (ImGui::Begin("Редактор сцен")) {
                 ImGui::TextWrapped("Сцена: %s", scenePath.c_str());
                 ImGui::Separator();
-                ImGui::TextDisabled("ЛКМ — орбита, ПКМ/СКМ — пан, колесо — зум");
-                ImGui::Text("Камера: dist %.1f  yaw %.2f  pitch %.2f", (double)cam.distance,
-                            (double)cam.yaw, (double)cam.pitch);
+                ImGui::TextDisabled("ЛКМ-клик — выбрать, ЛКМ-драг — орбита, ПКМ/СКМ — пан, колесо — зум");
+                ImGui::Text("Камера: dist %.1f", (double)cam.distance);
                 if (ImGui::Button("Сбросить камеру")) cam = OrbitCamera{};
                 ImGui::Separator();
-                ImGui::TextDisabled("Дальше: пикинг, гизмо, инспектор, Save");
+                if (selected >= 0) {
+                    Vec3 pos, rot, scale;
+                    scene.editorGetTransform(selected, pos, rot, scale);
+                    ImGui::Text("Объект #%d", selected);
+                    if (ImGui::DragFloat3("Позиция", &pos.x, 0.05f))
+                        scene.editorSetTransform(selected, pos, rot, scale);
+                    ImGui::TextDisabled("Тащи стрелки гизмо или правь позицию");
+                } else {
+                    ImGui::TextDisabled("Кликни объект, чтобы выбрать");
+                }
+                ImGui::Separator();
+                ImGui::TextDisabled("Дальше: вращение/масштаб, добавить/удалить, Save");
             }
             ImGui::End();
         };

@@ -75,6 +75,7 @@ Include — **квалифицированные** от корня `cpp/` (на�
 контроллер; подключается родным CMake-таргетом, см. NEXT_STEPS §2.5),
 `miniaudio` (single-header звук: Windows WASAPI / Android AAudio+OpenSL; за интерфейсом
 `engine/audio/Audio.h`, реализация `MiniAudioEngine`; см. NEXT_STEPS «Звук»).
+`imguizmo` (ImGuizmo v1.92.5, MIT — гизмо перемещения/вращения/масштаба; **только** цель `editor/`).
 `glew/` — пустой остаток неудачной загрузки, **не используется**, можно удалить.
 
 ## Ключевые правила

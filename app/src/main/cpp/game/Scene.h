@@ -232,6 +232,16 @@ public:
     // по их визуалам) с ПРОИЗВОЛЬНОЙ камерой (view/proj/eye задаёт редактор — орбита). Без сети,
     // симуляции, героя и интерполяции. Свет/тени/туман — из сцены. Только чтение (const).
     RenderFrame renderEditor(const Mat4& view, const Mat4& proj, const Vec3& eye) const;
+
+    // --- Пикинг/трансформ объектов для редактора сцен ---
+    // Все идентифицируются specIndex (индекс в sceneDesc_.objects; совпадает с сырым SceneDesc,
+    // которым редактор сохраняет). Кольцевые копии не редактируются (specIndex=-1).
+    // Луч мировой (из экрана): ближайший объект под лучом -> его specIndex; -1 если мимо.
+    int editorPick(const Vec3& rayOrigin, const Vec3& rayDir) const;
+    bool editorObjectMatrix(int specIndex, Mat4& out) const;  // модельная матрица (для ImGuizmo)
+    bool editorGetTransform(int specIndex, Vec3& pos, Vec3& rot, Vec3& scale) const;
+    void editorSetTransform(int specIndex, const Vec3& pos, const Vec3& rot, const Vec3& scale);
+    bool editorWorldAABB(int specIndex, Vec3& mn, Vec3& mx) const;  // для подсветки выделения
     float cameraDistance() const { return camera_.distance; }
     void setCameraDistance(float d) { camera_.distance = d; }
     float cameraPitch() const { return camera_.pitch; }
