@@ -14,6 +14,7 @@
 План дальнейших работ (что делаем следующим): **[docs/NEXT_STEPS.md](docs/NEXT_STEPS.md)**.
 Как рисовать UI-текстуры под 9-slice: **[docs/UI_SKIN.md](docs/UI_SKIN.md)**.
 Система экранов / панелей / диалогов: **[docs/UI_SYSTEM.md](docs/UI_SYSTEM.md)**.
+Редактор сцен (десктоп) — инструкция: **[docs/EDITOR.md](docs/EDITOR.md)**.
 Цветовая палитра (TD × Orcs Must Die): **[docs/UI_PALETTE.md](docs/UI_PALETTE.md)**.
 Ниже — самое нужное для старта.
 

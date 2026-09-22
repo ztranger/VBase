@@ -292,7 +292,7 @@ void Scene::createGpuResources(Renderer& renderer, AssetSource& assets) {
                 c.material = mah;
                 c.transform.position = {std::cos(a) * os.ringRadius, os.ringY, std::sin(a) * os.ringRadius};
                 c.transform.rotation = os.rot;
-                c.transform.scale = {os.scale, os.scale, os.scale};
+                c.transform.scale = os.scale;
                 c.spin = os.spin;
                 c.prevRotY = os.rot.y;
                 c.aabbMin = aabbMn;
@@ -307,7 +307,7 @@ void Scene::createGpuResources(Renderer& renderer, AssetSource& assets) {
             o.material = mah;
             o.transform.position = os.pos;
             o.transform.rotation = os.rot;
-            o.transform.scale = {os.scale, os.scale, os.scale};
+            o.transform.scale = os.scale;
             o.spin = os.spin;
             o.prevRotY = os.rot.y;
             o.aabbMin = aabbMn;
@@ -423,6 +423,12 @@ void Scene::createGpuResources(Renderer& renderer, AssetSource& assets) {
         loadRosterModels(renderer, assets, sceneDesc_.heroTypes, chars_);
     if (!sceneDesc_.enemyTypes.empty())
         loadRosterModels(renderer, assets, sceneDesc_.enemyTypes, mobs_);
+}
+
+void Scene::editorReloadFromDesc(const SceneDesc& desc, Renderer& renderer, AssetSource& assets) {
+    sceneDesc_ = desc;              // новое описание (undo/redo редактора)
+    lightDir_ = desc.lightDir;      // свет
+    createGpuResources(renderer, assets);  // пересоздаёт objects_/визуалы/рендер зданий из sceneDesc_
 }
 
 void Scene::rebuildGraphics(Renderer& renderer, AssetSource& assets) {

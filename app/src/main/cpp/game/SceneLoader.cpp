@@ -1,5 +1,6 @@
 #include "game/SceneLoader.h"
 
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -172,7 +173,21 @@ bool parseSceneDesc(const std::string& text, SceneDesc& out) {
                 }
                 else if (k == "pos") { if (!readVec3(t, i, line, o.pos)) return false; }
                 else if (k == "rot") { if (!readVec3(t, i, line, o.rot)) return false; }
-                else if (k == "scale") { if (!readF(t, i, line, o.scale)) return false; }
+                else if (k == "scale") {  // `scale <s>` (равномерно) или `scale <x y z>` (по осям)
+                    float sx = 0.0f;
+                    if (!readF(t, i, line, sx)) return false;
+                    auto looksNum = [](const std::string& s) {
+                        return !s.empty() && (std::isdigit((unsigned char)s[0]) || s[0] == '-' ||
+                                              s[0] == '+' || s[0] == '.');
+                    };
+                    if (i + 1 < t.size() && looksNum(t[i]) && looksNum(t[i + 1])) {
+                        float sy = 0.0f, sz = 0.0f;
+                        if (!readF(t, i, line, sy) || !readF(t, i, line, sz)) return false;
+                        o.scale = {sx, sy, sz};
+                    } else {
+                        o.scale = {sx, sx, sx};
+                    }
+                }
                 else if (k == "spin") { if (!readF(t, i, line, o.spin)) return false; }
                 else if (k == "count") { if (!readI(t, i, line, o.ringCount)) return false; }
                 else if (k == "radius") { if (!readF(t, i, line, o.ringRadius)) return false; }
@@ -383,7 +398,11 @@ std::string serializeSceneDesc(const SceneDesc& d) {
         o << " pos " << fnum(os.pos.x) << " " << fnum(os.pos.y) << " " << fnum(os.pos.z);
         if (os.rot.x != 0.0f || os.rot.y != 0.0f || os.rot.z != 0.0f)
             o << " rot " << fnum(os.rot.x) << " " << fnum(os.rot.y) << " " << fnum(os.rot.z);
-        if (os.scale != 1.0f) o << " scale " << fnum(os.scale);
+        if (os.scale.x == os.scale.y && os.scale.y == os.scale.z) {  // равномерный — компактно
+            if (os.scale.x != 1.0f) o << " scale " << fnum(os.scale.x);
+        } else {  // по-осевой
+            o << " scale " << fnum(os.scale.x) << " " << fnum(os.scale.y) << " " << fnum(os.scale.z);
+        }
         if (os.spin != 0.0f) o << " spin " << fnum(os.spin);
         if (os.ring)
             o << " count " << os.ringCount << " radius " << fnum(os.ringRadius) << " y "

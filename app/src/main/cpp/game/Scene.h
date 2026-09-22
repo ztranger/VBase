@@ -233,6 +233,10 @@ public:
     // симуляции, героя и интерполяции. Свет/тени/туман — из сцены. Только чтение (const).
     RenderFrame renderEditor(const Mat4& view, const Mat4& proj, const Vec3& eye) const;
 
+    // Undo/redo редактора: заменить описание сцены целиком и пересобрать GPU-ресурсы (объекты/
+    // здания/спавны/свет) из него. Сессия/физика не трогаются (редактор их не использует).
+    void editorReloadFromDesc(const SceneDesc& desc, Renderer& renderer, AssetSource& assets);
+
     // --- Пикинг/трансформ для редактора сцен ---
     // Три категории: объекты (specIndex в doc.objects), здания (индекс в sceneDesc_.buildings ==
     // doc.buildings), точки спавна (индекс в sceneDesc_.spawns == doc.spawns). Пик-функции дают

@@ -48,8 +48,8 @@ struct ObjectSpec {
     ShaderType shader = ShaderType::Lit;  // шейдер для model-объекта (lit/unlit/phong)
     Vec3 color{1.0f, 1.0f, 1.0f};  // тинт material (умножается на текстуру); только для model-объекта
     Vec3 pos{0.0f, 0.0f, 0.0f};
-    Vec3 rot{0.0f, 0.0f, 0.0f};
-    float scale = 1.0f;    // равномерный масштаб
+    Vec3 rot{0.0f, 0.0f, 0.0f};      // euler X/Y/Z (рад); Transform применяет Ry·Rx·Rz
+    Vec3 scale{1.0f, 1.0f, 1.0f};    // по-осевой масштаб (формат: `scale <s>` или `scale <x y z>`)
     float spin = 0.0f;     // авто-вращение вокруг Y, рад/с
 
     // Инстансинг по кольцу: если ring=true, объект размножается на count копий
