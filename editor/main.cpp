@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -28,6 +29,8 @@
 #include "engine/core/Renderer.h"
 #include "engine/render/GlRenderer.h"
 #include "game/Scene.h"
+#include "game/SceneDesc.h"
+#include "game/SceneLoader.h"
 
 namespace {
 
@@ -75,6 +78,35 @@ int main(int argc, char** argv) {
 #endif
     std::setvbuf(stdout, nullptr, _IONBF, 0);
 
+    // Headless-проверка Save-пути (без окна): load -> serialize -> запись файла -> reload ->
+    // сверка (идемпотентно + счётчики). Запускать из editor/build. Живой sync трансформов
+    // (editorGetTransform) сюда не входит — он тривиален и покрыт компиляцией/[SceneRoundTrip].
+    if (argc > 1 && std::string(argv[1]) == "--savetest") {
+        const std::string ad = "../../app/src/main/assets";
+        FileAssetSource a(ad);
+        SceneDesc d;
+        if (!loadSceneDesc(a, "scenes/default.scene", d)) {
+            std::printf("[SaveTest] FAIL: не загрузил scenes/default.scene\n");
+            return 1;
+        }
+        const std::string t1 = serializeSceneDesc(d);
+        const std::string outRel = "scenes/_savetest.scene";
+        const std::string outFull = ad + "/" + outRel;
+        {
+            std::ofstream f(outFull, std::ios::binary);
+            if (!f.is_open()) { std::printf("[SaveTest] FAIL: не открыл %s на запись\n", outFull.c_str()); return 1; }
+            f.write(t1.data(), (std::streamsize)t1.size());
+        }
+        SceneDesc d2;
+        const bool reok = loadSceneDesc(a, outRel.c_str(), d2);
+        const std::string t2 = reok ? serializeSceneDesc(d2) : std::string();
+        std::remove(outFull.c_str());
+        const bool ok = reok && t1 == t2 && d.objects.size() == d2.objects.size();
+        std::printf("[SaveTest] %s (obj=%u, %u байт)\n", ok ? "OK" : "FAIL",
+                    (unsigned)d2.objects.size(), (unsigned)t1.size());
+        return ok ? 0 : 1;
+    }
+
     // Аргументы: [assetsDir] [scenePath] (как у desktop, но без serverIp — сети нет).
     std::string assetsDir = (argc > 1) ? argv[1] : "../../app/src/main/assets";
     std::string scenePath = (argc > 2) ? argv[2] : "scenes/default.scene";
@@ -108,10 +140,42 @@ int main(int argc, char** argv) {
 
     Scene scene;
     scene.build(*renderer, assets, scenePath.c_str());
-    std::printf("Редактор: сцена %s загружена.\n", scenePath.c_str());
+    // Сырой SceneDesc (до applyBuildingConfig) — источник для Save: сериализуем именно его,
+    // подтянув живые трансформы объектов из Scene. Индексы объектов совпадают со Scene.
+    SceneDesc doc;
+    const bool docOk = loadSceneDesc(assets, scenePath.c_str(), doc);
+    std::printf("Редактор: сцена %s загружена%s.\n", scenePath.c_str(),
+                docOk ? "" : " (СЫРОЙ ПАРС НЕ УДАЛСЯ — Save отключён)");
 
     OrbitCamera cam;
     int selected = -1;         // specIndex выбранного объекта (-1 = нет)
+    bool dirty = false;        // есть несохранённые правки
+    std::string saveMsg;       // статус последнего Save (для панели)
+    const std::string scenaFull = assetsDir + "/" + scenePath;  // куда пишем при Save
+
+    // Save: подтянуть живые трансформы объектов в сырой doc и сериализовать в .scene-файл.
+    auto saveScene = [&]() {
+        if (!docOk) { saveMsg = "Save недоступен: сырой парс не удался"; return; }
+        for (size_t i = 0; i < doc.objects.size(); ++i) {
+            Vec3 pos, rot, scale;
+            if (scene.editorGetTransform((int)i, pos, rot, scale)) {  // false для кольца/не-объектов
+                doc.objects[i].pos = pos;
+                doc.objects[i].rot = rot;
+                doc.objects[i].scale = scale.x;  // объекты строятся с равномерным масштабом
+            }
+        }
+        const std::string text = serializeSceneDesc(doc);
+        std::ofstream f(scenaFull, std::ios::binary);  // binary: не трогать переводы строк / UTF-8
+        if (f.is_open()) {
+            f.write(text.data(), (std::streamsize)text.size());
+            f.close();
+            dirty = false;
+            saveMsg = "Сохранено: " + scenaFull;
+            std::printf("Редактор: сохранено %s (%u байт)\n", scenaFull.c_str(), (unsigned)text.size());
+        } else {
+            saveMsg = "Ошибка записи: " + scenaFull;
+        }
+    };
     double prevX = 0.0, prevY = 0.0;
     glfwGetCursorPos(window, &prevX, &prevY);
     bool lmbPrev = false;
@@ -144,6 +208,15 @@ int main(int argc, char** argv) {
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
         if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) break;
+
+        // Ctrl+S -> Save (по фронту, если ImGui не забрал клавиатуру).
+        static bool sPrev = false;
+        const bool sNow = !ImGui::GetIO().WantCaptureKeyboard &&
+                          (glfwGetKey(window, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
+                           glfwGetKey(window, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS) &&
+                          glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS;
+        if (sNow && !sPrev) saveScene();
+        sPrev = sNow;
 
         double cx = 0.0, cy = 0.0;
         glfwGetCursorPos(window, &cx, &cy);
@@ -200,6 +273,7 @@ int main(int argc, char** argv) {
                         Vec3 curPos, rot, scale;
                         scene.editorGetTransform(selected, curPos, rot, scale);
                         scene.editorSetTransform(selected, pos, rot, scale);
+                        dirty = true;
                     }
                 }
                 // Подсветка выделения — рамка мирового AABB (проекция 8 углов в экран).
@@ -235,7 +309,9 @@ int main(int argc, char** argv) {
             ImGui::SetNextWindowPos(ImVec2(12, 12), ImGuiCond_FirstUseEver);
             ImGui::SetNextWindowSize(ImVec2(320, 0), ImGuiCond_FirstUseEver);
             if (ImGui::Begin("Редактор сцен")) {
-                ImGui::TextWrapped("Сцена: %s", scenePath.c_str());
+                ImGui::TextWrapped("Сцена: %s%s", scenePath.c_str(), dirty ? " *" : "");
+                if (ImGui::Button("Сохранить (Ctrl+S)")) saveScene();
+                if (!saveMsg.empty()) ImGui::TextDisabled("%s", saveMsg.c_str());
                 ImGui::Separator();
                 ImGui::TextDisabled("ЛКМ-клик — выбрать, ЛКМ-драг — орбита, ПКМ/СКМ — пан, колесо — зум");
                 ImGui::Text("Камера: dist %.1f", (double)cam.distance);
@@ -245,8 +321,10 @@ int main(int argc, char** argv) {
                     Vec3 pos, rot, scale;
                     scene.editorGetTransform(selected, pos, rot, scale);
                     ImGui::Text("Объект #%d", selected);
-                    if (ImGui::DragFloat3("Позиция", &pos.x, 0.05f))
+                    if (ImGui::DragFloat3("Позиция", &pos.x, 0.05f)) {
                         scene.editorSetTransform(selected, pos, rot, scale);
+                        dirty = true;
+                    }
                     ImGui::TextDisabled("Тащи стрелки гизмо или правь позицию");
                 } else {
                     ImGui::TextDisabled("Кликни объект, чтобы выбрать");
