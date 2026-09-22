@@ -18,7 +18,7 @@ UiMode g_mode = UiMode::MainMenu;
 UiMode g_prevMode = UiMode::MainMenu;
 UiOverlay g_overlay = UiOverlay::None;
 MainMenuPanel g_panel = MainMenuPanel::Home;
-bool g_debugOpen = true;
+bool g_debugOpen = false;  // дебаг-панель по умолчанию скрыта (открывается кнопкой/тоглом)
 UiDialogs::Stack g_dialogs;
 
 }  // namespace

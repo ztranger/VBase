@@ -399,12 +399,21 @@ void Scene::createGpuResources(Renderer& renderer, AssetSource& assets) {
         projMat_ = renderer.createMaterial(md);
     }
     // Маркер точки спавна (только редактор): маленький куб + яркий Unlit-материал (спавны невидимы).
+    // Цвет — по команде, чтобы стороны PvP различались в 3D-виде: 0 нейтр/кооп, 1/2/3 — стороны.
     editorMarkerMesh_ = renderer.createMesh(makeCube(0.8f));
     {
-        MaterialDesc md;
-        md.shader = ShaderType::Unlit;
-        md.baseColor = {0.35f, 0.85f, 1.0f};  // циан-маркер
-        editorMarkerMat_ = renderer.createMaterial(md);
+        const Vec3 teamCol[kEditorTeamColors] = {
+            {0.35f, 0.85f, 1.0f},   // 0 — циан (нейтр/кооп)
+            {0.35f, 0.55f, 0.95f},  // 1 — синий
+            {0.95f, 0.40f, 0.40f},  // 2 — красный
+            {0.45f, 0.90f, 0.50f},  // 3 — зелёный
+        };
+        for (int t = 0; t < kEditorTeamColors; ++t) {
+            MaterialDesc md;
+            md.shader = ShaderType::Unlit;
+            md.baseColor = teamCol[t];
+            editorMarkerMat_[t] = renderer.createMaterial(md);
+        }
     }
     // Тайл подсветки сетки: плоскость чуть меньше клетки — зазоры дают линии сетки. Один меш
     // инстансится на все клетки (батч по mesh+material), поэтому цвет — в материале, не в тайле.
@@ -606,8 +615,6 @@ RenderFrame Scene::renderCharacterPreview(float alpha, float aspect, float rende
     frame.shadowsEnabled = shadowsEnabled_;
     frame.shadowBias = shadowBias_;
     frame.shadowRadius = shadowRadius_;
-    frame.fogColor = fogColor_;
-    frame.fogDensity = fogDensity_;
 
     float yaw = previewSpin_ * 0.6f;                    // медленный оборот
     frame.skinned.push_back(
@@ -626,8 +633,6 @@ RenderFrame Scene::renderMenuBackdrop(float aspect) {
     frame.shadowsEnabled = shadowsEnabled_;
     frame.shadowBias = shadowBias_;
     frame.shadowRadius = shadowRadius_;
-    frame.fogColor = fogColor_;
-    frame.fogDensity = fogDensity_;
     return frame;
 }
 
@@ -640,8 +645,6 @@ RenderFrame Scene::renderEditor(const Mat4& view, const Mat4& proj, const Vec3& 
     frame.shadowsEnabled = shadowsEnabled_;
     frame.shadowBias = shadowBias_;
     frame.shadowRadius = shadowRadius_;
-    frame.fogColor = fogColor_;
-    frame.fogDensity = fogDensity_;
 
     // Статичные объекты сцены (включая пол и glTF-декор) — как есть, без интерполяции спина.
     for (const GameObject& obj : objects_)
@@ -665,10 +668,13 @@ RenderFrame Scene::renderEditor(const Mat4& view, const Mat4& proj, const Vec3& 
                 {v.mesh, v.material, Mat4::translation(b.pos + Vec3{0.0f, v.yOffset, 0.0f})});
     }
     // Маркеры точек спавна (невидимы в игре) — маленькие кубы, чтобы их можно было выбрать/двигать.
+    // Цвет куба = команда точки спавна (различаем стороны PvP визуально).
     if (editorMarkerMesh_ != 0)
-        for (const SpawnSpec& s : sceneDesc_.spawns)
-            frame.items.push_back({editorMarkerMesh_, editorMarkerMat_,
+        for (const SpawnSpec& s : sceneDesc_.spawns) {
+            const int ti = (s.team < kEditorTeamColors) ? (int)s.team : 0;
+            frame.items.push_back({editorMarkerMesh_, editorMarkerMat_[ti],
                                    Mat4::translation(s.pos + Vec3{0.0f, 0.4f, 0.0f})});
+        }
     return frame;
 }
 
@@ -831,6 +837,18 @@ int Scene::editorAddObjectModel(Renderer& renderer, AssetSource& assets, const s
     o.specIndex = specIndex;
     objects_.push_back(o);
     return specIndex;
+}
+
+int Scene::editorDuplicateObject(int srcSpecIndex, const Vec3& pos, int newSpecIndex) {
+    for (size_t i = 0; i < objects_.size(); ++i) {
+        if (objects_[i].specIndex != srcSpecIndex) continue;
+        GameObject o = objects_[i];  // POD-копия: хендлы меша/материала/альбедо шарятся с оригиналом
+        o.transform.position = pos;
+        o.specIndex = newSpecIndex;
+        objects_.push_back(o);
+        return newSpecIndex;
+    }
+    return -1;
 }
 
 void Scene::editorSetObjectMaterial(Renderer& renderer, int specIndex, ShaderType shader,
@@ -1199,8 +1217,6 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
     frame.shadowsEnabled = shadowsEnabled_;
     frame.shadowBias = shadowBias_;
     frame.shadowRadius = shadowRadius_;
-    frame.fogColor = fogColor_;
-    frame.fogDensity = fogDensity_;
 
     // Джус: тряска камеры на крупный урон — затухающий сдвиг в экранной плоскости (нудж по
     // translation view-матрицы). Применяем ДО сохранения presentation_.lastView, чтобы HUD-оверлей (бары/

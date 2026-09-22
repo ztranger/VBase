@@ -48,10 +48,11 @@ struct RenderFrame {
     float shadowBias = 0.0025f;   // сдвиг глубины против self-shadow acne
     float shadowRadius = 14.0f;   // полуширина орто-коробки света (охват арены)
 
-    // Экспоненциальный туман по глубине. fogColor — в ЛИНЕЙНОМ пространстве.
-    // fogDensity 0 = выключен. Дальний фон (clear color) рендер подгоняет под туман.
+    // Экспоненциальный туман по глубине отключён (fogDensity 0): игровой слой его больше
+    // не задаёт. Шейдеры и оба рендера гасят туман при density<=0 (ранний выход / обычный
+    // clear color), так что поля здесь безвредны и оставлены как no-op крючок.
     Vec3 fogColor{0.09f, 0.13f, 0.20f};
-    float fogDensity = 0.014f;
+    float fogDensity = 0.0f;
 
     std::vector<RenderItem> items;
     std::vector<SkinnedItem> skinned; // анимированные модели (скиннинг)

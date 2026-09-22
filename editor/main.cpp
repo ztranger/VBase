@@ -66,7 +66,7 @@ struct OrbitCamera {
         float s = distance * 0.0016f;
         Vec3 right{std::cos(yaw), 0.0f, -std::sin(yaw)};
         Vec3 fwd{std::sin(yaw), 0.0f, std::cos(yaw)};
-        target = target - right * (dx * s) + fwd * (dy * s);
+        target = target - right * (dx * s) - fwd * (dy * s);  // dy>0 (драг вниз) — сцена едет за мышью вниз
     }
     void zoom(float wheel) {
         distance *= std::pow(0.9f, wheel);
@@ -223,6 +223,17 @@ int main(int argc, char** argv) {
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
 
+    // Свой скролл-колбэк ставим ДО ImGui_ImplGlfw_InitForOpenGL(..., true): тот сам вызывает
+    // glfwSetScrollCallback и запоминает предыдущий (наш) как PrevUserCallbackScroll, чтобы
+    // прочитать колесо (io.MouseWheel) и затем прочейнить нам. Если поставить свой колбэк ПОСЛЕ
+    // ImGui-инициализации, он молча заменит ImGui-колбэк — тогда ни одно ImGui-окно (Outliner,
+    // список .glb) не сможет скроллиться колесом мыши.
+    float scrollAccum = 0.0f;
+    glfwSetWindowUserPointer(window, &scrollAccum);
+    glfwSetScrollCallback(window, [](GLFWwindow* w, double, double yoff) {
+        *(float*)glfwGetWindowUserPointer(w) += (float)yoff;
+    });
+
     FileAssetSource assets(assetsDir);
     std::unique_ptr<Renderer> renderer = std::make_unique<GlRenderer>(
         [](const char* n) { return (void*)glfwGetProcAddress(n); });
@@ -276,6 +287,15 @@ int main(int argc, char** argv) {
     ImGuizmo::OPERATION gizmoOp = ImGuizmo::TRANSLATE;
     bool snapOn = false;                                    // снап гизмо к шагу
     float snapMove = doc.grid.cell > 0.0f ? doc.grid.cell : 1.0f;  // шаг перемещения = клетка сетки
+    int newSpawnTeam = 1;  // команда для новых точек спавна (0 нейтр/кооп, 1/2 — стороны PvP)
+    // Селектор команды (0 нейтр/кооп, 1/2/3 — стороны PvP). true при изменении.
+    auto teamCombo = [](const char* label, int& team) -> bool {
+        const char* names = "Нейтр/кооп (0)\0Команда 1\0Команда 2\0Команда 3\0";
+        int t = (team >= 0 && team < 4) ? team : 0;
+        ImGui::SetNextItemWidth(150.0f);
+        if (ImGui::Combo(label, &t, names)) { team = t; return true; }
+        return false;
+    };
     const float snapRot = 15.0f;                            // шаг вращения, градусы
     const float snapScale = 0.25f;                          // шаг масштаба
     bool dirty = false;        // есть несохранённые правки
@@ -424,29 +444,33 @@ int main(int argc, char** argv) {
         dirty = true;
     };
 
-    // Дублировать выбранный ОБЪЕКТ: модель/шейдер/цвет из doc, ЖИВОЙ трансформ из Scene, со сдвигом.
+    // Дублировать выбранный ОБЪЕКТ: спек из doc, ЖИВОЙ трансформ из Scene, со сдвигом. Работает и
+    // для примитивов (box/sphere): Scene клонирует живой GameObject по хендлам, не перезагружая
+    // модель (у примитива model пустой, mesh/material — по имени, перезагрузить их тут нельзя).
     auto duplicateSelected = [&]() {
         if (selKind != SelKind::Object || selIdx < 0 || selIdx >= (int)doc.objects.size()) return;
-        if (doc.objects[selIdx].model.empty()) return;  // дублируем только glTF-модели
         Vec3 pos, rot, scale;
         if (!scene.editorGetTransform(selIdx, pos, rot, scale)) return;
-        ObjectSpec os = doc.objects[selIdx];  // model/tex/shader/color/spin
+        ObjectSpec os = doc.objects[selIdx];  // model/mesh/material/tex/shader/color/spin
         os.pos = {pos.x + (snapOn ? snapMove : 1.0f), pos.y, pos.z};
         os.rot = rot;
         os.scale = scale;
         pushUndo();
-        addObjectSpec(os);
+        const int idx = (int)doc.objects.size();
+        if (scene.editorDuplicateObject(selIdx, os.pos, idx) < 0) return;
+        doc.objects.push_back(os);
+        scene.editorSetTransform(idx, os.pos, os.rot, os.scale);  // rot/scale на клон
+        selKind = SelKind::Object;
+        selIdx = idx;
+        dirty = true;
     };
     double prevX = 0.0, prevY = 0.0;
     glfwGetCursorPos(window, &prevX, &prevY);
     bool lmbPrev = false;
     double downX = 0.0, downY = 0.0;
     bool dragMoved = false;
-    float scrollAccum = 0.0f;
-    glfwSetWindowUserPointer(window, &scrollAccum);
-    glfwSetScrollCallback(window, [](GLFWwindow* w, double, double yoff) {
-        *(float*)glfwGetWindowUserPointer(w) += (float)yoff;
-    });
+    // scrollAccum и скролл-колбэк уже заведены выше (до ImGui-инициализации), чтобы
+    // ImGui-колбэк не был перезаписан и окна могли скроллиться колесом.
 
     // Пересечение луча с AABB (для пикинга колайдеров, которые Scene в редакторе не хранит).
     auto rayAabbHit = [](const Vec3& ro, const Vec3& rd, const Vec3& mn, const Vec3& mx) -> float {
@@ -692,8 +716,12 @@ int main(int argc, char** argv) {
                 if (haveBox) drawBox(mn, mx, IM_COL32(232, 161, 58, 235), 1.5f);  // amber
             }
 
+            // Высоту задаём конечной (не 0/auto): при auto-fit окно растёт под контент и уходит
+            // за нижний край экрана без скроллбара. С конечной высотой ImGui рисует вертикальный
+            // скроллбар, а колесо (наш колбэк теперь чейнится в ImGui) прокручивает панель.
+            const ImVec2 dispSize = ImGui::GetIO().DisplaySize;
             ImGui::SetNextWindowPos(ImVec2(12, 12), ImGuiCond_FirstUseEver);
-            ImGui::SetNextWindowSize(ImVec2(320, 0), ImGuiCond_FirstUseEver);
+            ImGui::SetNextWindowSize(ImVec2(320.0f, dispSize.y - 24.0f), ImGuiCond_FirstUseEver);
             if (ImGui::Begin("Редактор сцен")) {
                 ImGui::TextWrapped("Сцена: %s%s", scenePath.c_str(), dirty ? " *" : "");
                 if (ImGui::Button("Сохранить (Ctrl+S)")) saveScene();
@@ -769,12 +797,12 @@ int main(int argc, char** argv) {
                             dirty = true;
                         }
                         if (ImGui::IsItemActivated()) pushUndo();
-                        if (ImGui::DragInt("Команда", &team, 0.05f, 0, 2)) {
+                        if (teamCombo("Команда", team)) {
+                            pushUndo();
                             scene.editorSetBuildingTeam(selIdx, team);
                             if (selIdx < (int)doc.buildings.size()) doc.buildings[selIdx].team = (uint8_t)team;
                             dirty = true;
                         }
-                        if (ImGui::IsItemActivated()) pushUndo();
                         if (ImGui::Button("Удалить (Del)")) deleteSelected();
                         ImGui::TextDisabled("Параметры (hp/rate/…) — из config/buildings.cfg");
                     }
@@ -788,12 +816,13 @@ int main(int argc, char** argv) {
                             dirty = true;
                         }
                         if (ImGui::IsItemActivated()) pushUndo();
-                        if (ImGui::DragInt("Команда", &team, 0.05f, 0, 2)) {
+                        if (teamCombo("Команда", team)) {
+                            pushUndo();
                             scene.editorSetSpawnTeam(selIdx, team);
                             if (selIdx < (int)doc.spawns.size()) doc.spawns[selIdx].team = (uint8_t)team;
                             dirty = true;
                         }
-                        if (ImGui::IsItemActivated()) pushUndo();
+                        ImGui::TextDisabled("Цвет маркера = команда (син/крас/зел)");
                         if (ImGui::Button("Удалить (Del)")) deleteSelected();
                     }
                 } else if (selKind == SelKind::Collider && selIdx < (int)doc.colliders.size()) {
@@ -819,9 +848,11 @@ int main(int argc, char** argv) {
                 ImGui::SameLine();
                 if (ImGui::Button("Башня")) { pushUndo(); addBuilding((int)EntityType::Tower, cam.target); }
                 ImGui::SameLine();
-                if (ImGui::Button("Точка спавна")) { pushUndo(); addSpawn(cam.target, 0); }
-                ImGui::SameLine();
                 if (ImGui::Button("Колайдер")) { pushUndo(); addCollider(cam.target); }
+                // Точка спавна героя: команда выбирается тут же (для PvP нужны стороны 1 и 2).
+                teamCombo("##newspawnteam", newSpawnTeam);
+                ImGui::SameLine();
+                if (ImGui::Button("Добавить точку спавна")) { pushUndo(); addSpawn(cam.target, newSpawnTeam); }
                 ImGui::Separator();
                 // Свет сцены (направление НА источник) — сразу видно в рендере.
                 Vec3 ld = scene.lightDir();

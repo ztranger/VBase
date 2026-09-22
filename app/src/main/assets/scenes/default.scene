@@ -1,85 +1,65 @@
-# Сцена по умолчанию VBase. Формат: одна директива на строку, '#' — комментарий.
-# Ссылки (mat/tex) — по именам, объявленным выше.
-#
-# Арена ~36×36 (стены ±18): спавнер СВ, ядро Ю — длинный путь через центр.
-# В центре стена-препятствие: рашеры обходят на запад, миньоны могут грызть базу.
+# VBase scene (сериализовано редактором)
 
-# --- Текстуры ---
-texture checker procedural 256 8            # процедурная шахматка
-texture crate   image textures/crate.png    # если файла нет -> материал станет белым
-texture bumps   procnormal 256 8            # процедурная нормал-карта (бампы)
+grid cell 2 arena 17
+light dir 0.4 1 0.6
+camera distance 26 pitch 0.85 lookHeight 1 fov 0.9 near 0.1 far 200
+matchrestart 8
 
-# --- Материалы: <name> <shader> [color r g b] [tex <ref>] [normal <ref>] ---
-material floor lit   color 1 1 1            tex checker  normal bumps
-material crate lit   color 1 1 1            tex crate
-material red   phong color 0.90 0.35 0.30                normal bumps
-material green unlit  color 0.30 0.85 0.45
-material blue  phong color 0.35 0.55 0.95                normal bumps
-material gold  phong color 0.95 0.80 0.25
-material edge  lit   color 0.55 0.65 0.85   tex checker
+texture checker procedural 256 8
+texture crate image textures/crate.png
+texture bumps procnormal 256 8
 
-# --- Меши-примитивы ---
-mesh ground plane  36 18    # size 36, UV-тайлинг 18 (арена ±18)
-mesh box    cube   1
-mesh ball   sphere 0.6
+material floor lit color 1 1 1 tex checker normal bumps
+material crate lit color 1 1 1 tex crate
+material red phong color 0.9 0.35 0.3 normal bumps
+material green unlit color 0.3 0.85 0.45
+material blue phong color 0.35 0.55 0.95 normal bumps
+material gold phong color 0.95 0.8 0.25
+material edge lit color 0.55 0.65 0.85 tex checker
 
-# --- Свет и камера ---
-light  dir 0.4 1 0.6
-camera distance 26 pitch 0.85   # чуть выше и дальше — видна вся дорожка
-grid   cell 2 arena 17          # стройка внутри стен ±18
-matchrestart 8                  # после победы/поражения — авто-рестарт матча через 8 с
+mesh ground plane 36 18
+mesh box cube 1
+mesh ball sphere 0.6 16 24
 
-# --- Объекты окружения ---
-object ground mat floor
+object ground mat floor pos 0 0 0
+object box mat crate pos 4 0.9 8 scale 1.8
+object box mat crate pos 4 0.9 6 scale 1.8
+object box mat crate pos 4 0.9 4 scale 1.8
+object box mat crate pos 4 0.9 2 scale 1.8
+object box mat crate pos 4 0.9 0 scale 1.8
+object box mat crate pos 4 0.9 -2 scale 1.8
+object box mat crate pos 6 0.9 -2 scale 1.8
+object box mat crate pos 2 0.9 8 scale 1.8
+object ball mat blue pos -11.8569 0.781319 7.29471
+object ball mat gold pos -12 0.6 0
+object ball mat red pos -12 0.6 -8
+ring box mat edge pos 0 0 0 scale 0.4 spin 1.2 count 48 radius 16 y 0.4
+object model models/Barbarian.glb shader lit pos 2.5725 0 -10.0425
+object model models/Skeleton_Mage.glb shader lit pos -3.07927 0 -10.6209 rot 0.0314483 0.58778 0.0137238 scale 2.07514 2.41539 1
+object model models/Skeleton_Mage.glb shader lit pos -1.88019 4.76837e-07 -6.46483 rot -0 2.12007 0
 
-# Декор из готовых glTF/GLB-пропсов (KayKit/Quaternius/Kenney — CC0). Кидаешь .glb в
-# assets/models/ и ставишь так (встроенный атлас берётся сам; коллайдер — отдельной collider):
-#   object model models/props/barrel.glb pos 3 0 5 rot 0 0.8 0 scale 1
-#   ring   model models/props/pillar.glb count 8 radius 10 y 0        # кольцо колонн
+collider box center 0 -0.5 0 half 18 0.5 18
+collider box center 18 1 0 half 0.25 1 18
+collider box center -18 1 0 half 0.25 1 18
+collider box center 0 1 18 half 18 1 0.25
+collider box center 0 1 -18 half 18 1 0.25
+collider box center 4 0.9 8 half 0.9 0.9 0.9
+collider box center 4 0.9 6 half 0.9 0.9 0.9
+collider box center 4 0.9 4 half 0.9 0.9 0.9
+collider box center 4 0.9 2 half 0.9 0.9 0.9
+collider box center 4 0.9 0 half 0.9 0.9 0.9
+collider box center 4 0.9 -2 half 0.9 0.9 0.9
+collider box center 6 0.9 -2 half 0.9 0.9 0.9
+collider box center 2 0.9 8 half 0.9 0.9 0.9
 
-# Стена-препятствие углом (визуал = коллайдер). Прямая спавнер→ядро упирается сюда;
-# обход на −X. Крючки на концах — проверка, не застревают ли капсулы в угле.
-object box mat crate pos  4 0.9  8  scale 1.8
-object box mat crate pos  4 0.9  6  scale 1.8
-object box mat crate pos  4 0.9  4  scale 1.8
-object box mat crate pos  4 0.9  2  scale 1.8
-object box mat crate pos  4 0.9  0  scale 1.8
-object box mat crate pos  4 0.9 -2  scale 1.8
-object box mat crate pos  6 0.9 -2  scale 1.8
-object box mat crate pos  2 0.9  8  scale 1.8
-
-# Декор в стороне от дорожки (без коллизий — не путают пасфайндинг)
-object ball mat blue pos -12 0.6  8
-object ball mat gold pos -12 0.6  0
-object ball mat red  pos -12 0.6 -8
-
-# Кольцо инстансных кубов по краю (демо инстансинга)
-ring box mat edge count 48 radius 16 y 0.4 scale 0.4 spin 1.2
-
-# --- Коллайдеры физики (независимы от визуальных мешей) ---
-# collider box center <x y z> half <hx hy hz>
-collider box center 0 -0.5 0  half 18 0.5 18       # пол (верх на y=0)
-collider box center 18 1 0    half 0.25 1 18        # стена +X
-collider box center -18 1 0   half 0.25 1 18        # стена -X
-collider box center 0 1 18    half 18 1 0.25         # стена +Z
-collider box center 0 1 -18   half 18 1 0.25         # стена -Z
-# Та же стена, что визуал выше
-collider box center  4 0.9  8  half 0.9 0.9 0.9
-collider box center  4 0.9  6  half 0.9 0.9 0.9
-collider box center  4 0.9  4  half 0.9 0.9 0.9
-collider box center  4 0.9  2  half 0.9 0.9 0.9
-collider box center  4 0.9  0  half 0.9 0.9 0.9
-collider box center  4 0.9 -2  half 0.9 0.9 0.9
-collider box center  6 0.9 -2  half 0.9 0.9 0.9
-collider box center  2 0.9  8  half 0.9 0.9 0.9
-
-# --- Здания базы: только РАЗМЕЩЕНИЕ; параметры — из config/buildings.cfg. ---
-# База на юге, спавнер на северо-востоке (~30 единиц пути).
-core      pos  0 0 -14
+core pos 0.323848 0.0654526 -13.7354
 generator pos -4 0 -14
-storage   pos  4 0 -14
-tower     pos  0 0 -10             # одна слабая башня у подхода к ядру
-spawner   pos 14 0  14             # волны идут через центральную стену
+storage pos 8 0 -14
+tower pos 0 0 -10
+spawner pos 14 0 14
+generator pos -4.54701 0 -8.83724
 
-# --- Управляемый персонаж (у базы, не на дорожке) ---
-player model models/Mage.glb pos 0 0 -12 scale 1.0 hide wand,spellbook
+spawn team 2 pos -8.3991 0 1.95194
+spawn team 1 pos -13.0257 0 -5.3158
+
+player model models/Mage.glb pos 0 0 -12 scale 1 yaw 0 capsule 0.3 0.3 hide wand,spellbook

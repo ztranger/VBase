@@ -274,6 +274,11 @@ public:
     int editorAddObjectModel(Renderer& renderer, AssetSource& assets, const std::string& model,
                              const std::string& tex, ShaderType shader, const Vec3& pos,
                              int specIndex);
+    // Дублировать существующий объект (модель ИЛИ примитив box/sphere): клонирует живой GameObject
+    // с его хендлами меша/материала/альбедо (перезагрузка не нужна), ставит новую позицию и
+    // specIndex. Работает и для примитивов, у которых нет model (mesh/material — по имени из .scene).
+    // Возвращает newSpecIndex или -1, если исходный объект не найден.
+    int editorDuplicateObject(int srcSpecIndex, const Vec3& pos, int newSpecIndex);
     // Удалить объект по specIndex: убрать его GameObject + сдвинуть большие индексы вниз (в такт
     // erase в doc.objects редактора, чтобы specIndex == индексу в doc сохранялся).
     void editorRemoveObject(int specIndex);
@@ -316,12 +321,6 @@ public:
     float shadowRadius() const { return shadowRadius_; }
     void setShadowRadius(float r) { shadowRadius_ = r; }
 
-    // Туман по глубине (fogColor — в линейном пространстве, как ждёт шейдер).
-    Vec3 fogColor() const { return fogColor_; }
-    void setFogColor(Vec3 c) { fogColor_ = c; }
-    float fogDensity() const { return fogDensity_; }
-    void setFogDensity(float d) { fogDensity_ = d; }
-
     // Отладочный оверлей навигации (сетка / обстаклы / поле потока к целям). Клиент
     // реконструирует навсетку из снапшотов теми же NavGrid/FlowField, что и авторитетный
     // сервер, — без нового сетевого пакета. Рисует GameUi поверх кадра (см. BattleScreen).
@@ -358,7 +357,8 @@ private:
     MeshHandle projMesh_ = 0;        // меш болта (единичный куб, масштабируется в вытянутый)
     MaterialHandle projMat_ = 0;     // материал болта по умолчанию (снаряд героя): тёпло-жёлтый
     MeshHandle editorMarkerMesh_ = 0;      // маркер точки спавна (редактор)
-    MaterialHandle editorMarkerMat_ = 0;
+    static constexpr int kEditorTeamColors = 4;  // 0=нейтр/кооп, 1/2/3 — стороны
+    MaterialHandle editorMarkerMat_[kEditorTeamColors] = {0, 0, 0, 0};  // цвет маркера по команде
 
     // Виды башен/ловушек (towers.cfg): тинт по виду (kind) + плоская плита ловушки + цвет болта.
     // Индекс = kind (порядок ростера sceneDesc_.towerTypes). Заполняются в createGpuResources.
@@ -389,8 +389,6 @@ private:
     bool shadowsEnabled_ = true;       // тени (directional shadow map)
     float shadowBias_ = 0.0025f;       // сдвиг глубины против self-shadow acne
     float shadowRadius_ = 14.0f;       // полуширина орто-коробки света (охват арены)
-    Vec3 fogColor_{0.09f, 0.13f, 0.20f};  // цвет тумана (линейное пространство)
-    float fogDensity_ = 0.014f;        // плотность экспоненциального тумана (0 = выкл)
 
     // Отладочная навигация: снимок навсетки+поля потока. Перестраивается из снапшотов
     // ТОЛЬКО когда оверлей включён и изменился набор зданий/ядер (дешёвая подпись
