@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "engine/assets/AssetSource.h"
+#include "engine/assets/Mesh.h"       // MeshData/Vertex (статичная геометрия для loadGltfStatic)
 #include "engine/core/MathUtil.h"
 #include "engine/core/Texture.h"
 
@@ -82,3 +83,10 @@ struct SkinnedModel {
 // посох) привязываются к ближайшей кости-предку, чтобы двигаться вместе со скелетом.
 bool loadGltfModel(AssetSource& src, const char* path, SkinnedModel& out,
                    const std::vector<std::string>* hideNodes = nullptr);
+
+// Загрузка СТАТИЧНОЙ геометрии из .glb/.gltf (без скелета/анимаций) для декора уровня:
+// все примитивы всех мешей запекаются в один MeshData с учётом мировых трансформов узлов
+// (позиция/поворот/масштаб). outTex — встроенный albedo-атлас (если есть, напр. KayKit).
+// Возвращает false, если геометрии нет. Пропсы кладём в сцену директивой `object model ...`.
+bool loadGltfStatic(AssetSource& src, const char* path, MeshData& outMesh, TextureData& outTex,
+                    bool& outHasTexture);

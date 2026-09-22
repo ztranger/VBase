@@ -212,10 +212,51 @@ void Scene::createGpuResources(Renderer& renderer, AssetSource& assets) {
     };
 
     // --- Объекты (обычные и кольцевые) ---
+    // Кэш статичных glTF-пропсов (mesh+material) по ключу path|tex|shader: уровень ставит много
+    // копий одного ассета — грузим/заливаем в GPU один раз.
+    std::unordered_map<std::string, std::pair<MeshHandle, MaterialHandle>> glbCache;
+    auto loadGlbObject = [&](const ObjectSpec& os) -> std::pair<MeshHandle, MaterialHandle> {
+        const std::string key = os.model + "|" + os.modelTex + "|" + std::to_string((int)os.shader);
+        auto it = glbCache.find(key);
+        if (it != glbCache.end()) return it->second;
+        std::pair<MeshHandle, MaterialHandle> res{0, 0};
+        MeshData md;
+        TextureData embedded;
+        bool hasTex = false;
+        if (loadGltfStatic(assets, os.model.c_str(), md, embedded, hasTex)) {
+            res.first = renderer.createMesh(md);
+            TextureHandle tex = 0;
+            if (!os.modelTex.empty()) {  // внешняя текстура-атлас переопределяет встроенную
+                TextureData ext;
+                if (loadImageAsset(assets, os.modelTex.c_str(), ext)) tex = renderer.createTexture(ext);
+            } else if (hasTex) {
+                tex = renderer.createTexture(embedded);
+            }
+            MaterialDesc mat;
+            mat.shader = os.shader;
+            mat.baseColor = {1.0f, 1.0f, 1.0f};  // цвет берётся из текстуры
+            mat.albedo = tex;
+            res.second = renderer.createMaterial(mat);
+        } else {
+            LOGW("Объект: glTF-модель %s не загрузилась — пропущен", os.model.c_str());
+        }
+        glbCache[key] = res;
+        return res;
+    };
+
     const float pi = 3.14159265358979323846f;
     for (const ObjectSpec& os : desc.objects) {
-        MeshHandle mh = meshH(os.mesh);
-        MaterialHandle mah = matH(os.material);
+        MeshHandle mh = 0;
+        MaterialHandle mah = 0;
+        if (!os.model.empty()) {  // glTF-декор: своя geometry + материал со встроенной текстурой
+            std::pair<MeshHandle, MaterialHandle> pr = loadGlbObject(os);
+            mh = pr.first;
+            mah = pr.second;
+            if (mh == 0) continue;  // не загрузилась — не плодим пустышки
+        } else {
+            mh = meshH(os.mesh);
+            mah = matH(os.material);
+        }
         if (os.ring) {
             for (int k = 0; k < os.ringCount; ++k) {
                 float a = 2.0f * pi * (float)k / (float)(os.ringCount > 0 ? os.ringCount : 1);

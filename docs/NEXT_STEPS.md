@@ -881,6 +881,56 @@ top-down — за пользователем в Lobby).
 **Ещё не спроектировано (следующая тема):** мета-экраны — реальные Инвентарь/Магазин/Квесты/События
 и онлайн-лобби (создание/поиск игры, пати, ready-check). Данные и лейаут — обсудить перед реализацией.
 
+## Кастомные glTF-объекты в сцене (декор уровня) ✅ СДЕЛАНО
+
+Чтобы собирать красивые уровни из готовых CC0-паков (KayKit/Quaternius/Kenney — все отдают GLB),
+формат сцены умеет статичные glTF-пропсы:
+
+- **Загрузчик** `loadGltfStatic` (`engine/assets/Model.*`): читает geometry всех примитивов всех
+  мешей в один `MeshData` (pos/normal/uv), запекая мировые трансформы узлов; вытаскивает встроенный
+  albedo-атлас (`decodeImageBuffer`). Без скелета/анимаций (в отличие от `loadGltfModel`). Гарды
+  `cgltf_validate` (P2-13) как у скиннинг-загрузчика.
+- **Директива сцены** `object model <path.glb> [tex <p>] [shader lit|unlit|phong] [pos/rot/scale/spin]`
+  (и `ring model …`). Парс — `SceneLoader` (форма отличается вторым токеном `model`); инстанс — в
+  `Scene::build`: mesh+material (со встроенной или внешней текстурой) кэшируются по `path|tex|shader`,
+  ставятся `GameObject`'ом (pos/rot/scale/spin как у процедурных). Не загрузилась → пропуск + warn.
+- **Использование:** `.glb` в `assets/models/`, строка в `.scene`, коллайдер (если надо) — отдельной
+  `collider box` (визуал ≠ физика). Пример (закомментирован) — в `scenes/default.scene`; синтаксис —
+  ARCHITECTURE §5.1.
+- **Проверено:** desktop `BUILD_OK`; сервер (SceneLoader/SceneDesc) `BUILD_OK` + `--selftest` 30/30;
+  `Model.cpp`/`Scene.cpp`/`SceneLoader.cpp` aarch64 `-fsyntax-only` чисто; рантайм — `object model
+  models/Fox.glb` реально загрузился на старте (`glTF static: … 1728 верш. +текстура`, без краша).
+- **Дальше по желанию:** авто-коллайдер из AABB модели (сейчас коллайдер задаётся вручную);
+  инстансинг-рендер одинаковых пропсов (сейчас каждый — свой `GameObject`, но mesh/material общие).
+
+## Редактор сцен (десктоп) — в работе
+
+Отдельное десктопное приложение для сборки красивых уровней: двигать/ставить объекты, видеть
+уровень в реалтайме, сохранять в `.scene`. **Решения:** (1) отдельная build-цель **`editor/`**
+(как `server/`/`desktop/`, переиспользует движок); (2) гизмо — **вендорить ImGuizmo** (MIT, работает
+с нашими column-major view/proj); (3) редактор правит **сырой** `SceneDesc` (до `applyBuildingConfig`)
+и сохраняет его сериализатором.
+
+Переиспользуем: рендер GL/Vulkan + ImGui, `SceneLoader`/`Scene::build`/`rebuildGraphics`,
+`loadGltfStatic` + `object model`, луч-из-экрана (`Scene::onClick`), скин/палитра/диалоги.
+
+Осталось построить: **редакторская камера** (орбита/пан/зум), **пикинг по `SceneDesc`** (рейкаст по
+AABB объектов/зданий/колайдеров, не по сетевым сущностям), **ImGuizmo** (T/R/S), **UI** (outliner /
+inspector / браузер `.glb` / New-Open-Save / снап), **`EditorDoc`** (мутируемый `SceneDesc` +
+выделение + dirty + undo/redo), лёгкий load+render путь без сети/симуляции.
+
+Фазы: **1 (MVP)** цель `editor/` + орбит-камера + рендер `.scene` + пикинг + ImGuizmo-перемещение +
+инспектор pos + **Save**; **2** вращение/масштаб + добавить/удалить + браузер ассетов + material/shader
++ снап; **3** здания/спавнеры/колайдеры/свет/камера + undo/redo + New + авто-коллайдер из AABB.
+
+**Заход 1, шаг 1 — сериализатор ✅ СДЕЛАНО:** `serializeSceneDesc(SceneDesc) -> std::string` (обратное
+к `parseSceneDesc`; `SceneLoader.*`). Эмитит только scene-authored директивы в том же формате
+(параметры зданий из config — `rate/cap/wave*` — не пишет). Парсер вынесен в
+`parseSceneDesc(const std::string&, SceneDesc&)` (строковый, без I/O) для редактора и самотеста.
+**Проверено:** server+desktop `BUILD_OK`, `SceneLoader.cpp` aarch64 чисто; новый самотест
+`[SceneRoundTrip]` (server `--selftest` из `server/build`, теперь **31/31**): для default/arena_open/
+pvp/maze `serialize∘parse` идемпотентен и число сущностей сохраняется (missing-ассеты = skip, не fail).
+
 ## Принцип
 
 Всё «над рендером» и «над платформой» держим платформонезависимым. Новые фичи —

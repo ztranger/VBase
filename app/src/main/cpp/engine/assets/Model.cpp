@@ -403,3 +403,129 @@ bool loadGltfModel(AssetSource& src, const char* path, SkinnedModel& out,
     cgltf_free(data);
     return !out.vertices.empty() && !out.jointNodes.empty();
 }
+
+bool loadGltfStatic(AssetSource& src, const char* path, MeshData& outMesh, TextureData& outTex,
+                    bool& outHasTexture) {
+    outMesh.vertices.clear();
+    outMesh.indices.clear();
+    outHasTexture = false;
+
+    std::vector<uint8_t> bytes;
+    if (!src.read(path, bytes)) {
+        LOGW("glTF-ассет не найден: %s", path);
+        return false;
+    }
+    cgltf_options options{};
+    cgltf_data* data = nullptr;
+    if (cgltf_parse(&options, bytes.data(), bytes.size(), &data) != cgltf_result_success) {
+        LOGE("cgltf_parse failed: %s", path);
+        return false;
+    }
+    if (cgltf_load_buffers(&options, data, nullptr) != cgltf_result_success) {
+        LOGE("cgltf_load_buffers failed: %s", path);
+        cgltf_free(data);
+        return false;
+    }
+    if (cgltf_validate(data) != cgltf_result_success) {  // P2-13: гард от битого/вредоносного glTF
+        LOGE("cgltf_validate failed (битый/вредоносный glTF): %s", path);
+        cgltf_free(data);
+        return false;
+    }
+
+    // Узлы -> мировые матрицы (запекаем трансформ узла в вершины: KayKit-пропсы часто под
+    // повёрнутыми/смещёнными узлами).
+    const size_t nn = data->nodes_count;
+    std::vector<ModelNode> nodes(nn);
+    for (size_t i = 0; i < nn; ++i) {
+        const cgltf_node& nd = data->nodes[i];
+        ModelNode& mn = nodes[i];
+        mn.t = {nd.translation[0], nd.translation[1], nd.translation[2]};
+        mn.r = {nd.rotation[0], nd.rotation[1], nd.rotation[2], nd.rotation[3]};
+        mn.s = {nd.scale[0], nd.scale[1], nd.scale[2]};
+        mn.parent = nodeIndex(data, nd.parent);
+    }
+    std::vector<Mat4> global(nn);
+    {
+        std::vector<Mat4> local(nn);
+        for (size_t i = 0; i < nn; ++i) local[i] = trs(nodes[i].t, nodes[i].r, nodes[i].s);
+        std::vector<char> done(nn, 0);
+        for (size_t i = 0; i < nn; ++i) computeGlobal(nodes, (int)i, local, global, done);
+    }
+    std::vector<int> meshNode(data->meshes_count, -1);
+    for (size_t i = 0; i < nn; ++i) {
+        if (data->nodes[i].mesh) {
+            size_t mi = (size_t)(data->nodes[i].mesh - data->meshes);
+            if (mi < (size_t)data->meshes_count) meshNode[mi] = (int)i;
+        }
+    }
+
+    for (size_t m = 0; m < data->meshes_count; ++m) {
+        const cgltf_mesh& mesh = data->meshes[m];
+        const int mn = (m < meshNode.size()) ? meshNode[m] : -1;
+        const Mat4 xform = (mn >= 0) ? global[mn] : Mat4::identity();
+        for (size_t p = 0; p < mesh.primitives_count; ++p) {
+            const cgltf_primitive& prim = mesh.primitives[p];
+            const cgltf_accessor* pos = nullptr;
+            const cgltf_accessor* nrm = nullptr;
+            const cgltf_accessor* uv = nullptr;
+            for (size_t a = 0; a < prim.attributes_count; ++a) {
+                const cgltf_attribute& at = prim.attributes[a];
+                if (at.type == cgltf_attribute_type_position) pos = at.data;
+                else if (at.type == cgltf_attribute_type_normal) nrm = at.data;
+                else if (at.type == cgltf_attribute_type_texcoord && !uv) uv = at.data;
+            }
+            if (pos == nullptr) continue;
+            const uint32_t base = (uint32_t)outMesh.vertices.size();
+            for (size_t i = 0; i < pos->count; ++i) {
+                Vertex v{};
+                float p3[3] = {0, 0, 0};
+                cgltf_accessor_read_float(pos, i, p3, 3);
+                Vec3 pp = mulPoint(xform, Vec3{p3[0], p3[1], p3[2]});
+                v.px = pp.x; v.py = pp.y; v.pz = pp.z;
+                if (nrm) {
+                    cgltf_accessor_read_float(nrm, i, p3, 3);
+                    Vec3 dn = normalize(mulDir(xform, Vec3{p3[0], p3[1], p3[2]}));
+                    v.nx = dn.x; v.ny = dn.y; v.nz = dn.z;
+                } else {
+                    v.ny = 1.0f;
+                }
+                if (uv) {
+                    float uu[2] = {0, 0};
+                    cgltf_accessor_read_float(uv, i, uu, 2);
+                    v.u = uu[0]; v.v = uu[1];
+                }
+                v.tx = 1.0f; v.ty = 0.0f; v.tz = 0.0f;  // тангент не нужен без нормал-карты (Lit по тексе)
+                outMesh.vertices.push_back(v);
+            }
+            if (prim.indices) {
+                for (size_t i = 0; i < prim.indices->count; ++i)
+                    outMesh.indices.push_back(base + (uint32_t)cgltf_accessor_read_index(prim.indices, i));
+            } else {
+                for (size_t i = 0; i < pos->count; ++i) outMesh.indices.push_back(base + (uint32_t)i);
+            }
+        }
+    }
+
+    // Встроенный albedo-атлас (base color первого материала, иначе первая картинка).
+    const cgltf_image* image = nullptr;
+    if (data->materials_count > 0) {
+        const cgltf_material& mat = data->materials[0];
+        if (mat.has_pbr_metallic_roughness &&
+            mat.pbr_metallic_roughness.base_color_texture.texture &&
+            mat.pbr_metallic_roughness.base_color_texture.texture->image) {
+            image = mat.pbr_metallic_roughness.base_color_texture.texture->image;
+        }
+    }
+    if (image == nullptr && data->images_count > 0) image = &data->images[0];
+    if (image && image->buffer_view && image->buffer_view->buffer &&
+        image->buffer_view->buffer->data) {
+        const cgltf_buffer_view* bv = image->buffer_view;
+        const uint8_t* ib = (const uint8_t*)bv->buffer->data + bv->offset;
+        if (decodeImageBuffer(ib, bv->size, outTex)) outHasTexture = true;
+    }
+
+    LOGI("glTF static: %s — %u верш., %u инд.%s", path, (uint32_t)outMesh.vertices.size(),
+         (uint32_t)outMesh.indices.size(), outHasTexture ? " +текстура" : "");
+    cgltf_free(data);
+    return !outMesh.vertices.empty();
+}

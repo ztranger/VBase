@@ -1507,6 +1507,46 @@ int runSceneLoadFailTest() {
     return ok ? 0 : 1;
 }
 
+// Round-trip сериализации сцены (для редактора сцен, Save): raw-парс -> serialize -> re-parse ->
+// serialize даёт идентичный текст (serialize∘parse — фикспойнт), число сущностей сохраняется.
+int runSceneRoundTripTest() {
+    FileAssetSource assets("../../app/src/main/assets");
+    const char* scenes[] = {"scenes/default.scene", "scenes/arena_open.scene", "scenes/pvp.scene",
+                            "scenes/maze.scene"};
+    bool ok = true;
+    int tested = 0;
+    for (const char* path : scenes) {
+        SceneDesc d1;
+        if (!loadSceneDesc(assets, path, d1)) {
+            // Ассеты не найдены (запуск не из server/build) — пропускаем, это не регрессия сериализатора.
+            std::printf("[SceneRoundTrip] пропуск %s (ассет недоступен)\n", path);
+            continue;
+        }
+        ++tested;
+        std::string t1 = serializeSceneDesc(d1);
+        SceneDesc d2;
+        if (!parseSceneDesc(t1, d2)) {
+            std::printf("[SceneRoundTrip] репарс не удался: %s\n", path);
+            ok = false;
+            continue;
+        }
+        std::string t2 = serializeSceneDesc(d2);
+        const bool idem = (t1 == t2);
+        const bool counts =
+            d1.objects.size() == d2.objects.size() && d1.colliders.size() == d2.colliders.size() &&
+            d1.buildings.size() == d2.buildings.size() &&
+            d1.materials.size() == d2.materials.size() && d1.meshes.size() == d2.meshes.size() &&
+            d1.textures.size() == d2.textures.size() && d1.spawns.size() == d2.spawns.size();
+        std::printf("[SceneRoundTrip] %s: идемпотентно=%s счётчики=%s (obj=%u col=%u bld=%u)\n", path,
+                    idem ? "да" : "нет", counts ? "да" : "нет", (unsigned)d2.objects.size(),
+                    (unsigned)d2.colliders.size(), (unsigned)d2.buildings.size());
+        ok = ok && idem && counts;
+    }
+    if (tested == 0) std::printf("[SceneRoundTrip] ни одной сцены не загружено — тест пропущен\n");
+    std::printf("[SceneRoundTrip] %s\n", ok ? "OK" : "FAIL");
+    return ok ? 0 : 1;
+}
+
 // P1-03: валидация ack (чистый предикат). Отбивает 0/старьё/будущее -> база не откатывается,
 // значит клиент не может форсить full-снапшоты (амплификация).
 int runAckValidateTest() {
@@ -1834,6 +1874,7 @@ int main(int argc, char** argv) {
         int v = runBuildAfterEndTest(); // P2-02: стройка после конца матча отклонена
         int w = runPortParseTest();     // P2-05: строгий парсер порта
         int x = runSceneLoadFailTest(); // P1-05: несуществующая сцена не грузится
+        int x2 = runSceneRoundTripTest(); // редактор: serialize(SceneDesc) round-trip идемпотентен
         // Батч лимитов неткода (P1-03/P1-04): ack-валидация, rate-limit full, лимит сущностей.
         int y1 = runAckValidateTest();  // P1-03: валидация ackTick (анти-амплификация)
         int y2 = runSnapshotRateTest(); // P1-03: легит-клиент — один full, дальше дельты
@@ -1846,7 +1887,7 @@ int main(int argc, char** argv) {
         int z5 = runRateLimitTest();      // P2-04: флудер ввода отключается сервером
         return (a == 0 && b == 0 && c == 0 && d == 0 && e == 0 && f == 0 && g == 0 && h == 0 &&
                 k == 0 && m == 0 && n == 0 && o == 0 && p == 0 && p2 == 0 && q == 0 && r == 0 &&
-                s == 0 && t == 0 && u == 0 && v == 0 && w == 0 && x == 0 &&
+                s == 0 && t == 0 && u == 0 && v == 0 && w == 0 && x == 0 && x2 == 0 &&
                 y1 == 0 && y2 == 0 && y3 == 0 &&
                 z1 == 0 && z2 == 0 && z3 == 0 && z4 == 0 && z5 == 0) ? 0 : 1;
     }

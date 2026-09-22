@@ -39,8 +39,13 @@ struct MaterialSpec {
 };
 
 struct ObjectSpec {
-    std::string mesh;      // имя меша
-    std::string material;  // имя материала
+    std::string mesh;      // имя процедурного меша (пусто, если задан model)
+    std::string material;  // имя материала (для процедурного меша)
+    // Статичная glTF/GLB-модель как декор уровня (KayKit/Quaternius и т.п.). Если model задан —
+    // грузится geometry+встроенная текстура через loadGltfStatic, mesh/material игнорируются.
+    std::string model;     // путь к .glb/.gltf (пусто = процедурный меш по mesh)
+    std::string modelTex;  // необяз. внешняя текстура-атлас; пусто = встроенная из glb
+    ShaderType shader = ShaderType::Lit;  // шейдер для model-объекта (lit/unlit/phong)
     Vec3 pos{0.0f, 0.0f, 0.0f};
     Vec3 rot{0.0f, 0.0f, 0.0f};
     float scale = 1.0f;    // равномерный масштаб

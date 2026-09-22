@@ -249,7 +249,14 @@ OBJ-загрузчика). Директивы:
   или путь к картинке; пусто → без текстуры (белая).
 - `mesh <name> plane <size> [uvTiles]` | `cube <size>` | `sphere <r> [stacks] [slices]`
 - `object <mesh> mat <mat> [pos x y z] [rot x y z] [scale s] [spin s]`
+- `object model <path.glb> [tex <path>] [shader lit|unlit|phong] [pos x y z] [rot x y z] [scale s] [spin s]`
+  — статичный **glTF/GLB-декор** уровня (KayKit/Quaternius/Kenney): geometry + встроенный
+  albedo-атлас грузятся `loadGltfStatic` (трансформы узлов запекаются в вершины), кладутся в
+  GPU один раз и переиспользуются для всех копий. `tex` переопределяет встроенную текстуру.
+  Кидаешь `.glb` в `assets/models/`, ставишь этой директивой. Коллайдер (если нужен) — отдельной
+  `collider box …` (визуал ≠ физика).
 - `ring <mesh> mat <mat> count <n> radius <r> [y <y>] [scale s] [spin s]` — инстансинг по кольцу
+  (форма `ring model <path.glb> …` тоже работает — кольцо glTF-пропсов)
 - `collider box center <x y z> half <hx hy hz>` — статичный коллайдер физики (Jolt);
   независим от визуальных мешей (коллизия ≠ отрисовка).
 - `generator|storage|spawner|core|tower pos <x y z> [team <n>]` — сущность базы (сервер
@@ -282,6 +289,11 @@ OBJ-загрузчика). Директивы:
 
 Путь к сцене — параметр `Scene::build` (по умолчанию `scenes/default.scene`); на
 десктопе задаётся 3-м аргументом: `vbase_desktop.exe [serverIp] [assetsDir] [scenePath]`.
+
+Парс/запись: `parseSceneDesc(text, out)` (строковое ядро `loadSceneDesc`) и обратная
+`serializeSceneDesc(desc) -> text` — для редактора сцен (Save). Сериализатор пишет только
+scene-authored директивы (параметры зданий из `config/buildings.cfg` не эмитятся), поэтому кормить
+ему СЫРОЙ `desc` (до `applyBuildingConfig`); `serialize∘parse` идемпотентна (самотест `[SceneRoundTrip]`).
 Разные сцены = разные файлы. Ошибка парсинга → лог с номером строки, сцена пустая.
 
 ## 6. Грабли (уже решённые — не наступать снова)

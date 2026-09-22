@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <sstream>
 #include <string>
@@ -61,9 +62,12 @@ bool loadSceneDesc(AssetSource& assets, const char* path, SceneDesc& out) {
         LOGE("scene: файл не найден: %s", path);
         return false;
     }
+    return parseSceneDesc(std::string(bytes.begin(), bytes.end()), out);
+}
+
+bool parseSceneDesc(const std::string& text, SceneDesc& out) {
     out = SceneDesc{};  // дефолты (свет/камера)
 
-    std::string text(bytes.begin(), bytes.end());
     std::istringstream in(text);
     std::string raw;
     int line = 0;
@@ -144,16 +148,27 @@ bool loadSceneDesc(AssetSource& assets, const char* path, SceneDesc& out) {
             out.materials.push_back(m);
 
         } else if (cmd == "object" || cmd == "ring") {
-            // object <mesh> mat <mat> [pos x y z] [scale s] [rot x y z] [spin s]
-            // ring   <mesh> mat <mat> count <n> radius <r> [y <y>] [scale s] [spin s]
-            if (t.size() < 2) { LOGE("scene: строка %d: %s требует имя меша", line, cmd.c_str()); return false; }
+            // Процедурный меш:  object <mesh> mat <mat> [pos x y z] [scale s] [rot x y z] [spin s]
+            //                   ring   <mesh> mat <mat> count <n> radius <r> [y <y>] [scale s] [spin s]
+            // glTF-модель (декор): object model <path.glb> [tex <path>] [shader lit|unlit|phong]
+            //                             [pos x y z] [rot x y z] [scale s] [spin s]   (+ ring: count/radius/y)
+            if (t.size() < 2) { LOGE("scene: строка %d: %s требует имя меша или model", line, cmd.c_str()); return false; }
             ObjectSpec o;
-            o.mesh = t[1];
             o.ring = (cmd == "ring");
             size_t i = 2;
+            if (t[1] == "model") {          // форма glTF-модели: путь идёт вторым токеном
+                if (!readStr(t, i, line, o.model)) return false;
+            } else {
+                o.mesh = t[1];              // процедурная форма: имя меша
+            }
             while (i < t.size()) {
                 std::string k = t[i++];
                 if (k == "mat") { if (!readStr(t, i, line, o.material)) return false; }
+                else if (k == "tex") { if (!readStr(t, i, line, o.modelTex)) return false; }
+                else if (k == "shader") {
+                    std::string s;
+                    if (!readStr(t, i, line, s) || !parseShader(s, line, o.shader)) return false;
+                }
                 else if (k == "pos") { if (!readVec3(t, i, line, o.pos)) return false; }
                 else if (k == "rot") { if (!readVec3(t, i, line, o.rot)) return false; }
                 else if (k == "scale") { if (!readF(t, i, line, o.scale)) return false; }
@@ -292,6 +307,134 @@ bool loadSceneDesc(AssetSource& assets, const char* path, SceneDesc& out) {
         }
     }
     return true;
+}
+
+namespace {
+// Компактный вывод числа (без лишних нулей; %g). Парсер читает через toF, так что точность ок.
+std::string fnum(float v) {
+    char b[32];
+    std::snprintf(b, sizeof(b), "%g", (double)v);
+    return b;
+}
+const char* shaderName(ShaderType s) {
+    switch (s) {
+        case ShaderType::Unlit: return "unlit";
+        case ShaderType::Phong: return "phong";
+        default: return "lit";
+    }
+}
+}  // namespace
+
+std::string serializeSceneDesc(const SceneDesc& d) {
+    std::ostringstream o;
+    o << "# VBase scene (сериализовано редактором)\n\n";
+
+    // Мир: сетка, свет, камера, авто-рестарт.
+    o << "grid cell " << fnum(d.grid.cell) << " arena " << fnum(d.grid.arenaHalf) << "\n";
+    o << "light dir " << fnum(d.lightDir.x) << " " << fnum(d.lightDir.y) << " " << fnum(d.lightDir.z)
+      << "\n";
+    o << "camera distance " << fnum(d.camera.distance) << " pitch " << fnum(d.camera.pitch)
+      << " lookHeight " << fnum(d.camera.lookHeight) << " fov " << fnum(d.camera.fovY) << " near "
+      << fnum(d.camera.nearZ) << " far " << fnum(d.camera.farZ) << "\n";
+    if (d.matchRestartDelay > 0.0f) o << "matchrestart " << fnum(d.matchRestartDelay) << "\n";
+
+    // Текстуры.
+    if (!d.textures.empty()) o << "\n";
+    for (const TextureSpec& t : d.textures) {
+        o << "texture " << t.name << " ";
+        if (t.kind == TextureSpec::Checker) o << "procedural " << t.size << " " << t.cells;
+        else if (t.kind == TextureSpec::Bump) o << "procnormal " << t.size << " " << t.cells;
+        else o << "image " << t.path;
+        o << "\n";
+    }
+    // Материалы.
+    if (!d.materials.empty()) o << "\n";
+    for (const MaterialSpec& m : d.materials) {
+        o << "material " << m.name << " " << shaderName(m.shader) << " color " << fnum(m.color.x)
+          << " " << fnum(m.color.y) << " " << fnum(m.color.z);
+        if (!m.tex.empty()) o << " tex " << m.tex;
+        if (!m.normal.empty()) o << " normal " << m.normal;
+        o << "\n";
+    }
+    // Меши-примитивы.
+    if (!d.meshes.empty()) o << "\n";
+    for (const MeshSpec& m : d.meshes) {
+        o << "mesh " << m.name << " ";
+        if (m.kind == MeshSpec::Plane) o << "plane " << fnum(m.a) << " " << fnum(m.b);
+        else if (m.kind == MeshSpec::Cube) o << "cube " << fnum(m.a);
+        else o << "sphere " << fnum(m.a) << " " << m.stacks << " " << m.slices;
+        o << "\n";
+    }
+    // Объекты (процедурные + glTF-модели, одиночные + кольцевые).
+    if (!d.objects.empty()) o << "\n";
+    for (const ObjectSpec& os : d.objects) {
+        o << (os.ring ? "ring " : "object ");
+        if (!os.model.empty()) {
+            o << "model " << os.model;
+            if (!os.modelTex.empty()) o << " tex " << os.modelTex;
+            o << " shader " << shaderName(os.shader);
+        } else {
+            o << os.mesh;
+            if (!os.material.empty()) o << " mat " << os.material;
+        }
+        o << " pos " << fnum(os.pos.x) << " " << fnum(os.pos.y) << " " << fnum(os.pos.z);
+        if (os.rot.x != 0.0f || os.rot.y != 0.0f || os.rot.z != 0.0f)
+            o << " rot " << fnum(os.rot.x) << " " << fnum(os.rot.y) << " " << fnum(os.rot.z);
+        if (os.scale != 1.0f) o << " scale " << fnum(os.scale);
+        if (os.spin != 0.0f) o << " spin " << fnum(os.spin);
+        if (os.ring)
+            o << " count " << os.ringCount << " radius " << fnum(os.ringRadius) << " y "
+              << fnum(os.ringY);
+        o << "\n";
+    }
+    // Коллайдеры.
+    if (!d.colliders.empty()) o << "\n";
+    for (const ColliderSpec& c : d.colliders) {
+        o << "collider box center " << fnum(c.center.x) << " " << fnum(c.center.y) << " "
+          << fnum(c.center.z) << " half " << fnum(c.half.x) << " " << fnum(c.half.y) << " "
+          << fnum(c.half.z) << "\n";
+    }
+    // Здания базы (только scene-authored: тип + pos + team + непустые числа; wave*/дефолты — из config).
+    if (!d.buildings.empty()) o << "\n";
+    for (const BuildingSpec& b : d.buildings) {
+        const char* kind = "core";
+        switch (b.kind) {
+            case BuildingSpec::Generator: kind = "generator"; break;
+            case BuildingSpec::Storage: kind = "storage"; break;
+            case BuildingSpec::Spawner: kind = "spawner"; break;
+            case BuildingSpec::Tower: kind = "tower"; break;
+            case BuildingSpec::Core: kind = "core"; break;
+        }
+        o << kind << " pos " << fnum(b.pos.x) << " " << fnum(b.pos.y) << " " << fnum(b.pos.z);
+        if (b.team != 0) o << " team " << (int)b.team;
+        if (b.rate != 0.0f) o << " rate " << fnum(b.rate);
+        if (b.cap != 0.0f) o << " cap " << fnum(b.cap);
+        if (b.hp != 0.0f) o << " hp " << fnum(b.hp);
+        if (b.damage != 0.0f) o << " damage " << fnum(b.damage);
+        if (b.range != 0.0f) o << " range " << fnum(b.range);
+        o << "\n";
+    }
+    // Точки спавна сторон (PvP).
+    if (!d.spawns.empty()) o << "\n";
+    for (const SpawnSpec& s : d.spawns)
+        o << "spawn team " << (int)s.team << " pos " << fnum(s.pos.x) << " " << fnum(s.pos.y) << " "
+          << fnum(s.pos.z) << "\n";
+    // Игрок.
+    if (d.player.present) {
+        o << "\nplayer model " << d.player.model << " pos " << fnum(d.player.pos.x) << " "
+          << fnum(d.player.pos.y) << " " << fnum(d.player.pos.z) << " scale " << fnum(d.player.scale)
+          << " yaw " << fnum(d.player.yawOffset) << " capsule " << fnum(d.player.colliderRadius)
+          << " " << fnum(d.player.colliderCylHalf);
+        if (!d.player.hideNodes.empty()) {
+            o << " hide ";
+            for (size_t i = 0; i < d.player.hideNodes.size(); ++i) {
+                if (i) o << ",";
+                o << d.player.hideNodes[i];
+            }
+        }
+        o << "\n";
+    }
+    return o.str();
 }
 
 namespace {

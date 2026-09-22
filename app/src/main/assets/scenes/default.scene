@@ -32,6 +32,11 @@ matchrestart 8                  # после победы/поражения —
 # --- Объекты окружения ---
 object ground mat floor
 
+# Декор из готовых glTF/GLB-пропсов (KayKit/Quaternius/Kenney — CC0). Кидаешь .glb в
+# assets/models/ и ставишь так (встроенный атлас берётся сам; коллайдер — отдельной collider):
+#   object model models/props/barrel.glb pos 3 0 5 rot 0 0.8 0 scale 1
+#   ring   model models/props/pillar.glb count 8 radius 10 y 0        # кольцо колонн
+
 # Стена-препятствие углом (визуал = коллайдер). Прямая спавнер→ядро упирается сюда;
 # обход на −X. Крючки на концах — проверка, не застревают ли капсулы в угле.
 object box mat crate pos  4 0.9  8  scale 1.8

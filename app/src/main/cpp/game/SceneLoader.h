@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 #include "game/BuildingConfig.h"
 #include "game/SceneDesc.h"
 
@@ -9,6 +11,16 @@ struct AssetSource;
 // Формат — построчный, '#' начинает комментарий; см. assets/scenes/*.scene.
 // false — файл не найден или синтаксическая ошибка (детали в лог).
 bool loadSceneDesc(AssetSource& assets, const char* path, SceneDesc& out);
+
+// Разбор сцены из строки (без I/O) — ядро loadSceneDesc; отдельно нужен редактору и round-trip
+// самотесту (парс -> сериализация -> репарс без обращения к диску).
+bool parseSceneDesc(const std::string& text, SceneDesc& out);
+
+// Обратная операция к parseSceneDesc: сериализовать описание сцены в тот же текстовый формат
+// (для редактора сцен — Save). Пишет ТОЛЬКО директивы, которые читает парсер (scene-authored):
+// параметры зданий из config (rate/cap/wave*) НЕ эмитятся — их источник config/buildings.cfg,
+// поэтому кормить сюда СЫРОЙ desc (до applyBuildingConfig). serialize∘parse идемпотентна.
+std::string serializeSceneDesc(const SceneDesc& desc);
 
 // Загрузить конфиг типов зданий (config/buildings.cfg): имена, описания, параметры.
 // false — файл не найден (детали в лог); сцена без конфига работает на дефолтах.
