@@ -7,16 +7,18 @@
 # ============================================================================
 
 # --- Текстуры / материалы / меши ---
-texture checker procedural 256 8
-material floor lit color 0.30 0.42 0.24 tex checker
-mesh ground plane 64 28
+texture grass image textures/grass.png
+material floor ground color 1 1 1 tex grass
+mesh ground plane 240 60
 
-# --- Свет / камера / сетка / матч ---
-light  dir 0.5 1.0 0.35
-camera distance 34 pitch 0.98 fov 0.9
-grid   cell 2 arena 16
+# --- Свет / камера / сетка / матч / горизонт ---
+light   dir 0.5 1.0 0.35
+camera  distance 34 pitch 0.98 fov 0.9
+grid    cell 2 arena 16
+horizon 0.58 0.66 0.70
 matchrestart 8
 
+# Большой пол (шейдер ground): дальняя земля плавно уходит в цвет горизонта — без обрыва/черноты.
 object ground mat floor
 
 # --- Пол + невидимые стены Г-образной тропы ---

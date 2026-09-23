@@ -126,7 +126,7 @@ private:
     VkDescriptorSetLayout setLayout1_ = VK_NULL_HANDLE;  // combined image sampler (albedo)
     VkDescriptorSetLayout setLayout2_ = VK_NULL_HANDLE;  // storage buffer (кости, скиннинг)
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;   // окружение (set0,set1 + push=color)
-    VkPipeline pipelines_[3] = {VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkPipeline pipelines_[(int)ShaderType::Count] = {};  // индекс = ShaderType (Lit/Unlit/Phong/Ground)
     VkPipelineLayout skinnedPipelineLayout_ = VK_NULL_HANDLE;  // set0,1,2 + push=model/color/boneOffset
     VkPipeline skinnedPipeline_ = VK_NULL_HANDLE;
     VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;

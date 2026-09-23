@@ -336,9 +336,10 @@ bool GlRenderer::buildShader(const char* vsPath, const char* fsPath, GlShader& o
 bool GlRenderer::initShaders() {
     // Порядок обязан совпадать с enum ShaderType (индекс = тип).
     shaders_.resize((size_t)ShaderType::Count);
-    return buildShader("shaders/basic.vert", "shaders/lit.frag",   shaders_[(size_t)ShaderType::Lit]) &&
-           buildShader("shaders/basic.vert", "shaders/unlit.frag", shaders_[(size_t)ShaderType::Unlit]) &&
-           buildShader("shaders/phong.vert", "shaders/phong.frag", shaders_[(size_t)ShaderType::Phong]);
+    return buildShader("shaders/basic.vert", "shaders/lit.frag",    shaders_[(size_t)ShaderType::Lit]) &&
+           buildShader("shaders/basic.vert", "shaders/unlit.frag",  shaders_[(size_t)ShaderType::Unlit]) &&
+           buildShader("shaders/phong.vert", "shaders/phong.frag",  shaders_[(size_t)ShaderType::Phong]) &&
+           buildShader("shaders/basic.vert", "shaders/ground.frag", shaders_[(size_t)ShaderType::Ground]);
 }
 
 bool GlRenderer::initSkin() {
@@ -830,14 +831,12 @@ void GlRenderer::renderFrame(const RenderFrame& frame) {
 
     // Проход 2 — основной кадр. Возврат на экранный фреймбуфер, карта теней на юнит 2.
     glViewport(0, 0, width, height);
-    // При тумане красим фон в его цвет (gamma), чтобы дальняя геометрия сливалась
-    // с горизонтом без резкого края. Без тумана — прежний тёмно-синий.
-    if (frame.fogDensity > 0.0f) {
+    // Фон = цвет горизонта (fogColor, ЛИНЕЙНЫЙ -> gamma): дальняя земля (ShaderType::Ground)
+    // тонируется в него же, поэтому край карты сливается с фоном без резкого обрыва.
+    {
         const float ig = 1.0f / 2.2f;
         glClearColor(std::pow(frame.fogColor.x, ig), std::pow(frame.fogColor.y, ig),
                      std::pow(frame.fogColor.z, ig), 1.0f);
-    } else {
-        glClearColor(0.07f, 0.07f, 0.12f, 1.0f);
     }
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glActiveTexture(GL_TEXTURE2);

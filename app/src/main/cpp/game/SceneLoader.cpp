@@ -51,6 +51,7 @@ bool parseShader(const std::string& s, int line, ShaderType& out) {
     if (s == "lit") out = ShaderType::Lit;
     else if (s == "unlit") out = ShaderType::Unlit;
     else if (s == "phong") out = ShaderType::Phong;
+    else if (s == "ground") out = ShaderType::Ground;  // земля: тинт к горизонту (край карты)
     else { LOGE("scene: строка %d: неизвестный шейдер '%s'", line, s.c_str()); return false; }
     return true;
 }
@@ -292,6 +293,11 @@ bool parseSceneDesc(const std::string& text, SceneDesc& out) {
             if (i < t.size() && t[i] == "dir") { ++i; if (!readVec3(t, i, line, out.lightDir)) return false; }
             else { LOGE("scene: строка %d: light dir <x> <y> <z>", line); return false; }
 
+        } else if (cmd == "horizon") {
+            // horizon <r> <g> <b> — цвет горизонта/фона (sRGB); дальняя земля тонируется в него
+            size_t i = 1;
+            if (!readVec3(t, i, line, out.horizonColor)) return false;
+
         } else if (cmd == "camera") {
             // camera [distance d] [height h] [lookHeight l] [fov f] [near n] [far f]
             size_t i = 1;
@@ -336,6 +342,7 @@ const char* shaderName(ShaderType s) {
     switch (s) {
         case ShaderType::Unlit: return "unlit";
         case ShaderType::Phong: return "phong";
+        case ShaderType::Ground: return "ground";
         default: return "lit";
     }
 }
@@ -349,6 +356,13 @@ std::string serializeSceneDesc(const SceneDesc& d) {
     o << "grid cell " << fnum(d.grid.cell) << " arena " << fnum(d.grid.arenaHalf) << "\n";
     o << "light dir " << fnum(d.lightDir.x) << " " << fnum(d.lightDir.y) << " " << fnum(d.lightDir.z)
       << "\n";
+    // Горизонт эмитим только если отличается от дефолта (0.07,0.07,0.12) — чтобы не засорять
+    // сцены без него (и round-trip оставался идемпотентным на обеих ветках).
+    if (std::fabs(d.horizonColor.x - 0.07f) > 1e-4f || std::fabs(d.horizonColor.y - 0.07f) > 1e-4f ||
+        std::fabs(d.horizonColor.z - 0.12f) > 1e-4f) {
+        o << "horizon " << fnum(d.horizonColor.x) << " " << fnum(d.horizonColor.y) << " "
+          << fnum(d.horizonColor.z) << "\n";
+    }
     o << "camera distance " << fnum(d.camera.distance) << " pitch " << fnum(d.camera.pitch)
       << " lookHeight " << fnum(d.camera.lookHeight) << " fov " << fnum(d.camera.fovY) << " near "
       << fnum(d.camera.nearZ) << " far " << fnum(d.camera.farZ) << "\n";
@@ -704,6 +718,9 @@ void validateSceneDesc(SceneDesc& desc) {
     desc.camera.farZ = clampF(desc.camera.farZ, desc.camera.nearZ + 1e-3f, 1e6f, 200.0f);
 
     sanVec3(desc.lightDir);
+    desc.horizonColor.x = clampF(desc.horizonColor.x, 0.0f, 1.0f, 0.07f);
+    desc.horizonColor.y = clampF(desc.horizonColor.y, 0.0f, 1.0f, 0.07f);
+    desc.horizonColor.z = clampF(desc.horizonColor.z, 0.0f, 1.0f, 0.12f);
     desc.matchRestartDelay = clampF(desc.matchRestartDelay, 0.0f, 1e4f, 0.0f);
 
     // Ростеры: attackInterval — делитель, > 0; остальные статы конечны и ≥ 0.

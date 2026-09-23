@@ -245,8 +245,11 @@ app/src/main/cpp/
 OBJ-загрузчика). Директивы:
 
 - `texture <name> procedural <size> <cells>` | `image <path>`
-- `material <name> <lit|unlit|phong> [color r g b] [tex <ref>]` — `ref` = имя текстуры
-  или путь к картинке; пусто → без текстуры (белая).
+- `material <name> <lit|unlit|phong|ground> [color r g b] [tex <ref>]` — `ref` = имя текстуры
+  или путь к картинке; пусто → без текстуры (белая). `ground` — как `lit`, но дальняя земля плавно
+  тонируется в цвет горизонта по дистанции от камеры (прячет край карты; см. `horizon` ниже).
+- `horizon <r g b>` (sRGB) — цвет горизонта/фона: фон-очистка = он же, и в него уходит дальняя земля
+  (материал `ground`). Дефолт `0.07 0.07 0.12` (прежний тёмный фон). Общего тумана нет.
 - `mesh <name> plane <size> [uvTiles]` | `cube <size>` | `sphere <r> [stacks] [slices]`
 - `object <mesh> mat <mat> [pos x y z] [rot x y z] [scale s] [spin s]`
 - `object model <path.glb> [tex <path>] [shader lit|unlit|phong] [pos x y z] [rot x y z] [scale s] [spin s]`

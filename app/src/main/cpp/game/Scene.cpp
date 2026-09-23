@@ -645,6 +645,10 @@ RenderFrame Scene::renderEditor(const Mat4& view, const Mat4& proj, const Vec3& 
     frame.shadowsEnabled = shadowsEnabled_;
     frame.shadowBias = shadowBias_;
     frame.shadowRadius = shadowRadius_;
+    frame.fogColor = {std::pow(sceneDesc_.horizonColor.x, 2.2f),  // цвет горизонта (тинт земли в редакторе)
+                      std::pow(sceneDesc_.horizonColor.y, 2.2f),
+                      std::pow(sceneDesc_.horizonColor.z, 2.2f)};
+    frame.fogDensity = 0.0f;
 
     // Статичные объекты сцены (включая пол и glTF-декор) — как есть, без интерполяции спина.
     for (const GameObject& obj : objects_)
@@ -1217,6 +1221,11 @@ RenderFrame Scene::render(float alpha, float aspect, float renderDt) {
     frame.shadowsEnabled = shadowsEnabled_;
     frame.shadowBias = shadowBias_;
     frame.shadowRadius = shadowRadius_;
+    // Цвет горизонта (sRGB->линейный): фон-очистка + цель тинта дальней земли (шейдер Ground).
+    frame.fogColor = {std::pow(sceneDesc_.horizonColor.x, 2.2f),
+                      std::pow(sceneDesc_.horizonColor.y, 2.2f),
+                      std::pow(sceneDesc_.horizonColor.z, 2.2f)};
+    frame.fogDensity = 0.0f;  // объёмного тумана нет — тинт земли делает шейдер по дистанции
 
     // Джус: тряска камеры на крупный урон — затухающий сдвиг в экранной плоскости (нудж по
     // translation view-матрицы). Применяем ДО сохранения presentation_.lastView, чтобы HUD-оверлей (бары/

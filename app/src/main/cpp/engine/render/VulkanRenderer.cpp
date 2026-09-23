@@ -991,17 +991,20 @@ bool VulkanRenderer::createPipelines() {
     VkShaderModule unlitFrag = loadShaderModule("shaders/vk/unlit.frag.spv");
     VkShaderModule phongVert = loadShaderModule("shaders/vk/phong.vert.spv");
     VkShaderModule phongFrag = loadShaderModule("shaders/vk/phong.frag.spv");
-    bool ok = litVert && litFrag && unlitFrag && phongVert && phongFrag;
+    VkShaderModule groundFrag = loadShaderModule("shaders/vk/ground.frag.spv");  // земля: тинт горизонта
+    bool ok = litVert && litFrag && unlitFrag && phongVert && phongFrag && groundFrag;
     if (ok) {
         ok = createGraphicsPipeline(litVert, litFrag, pipelines_[(int)ShaderType::Lit]) &&
              createGraphicsPipeline(litVert, unlitFrag, pipelines_[(int)ShaderType::Unlit]) &&
-             createGraphicsPipeline(phongVert, phongFrag, pipelines_[(int)ShaderType::Phong]);
+             createGraphicsPipeline(phongVert, phongFrag, pipelines_[(int)ShaderType::Phong]) &&
+             createGraphicsPipeline(litVert, groundFrag, pipelines_[(int)ShaderType::Ground]);
     }
     if (litVert) vkDestroyShaderModule(device_, litVert, nullptr);
     if (litFrag) vkDestroyShaderModule(device_, litFrag, nullptr);
     if (unlitFrag) vkDestroyShaderModule(device_, unlitFrag, nullptr);
     if (phongVert) vkDestroyShaderModule(device_, phongVert, nullptr);
     if (phongFrag) vkDestroyShaderModule(device_, phongFrag, nullptr);
+    if (groundFrag) vkDestroyShaderModule(device_, groundFrag, nullptr);
     return ok;
 }
 
@@ -2106,7 +2109,7 @@ void VulkanRenderer::renderFrame(const RenderFrame& frame) {
             if (!warned) { LOGW("Vulkan: материал без дескриптора (пул исчерпан) — батч пропущен"); warned = true; }
             continue;
         }
-        uint32_t sh = (mat.shader < 3) ? mat.shader : 0;
+        uint32_t sh = (mat.shader < (uint32_t)ShaderType::Count) ? mat.shader : 0;
         if (sh != curPipeline) {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelines_[sh]);
             curPipeline = sh;
