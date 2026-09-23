@@ -17,6 +17,20 @@ MeshData makePlane(float size, float uvTiles) {
     return mesh;
 }
 
+MeshData makePlaneRect(float sizeX, float sizeZ, float uvX, float uvZ) {
+    float hx = sizeX * 0.5f, hz = sizeZ * 0.5f;
+    MeshData mesh;
+    // Углы на y=0, нормаль вверх, тангент вдоль +X (рост U). UV тайлятся независимо по осям.
+    mesh.vertices = {
+        {-hx, 0.0f, -hz, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f},
+        { hx, 0.0f, -hz, 0.0f, 1.0f, 0.0f, uvX,  0.0f, 1.0f, 0.0f, 0.0f},
+        { hx, 0.0f,  hz, 0.0f, 1.0f, 0.0f, uvX,  uvZ,  1.0f, 0.0f, 0.0f},
+        {-hx, 0.0f,  hz, 0.0f, 1.0f, 0.0f, 0.0f, uvZ,  1.0f, 0.0f, 0.0f},
+    };
+    mesh.indices = {0, 2, 1, 0, 3, 2};
+    return mesh;
+}
+
 MeshData makeCube(float size) {
     float h = size * 0.5f;
     MeshData mesh;

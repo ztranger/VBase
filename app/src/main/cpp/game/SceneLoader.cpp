@@ -93,6 +93,14 @@ bool parseSceneDesc(const std::string& text, SceneDesc& out) {
                 m.kind = MeshSpec::Plane;
                 m.a = toF(t[3]);
                 m.b = (t.size() > 4) ? toF(t[4]) : 1.0f;
+            } else if (kind == "rect") {
+                // mesh <name> rect <sizeX> <sizeZ> [uvX] [uvZ] — прямоугольная плоскость (дорожки)
+                if (t.size() < 5) { LOGE("scene: строка %d: rect <sizeX> <sizeZ> [uvX] [uvZ]", line); return false; }
+                m.kind = MeshSpec::Rect;
+                m.a = toF(t[3]);
+                m.b = toF(t[4]);
+                m.uvX = (t.size() > 5) ? toF(t[5]) : 1.0f;
+                m.uvZ = (t.size() > 6) ? toF(t[6]) : 1.0f;
             } else if (kind == "cube") {
                 m.kind = MeshSpec::Cube;
                 m.a = toF(t[3]);
@@ -391,6 +399,8 @@ std::string serializeSceneDesc(const SceneDesc& d) {
     for (const MeshSpec& m : d.meshes) {
         o << "mesh " << m.name << " ";
         if (m.kind == MeshSpec::Plane) o << "plane " << fnum(m.a) << " " << fnum(m.b);
+        else if (m.kind == MeshSpec::Rect)
+            o << "rect " << fnum(m.a) << " " << fnum(m.b) << " " << fnum(m.uvX) << " " << fnum(m.uvZ);
         else if (m.kind == MeshSpec::Cube) o << "cube " << fnum(m.a);
         else o << "sphere " << fnum(m.a) << " " << m.stacks << " " << m.slices;
         o << "\n";

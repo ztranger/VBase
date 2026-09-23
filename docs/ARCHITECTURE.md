@@ -250,7 +250,8 @@ OBJ-загрузчика). Директивы:
   тонируется в цвет горизонта по дистанции от камеры (прячет край карты; см. `horizon` ниже).
 - `horizon <r g b>` (sRGB) — цвет горизонта/фона: фон-очистка = он же, и в него уходит дальняя земля
   (материал `ground`). Дефолт `0.07 0.07 0.12` (прежний тёмный фон). Общего тумана нет.
-- `mesh <name> plane <size> [uvTiles]` | `cube <size>` | `sphere <r> [stacks] [slices]`
+- `mesh <name> plane <size> [uvTiles]` | `rect <sizeX> <sizeZ> [uvX] [uvZ]` (прямоугольная плоскость —
+  дорожки/полосы, независимый тайлинг по осям) | `cube <size>` | `sphere <r> [stacks] [slices]`
 - `object <mesh> mat <mat> [pos x y z] [rot x y z] [scale s] [spin s]`
 - `object model <path.glb> [tex <path>] [shader lit|unlit|phong] [pos x y z] [rot x y z] [scale s] [spin s]`
   — статичный **glTF/GLB-декор** уровня (KayKit/Quaternius/Kenney): geometry + встроенный

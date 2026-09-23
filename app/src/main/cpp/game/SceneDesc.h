@@ -16,9 +16,11 @@
 
 struct MeshSpec {
     std::string name;
-    enum Kind { Plane, Cube, Sphere } kind = Cube;
-    float a = 1.0f;     // plane: size; cube: size; sphere: radius
-    float b = 1.0f;     // plane: uvTiles (иначе не используется)
+    enum Kind { Plane, Cube, Sphere, Rect } kind = Cube;
+    float a = 1.0f;     // plane/cube: size; sphere: radius; rect: sizeX
+    float b = 1.0f;     // plane: uvTiles; rect: sizeZ (иначе не используется)
+    float uvX = 1.0f;   // rect: тайлинг UV по X
+    float uvZ = 1.0f;   // rect: тайлинг UV по Z
     int stacks = 16;    // sphere
     int slices = 24;    // sphere
 };

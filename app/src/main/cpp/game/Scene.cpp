@@ -212,6 +212,7 @@ void Scene::createGpuResources(Renderer& renderer, AssetSource& assets) {
         MeshData md;
         switch (m.kind) {
             case MeshSpec::Plane:  md = makePlane(m.a, m.b); break;
+            case MeshSpec::Rect:   md = makePlaneRect(m.a, m.b, m.uvX, m.uvZ); break;
             case MeshSpec::Cube:   md = makeCube(m.a); break;
             case MeshSpec::Sphere: md = makeSphere(m.a, m.stacks, m.slices); break;
         }

@@ -23,6 +23,8 @@ struct MeshData {
 using MeshHandle = uint32_t;
 
 // Генераторы примитивов (backend-агностичные, чистая геометрия с UV).
-MeshData makePlane(float size, float uvTiles = 1.0f);             // плоскость в XZ, нормаль вверх
+MeshData makePlane(float size, float uvTiles = 1.0f);             // квадратная плоскость в XZ, нормаль вверх
+MeshData makePlaneRect(float sizeX, float sizeZ,                  // прямоугольная плоскость в XZ (дорожки/полосы):
+                       float uvX = 1.0f, float uvZ = 1.0f);       // независимые размеры и тайлинг UV по осям
 MeshData makeCube(float size);                                    // куб с рёбрами size
 MeshData makeSphere(float radius, int stacks = 16, int slices = 24); // UV-сфера

@@ -26,6 +26,10 @@ bool g_navFlow = true;       // стрелки поля потока к цели
 bool g_navHeat = false;      // хитмап дистанции до цели
 bool g_navDist = false;      // числа дистанции в клетках
 
+// Панель строительства свёрнута по умолчанию (не перекрывает экран) — раскрывается кнопкой
+// «Строить». Во время размещения (buildMode) держим раскрытой, чтобы были доступны Поставить/Отмена.
+bool g_buildOpen = false;
+
 // Полоса-стат: подпись слева + бар (трек + заливка) с центрированным числом. Ряд фикс. высоты.
 void statBar(const char* label, float frac, ImU32 fill, const char* overlay) {
     if (frac < 0.0f) frac = 0.0f;
@@ -118,11 +122,25 @@ void drawHud(UiShell::Ctx& ctx) {
 }
 
 void drawBuild(UiShell::Ctx& ctx) {
-    if (!ctx.scene.netConnected()) return;
+    if (!ctx.scene.netConnected()) { g_buildOpen = false; return; }  // вне сессии — свернуть (сброс к дефолту)
 
     // Заякорена слева под HUD (метрики в единицах шрифта — под DPI), авто-высота по контенту.
     const float font = ImGui::GetFontSize();
-    if (!ctx.beginPanelRect("Строительство###uiBuildPanel", ImVec2(UiShell::uiMargin(), font * 5.5f),
+    const ImVec2 anchor(UiShell::uiMargin(), font * 5.5f);
+
+    if (ctx.scene.buildMode()) g_buildOpen = true;  // при размещении панель нужна (Поставить/Отмена)
+
+    // Свёрнуто: компактная кнопка-открывашка, не перекрывает экран.
+    if (!g_buildOpen) {
+        const ImVec2 sz(font * 8.0f, font * 2.2f);
+        if (ctx.beginOverlay("##uiBuildToggle", anchor, sz, 0.0f, ImGuiWindowFlags_NoNav)) {
+            if (ctx.btn("Строить", ImVec2(-1, 0))) g_buildOpen = true;
+        }
+        ctx.endOverlay();
+        return;
+    }
+
+    if (!ctx.beginPanelRect("Строительство###uiBuildPanel", anchor,
                             ImVec2(font * 19.0f, 0.0f), nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ctx.endPanel();
         return;
@@ -172,17 +190,11 @@ void drawBuild(UiShell::Ctx& ctx) {
         if (ctx.btn("Отмена")) ctx.scene.cancelBuild();
     }
 
-    if (ctx.scene.netConnected()) {
-        ImGui::Separator();
-        if (ctx.btn("Disconnect")) {
-            Scene* scene = &ctx.scene;
-            UiShell::pushYesNo("Сеть", "Покинуть сессию?", [scene](DialogResult r) {
-                if (r == DialogResult::Yes) {
-                    scene->leaveGame();
-                    UiShell::setMode(UiMode::MainMenu);
-                }
-            });
-        }
+    // Свернуть панель (выход из размещения, если он шёл). Выход из сессии — через Паузу.
+    ImGui::Separator();
+    if (ctx.btn("Свернуть")) {
+        ctx.scene.cancelBuild();
+        g_buildOpen = false;
     }
     ctx.endPanel();
 }
