@@ -55,9 +55,31 @@ def make(path, seed, lo, hi, speck, speck_col, speck_p):
     img.save(path)
     print("wrote", path)
 
+def make_normal(path, seed, strength):
+    """Органичная бесшовная tangent-space нормал-карта из шума высоты: R=наклон X, G=наклон Z,
+    B=вверх. Даёт «фейковый» рельеф земли через освещение (геометрия остаётся плоской)."""
+    h = fbm(4, 4, seed)  # тайловая высота (крупные комья + деталь)
+    img = Image.new("RGB", (SIZE, SIZE))
+    px = img.load()
+    for j in range(SIZE):
+        for i in range(SIZE):
+            hl = h[j][(i - 1) % SIZE]; hr = h[j][(i + 1) % SIZE]      # градиент по X (wrap = бесшовно)
+            hu = h[(j - 1) % SIZE][i]; hd = h[(j + 1) % SIZE][i]      # градиент по Z
+            nx = -(hr - hl) * strength
+            nz = -(hd - hu) * strength
+            ny = 1.0
+            l = (nx * nx + ny * ny + nz * nz) ** 0.5
+            px[i, j] = (int((nx / l * 0.5 + 0.5) * 255),   # R -> наклон вдоль тангента (+X)
+                        int((nz / l * 0.5 + 0.5) * 255),   # G -> наклон вдоль бинормали (Z)
+                        int((ny / l * 0.5 + 0.5) * 255))   # B -> нормаль вверх (~1)
+    img.save(path)
+    print("wrote", path)
+
 # Трава: тёмно- -> светло-зелёная, редкие жёлто-зелёные пятнышки.
 make(os.path.join(HERE, "grass.png"), seed=42,
      lo=(46, 78, 40), hi=(96, 132, 62), speck=True, speck_col=(120, 140, 70), speck_p=0.010)
 # Земля/тропа: тёмно- -> светло-коричневая, редкие светлые камешки.
 make(os.path.join(HERE, "dirt.png"), seed=91,
      lo=(74, 56, 38), hi=(120, 96, 66), speck=True, speck_col=(140, 128, 104), speck_p=0.012)
+# Нормал-карта земли (лёгкий «фейковый» рельеф через свет): умеренная крутизна.
+make_normal(os.path.join(HERE, "ground_n.png"), seed=205, strength=1.4)

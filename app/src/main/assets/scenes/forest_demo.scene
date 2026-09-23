@@ -7,9 +7,10 @@
 # ============================================================================
 
 # --- Текстуры / материалы / меши ---
-texture grass image textures/grass.png
-texture dirt  image textures/dirt.png
-material floor ground color 1 1 1 tex grass
+texture grass  image textures/grass.png
+texture dirt   image textures/dirt.png
+texture groundn image textures/ground_n.png
+material floor ground color 1 1 1 tex grass normal groundn
 material dirt  lit    color 1 1 1 tex dirt
 mesh ground plane 240 60
 # Дорожка-тропа: прямоугольные плейны вдоль обеих полос (rect: sizeX sizeZ uvX uvZ), тайл ~2.5 ю.
