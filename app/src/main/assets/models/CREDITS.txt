@@ -1,0 +1,15 @@
+3D-ассеты (модели персонажей, врагов и декор уровней) — KayKit by Kay Lousberg.
+Лицензия: Creative Commons Zero (CC0) — свободно для личных, учебных и коммерческих проектов.
+https://www.kaylousberg.com  •  https://kaylousberg.itch.io
+
+Используемые паки:
+- KayKit Adventurers      -> models/{Mage,Barbarian,Knight,Rogue,Rogue_Hooded}.glb (герои)
+- KayKit Skeletons        -> models/Skeleton_*.glb (враги)
+- KayKit Dungeon (old)    -> models/dungeon/*.obj (базовые здания: ядро/спавнер/башня)
+- KayKit Dungeon Remastered -> models/dungeon_rm/*.glb (декор подземелий)
+- KayKit Forest Nature    -> models/forest/*.glb (природа: деревья, кусты, камни, трава)
+- KayKit Resource Bits    -> models/resourcebits/*.glb (бочки, ящики, руда, слитки)
+
+Формат: self-contained .glb (геометрия + встроенная текстура-атлас), грузится loadGltfStatic.
+forest/resourcebits сконвертированы из исходных .gltf+.bin+атлас в .glb через gltf-pipeline
+(имена очищены от суффикса _Color1). Кредит KayKit не обязателен по CC0, но ценится автором.

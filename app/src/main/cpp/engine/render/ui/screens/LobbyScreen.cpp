@@ -23,11 +23,16 @@ void drawHeroColumn(UiShell::Ctx& ctx) {
         return;
     }
 
-    ImGui::TextUnformatted("Выбор героя");
+    // Выбор героя ДЕЙСТВУЕТ только до коннекта: в сессии сервер уже закоммитил тип по первому
+    // инпуту (анти-хил гард), поздняя смена игнорируется. Основной выбор — в главном меню (Home),
+    // здесь — подтверждение + смена, пока не подключились.
+    const bool locked = ctx.scene.netConnected();
+    ImGui::TextUnformatted(locked ? "Герой" : "Выбор героя");
     ImGui::Dummy(ImVec2(0, 6));
 
     const int sel = ctx.scene.selectedCharacter();
     const int n = ctx.scene.rosterCount();
+    ImGui::BeginDisabled(locked);
     for (int i = 0; i < n; ++i) {
         const bool isSel = (i == sel);
         char label[128];
@@ -38,6 +43,8 @@ void drawHeroColumn(UiShell::Ctx& ctx) {
             ctx.state.charIndex = i;  // платформа сохранит выбор в файл (персист между запусками)
         }
     }
+    ImGui::EndDisabled();
+    if (locked) ImGui::TextDisabled("Сменить героя — в меню до подключения.");
 
     // Статы выбранного героя (из characters.cfg; клиент бой не считает — только показывает).
     if (sel >= 0 && sel < n) {

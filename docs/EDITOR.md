@@ -82,6 +82,9 @@ run-editor.cmd [assetsDir] [scenePath]
   «Точка спавна», «Колайдер».
 - **Браузер `.glb`** (список внизу панели): клик по модели — добавить объект-декор с этой моделью.
   Список сканируется из `assets/models/**` при запуске (положил новый `.glb` → перезапусти редактор).
+  В комплекте уже лежат CC0-паки KayKit: `models/forest/` (природа — деревья/кусты/камни/трава),
+  `models/resourcebits/` (бочки/ящики/руда/слитки), `models/dungeon_rm/` (декор подземелий) —
+  всего ~380 моделей. Атрибуция — `models/CREDITS.txt`.
 
 Совет по расстановке: наведи камеру (пан/зум) на нужное место, затем жми кнопку/модель — появится там.
 
@@ -113,8 +116,9 @@ run-editor.cmd [assetsDir] [scenePath]
 
 ## Типичный процесс сборки уровня
 
-1. Скачай CC0-паки (KayKit / Quaternius / Kenney — все отдают `.glb`), положи `.glb` в
-   `assets/models/` (можно в подпапки).
+1. Декор-паки KayKit уже в комплекте (`models/forest`, `models/resourcebits`, `models/dungeon_rm`).
+   Новый CC0-пак: сконвертируй `.gltf`→ self-contained `.glb` (`gltf-pipeline`) и положи в
+   `assets/models/<пак>/` (можно в подпапки) — редактор подхватит при перезапуске.
 2. `run-editor.cmd [scenePath]` — открой пустую/базовую сцену.
 3. Расставь **колайдеры** (стены/пол — физика) и **декор** из браузера `.glb`; двигай/поворачивай/
    масштабируй гизмо, включи снап для аккуратной сетки.
@@ -143,5 +147,7 @@ run-editor.cmd [assetsDir] [scenePath]
 ## Связанное
 
 - Формат `.scene` (все директивы) — [ARCHITECTURE.md](ARCHITECTURE.md) §5.1.
-- Где брать 3D-ассеты (CC0) — обсуждалось: KayKit (itch.io/GitHub), Quaternius, Kenney.
+- 3D-ассеты (CC0): в комплекте паки KayKit (forest/resourcebits/dungeon_rm) — см. `models/CREDITS.txt`.
+  Ещё источники: KayKit (itch.io/GitHub), Quaternius, Kenney. Новые `.gltf` конвертируй в `.glb`
+  (`gltf-pipeline -i model.gltf -o model.glb` — встроит буферы и текстуру-атлас).
 - Статус/история редактора — [NEXT_STEPS.md](NEXT_STEPS.md), раздел «Редактор сцен».

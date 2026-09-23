@@ -19,9 +19,33 @@ void draw(UiShell::Ctx& ctx) {
         return;
     }
 
-    ImGui::TextWrapped("Главное меню. Выбери раздел внизу или войди в бой.");
+    ImGui::TextWrapped("Главное меню. Выбери героя и войди в бой.");
     ImGui::Dummy(ImVec2(0, 6));
 
+    // Выбор героя — ДО коннекта: сервер коммитит тип героя по первому инпуту (анти-хил гард),
+    // поэтому выбранный тут charType уходит серверу сразу и отрабатывает корректно. В активной
+    // сессии смена бесполезна (тип уже закоммичен) — блокируем и подсказываем.
+    ImGui::SeparatorText("Герой");
+    {
+        const bool locked = ctx.scene.netConnected();
+        const int sel = ctx.scene.selectedCharacter();
+        const int n = ctx.scene.rosterCount();
+        ImGui::BeginDisabled(locked);
+        for (int i = 0; i < n; ++i) {
+            const bool isSel = (i == sel);
+            char label[128];
+            std::snprintf(label, sizeof(label), "%s %s", isSel ? "\xE2\x96\xB6" : "   ",
+                          ctx.scene.rosterName(i));
+            if (ctx.btn(label, ImVec2(-1, 0), /*selected=*/isSel)) {
+                ctx.scene.selectCharacter(i);
+                ctx.state.charIndex = i;  // платформа персистит выбор между запусками
+            }
+        }
+        ImGui::EndDisabled();
+        if (locked) ImGui::TextDisabled("В сессии героя не сменить (выбирай до входа).");
+    }
+
+    ImGui::SeparatorText("Бой");
     if (ctx.btn("В бой", ImVec2(-1, 0))) UiShell::setMode(UiMode::Lobby);
 
     ImGui::SeparatorText("Сеть");

@@ -1954,6 +1954,65 @@ int runTowerRosterTest() {
     return fails == 0 ? 0 : 1;
 }
 
+// Выбор персонажа ДО коннекта (баг «разные персонажи не отрабатывают»): клиент ставит charType
+// перед connect → тип уходит первым же инпутом → сервер коммитит его (гард один-раз). Проверяем,
+// что каждый клиент видит СВОЙ и ЧУЖОЙ heroType корректными. Регресс на порядок setCharType/connect.
+int runCharSelectTest() {
+    std::printf("\n=== Самотест: выбор персонажа до коннекта (charType первым инпутом) ===\n");
+    SceneDesc desc;
+    ColliderSpec floor; floor.center = Vec3{0, -0.5f, 0}; floor.half = Vec3{50, 0.5f, 50};
+    desc.colliders.push_back(floor);
+    desc.player.pos = Vec3{0, 0, 8};
+    for (int i = 0; i < 4; ++i) {  // ростер: 4 героя с разными hp (индекс = charType)
+        CharacterDesc c; c.id = "h" + std::to_string(i); c.model = "x";
+        c.hp = 100.0f + 20.0f * i; desc.heroTypes.push_back(c);
+    }
+
+    NetServer server;
+    if (!server.start(kNetPort)) { std::printf("[CharSelect] FAIL: сервер не стартовал\n"); return 1; }
+    server.configureWorld(desc);
+
+    NetClient a, b;
+    const uint8_t ctA = 2, ctB = 3;
+    a.setCharType(ctA);  // ВЫБОР ДО коннекта (как пикер на главном экране)
+    b.setCharType(ctB);
+    a.connect("127.0.0.1", kNetPort);
+    b.connect("127.0.0.1", kNetPort);
+
+    const float dt = kTickDt;
+    InputCommand idle;
+    uint32_t sa = 0, sb = 0;
+    int aOwn = -1, aOther = -1, bOwn = -1, bOther = -1;
+    for (int i = 0; i < 400; ++i) {
+        server.poll();
+        if (a.connected() && a.myId() != 0) { idle.seq = ++sa; a.sendInput(idle); }
+        if (b.connected() && b.myId() != 0) { idle.seq = ++sb; b.sendInput(idle); }
+        server.tick(dt);
+        a.poll(); b.poll();
+        if (a.consumeSnapshot()) {
+            aOwn = aOther = -1;
+            for (const EntityState& s : a.states())
+                if ((EntityType)s.type == EntityType::Hero)
+                    (s.id == a.myId() ? aOwn : aOther) = (int)s.charType;
+        }
+        if (b.consumeSnapshot()) {
+            bOwn = bOther = -1;
+            for (const EntityState& s : b.states())
+                if ((EntityType)s.type == EntityType::Hero)
+                    (s.id == b.myId() ? bOwn : bOther) = (int)s.charType;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+
+    // Каждый видит свой тип и тип соседа корректно (мультиплеер — модели не перепутаны).
+    bool ok = aOwn == ctA && aOther == ctB && bOwn == ctB && bOther == ctA;
+    std::printf("[CharSelect] a: свой=%d (ждём %d) чужой=%d (ждём %d); b: свой=%d (ждём %d) чужой=%d (ждём %d)\n",
+                aOwn, ctA, aOther, ctB, bOwn, ctB, bOther, ctA);
+    std::printf("[CharSelect] %s\n", ok ? "OK" : "FAIL");
+    a.disconnect(); b.disconnect(); server.stop();
+    return ok ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -2007,11 +2066,12 @@ int main(int argc, char** argv) {
         int z4 = runHardenDataTest();     // P2-12/P2-14: санитизация описания + безопасность путей
         int z5 = runRateLimitTest();      // P2-04: флудер ввода отключается сервером
         int tw = runTowerRosterTest();    // виды башен/ловушек + апгрейд/снос (towers.cfg)
+        int cs = runCharSelectTest();     // выбор персонажа до коннекта: charType уходит первым инпутом
         return (a == 0 && b == 0 && c == 0 && d == 0 && e == 0 && f == 0 && g == 0 && h == 0 &&
                 k == 0 && m == 0 && n == 0 && o == 0 && p == 0 && p2 == 0 && q == 0 && r == 0 &&
                 s == 0 && t == 0 && u == 0 && v == 0 && w == 0 && x == 0 && x2 == 0 &&
                 y1 == 0 && y2 == 0 && y3 == 0 &&
-                z1 == 0 && z2 == 0 && z3 == 0 && z4 == 0 && z5 == 0 && tw == 0) ? 0 : 1;
+                z1 == 0 && z2 == 0 && z3 == 0 && z4 == 0 && z5 == 0 && tw == 0 && cs == 0) ? 0 : 1;
     }
 
     uint16_t port = kNetPort;
