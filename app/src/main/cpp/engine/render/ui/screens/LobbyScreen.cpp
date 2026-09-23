@@ -23,28 +23,20 @@ void drawHeroColumn(UiShell::Ctx& ctx) {
         return;
     }
 
-    // Выбор героя ДЕЙСТВУЕТ только до коннекта: в сессии сервер уже закоммитил тип по первому
-    // инпуту (анти-хил гард), поздняя смена игнорируется. Основной выбор — в главном меню (Home),
-    // здесь — подтверждение + смена, пока не подключились.
-    const bool locked = ctx.scene.netConnected();
-    ImGui::TextUnformatted(locked ? "Герой" : "Выбор героя");
-    ImGui::Dummy(ImVec2(0, 6));
-
+    // Выбор героя живёт в главном меню (Home). Здесь — только read-only сводка выбранного перед
+    // входом в бой: селектор убран (дублировал Home, а после Host/Join уже заблокирован — тип
+    // закоммичен сервером по первому инпуту). Сменить героя — в меню до подключения.
     const int sel = ctx.scene.selectedCharacter();
     const int n = ctx.scene.rosterCount();
-    ImGui::BeginDisabled(locked);
-    for (int i = 0; i < n; ++i) {
-        const bool isSel = (i == sel);
-        char label[128];
-        std::snprintf(label, sizeof(label), "%s %s", isSel ? "\xE2\x96\xB6" : "   ",
-                      ctx.scene.rosterName(i));
-        if (ctx.btn(label, ImVec2(-1, 0), /*selected=*/isSel)) {
-            ctx.scene.selectCharacter(i);
-            ctx.state.charIndex = i;  // платформа сохранит выбор в файл (персист между запусками)
-        }
+    ImGui::TextUnformatted("Герой");
+    ImGui::Dummy(ImVec2(0, 6));
+    if (sel >= 0 && sel < n) {
+        ImGui::PushStyleColor(ImGuiCol_Text, UiPalette::v4(UiPalette::Amber));
+        ImGui::TextWrapped("%s", ctx.scene.rosterName(sel));
+        ImGui::PopStyleColor();
+    } else {
+        ImGui::TextDisabled("Герой не выбран — выбери в меню.");
     }
-    ImGui::EndDisabled();
-    if (locked) ImGui::TextDisabled("Сменить героя — в меню до подключения.");
 
     // Статы выбранного героя (из characters.cfg; клиент бой не считает — только показывает).
     if (sel >= 0 && sel < n) {
