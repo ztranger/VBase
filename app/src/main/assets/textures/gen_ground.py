@@ -57,10 +57,13 @@ def make(path, seed, lo, hi, speck, speck_col, speck_p):
 
 def make_normal(path, seed, strength):
     """Органичная бесшовная tangent-space нормал-карта из шума высоты: R=наклон X, G=наклон Z,
-    B=вверх. Даёт «фейковый» рельеф земли через освещение (геометрия остаётся плоской)."""
+    B=вверх. Даёт «фейковый» рельеф земли через освещение (геометрия остаётся плоской).
+    strength — крутизна: градиент высоты по соседним пикселям крошечный (~0.005), поэтому нужен
+    большой множитель (десятки), иначе нормали почти плоские и эффекта не видно."""
     h = fbm(4, 4, seed)  # тайловая высота (крупные комья + деталь)
     img = Image.new("RGB", (SIZE, SIZE))
     px = img.load()
+    devs = []
     for j in range(SIZE):
         for i in range(SIZE):
             hl = h[j][(i - 1) % SIZE]; hr = h[j][(i + 1) % SIZE]      # градиент по X (wrap = бесшовно)
@@ -69,11 +72,14 @@ def make_normal(path, seed, strength):
             nz = -(hd - hu) * strength
             ny = 1.0
             l = (nx * nx + ny * ny + nz * nz) ** 0.5
-            px[i, j] = (int((nx / l * 0.5 + 0.5) * 255),   # R -> наклон вдоль тангента (+X)
-                        int((nz / l * 0.5 + 0.5) * 255),   # G -> наклон вдоль бинормали (Z)
+            r = nx / l; g = nz / l
+            devs.append(abs(r)); devs.append(abs(g))
+            px[i, j] = (int((r * 0.5 + 0.5) * 255),   # R -> наклон вдоль тангента (+X)
+                        int((g * 0.5 + 0.5) * 255),   # G -> наклон вдоль бинормали (Z)
                         int((ny / l * 0.5 + 0.5) * 255))   # B -> нормаль вверх (~1)
     img.save(path)
-    print("wrote", path)
+    avg = sum(devs) / len(devs)
+    print(f"wrote {path}  avg|tilt|={avg:.3f} (цель ~0.25-0.5 для заметного рельефа)")
 
 # Трава: тёмно- -> светло-зелёная, редкие жёлто-зелёные пятнышки.
 make(os.path.join(HERE, "grass.png"), seed=42,
@@ -81,5 +87,6 @@ make(os.path.join(HERE, "grass.png"), seed=42,
 # Земля/тропа: тёмно- -> светло-коричневая, редкие светлые камешки.
 make(os.path.join(HERE, "dirt.png"), seed=91,
      lo=(74, 56, 38), hi=(120, 96, 66), speck=True, speck_col=(140, 128, 104), speck_p=0.012)
-# Нормал-карта земли (лёгкий «фейковый» рельеф через свет): умеренная крутизна.
-make_normal(os.path.join(HERE, "ground_n.png"), seed=205, strength=1.4)
+# Нормал-карта земли (лёгкий «фейковый» рельеф через свет). strength большой — градиент по
+# пикселям крошечный; подобран так, чтобы avg|tilt| был ~0.3 (заметно, но не карикатурно).
+make_normal(os.path.join(HERE, "ground_n.png"), seed=205, strength=70.0)

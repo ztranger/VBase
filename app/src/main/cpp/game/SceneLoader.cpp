@@ -101,6 +101,15 @@ bool parseSceneDesc(const std::string& text, SceneDesc& out) {
                 m.b = toF(t[4]);
                 m.uvX = (t.size() > 5) ? toF(t[5]) : 1.0f;
                 m.uvZ = (t.size() > 6) ? toF(t[6]) : 1.0f;
+            } else if (kind == "terrain") {
+                // mesh <name> terrain <size> <cells> <amp> <freq> [uvTiles] — подразбитый пол с рельефом
+                if (t.size() < 7) { LOGE("scene: строка %d: terrain <size> <cells> <amp> <freq> [uvTiles]", line); return false; }
+                m.kind = MeshSpec::Terrain;
+                m.a = toF(t[3]);
+                m.stacks = toI(t[4]);
+                m.amp = toF(t[5]);
+                m.freq = toF(t[6]);
+                m.b = (t.size() > 7) ? toF(t[7]) : 1.0f;
             } else if (kind == "cube") {
                 m.kind = MeshSpec::Cube;
                 m.a = toF(t[3]);
@@ -401,6 +410,9 @@ std::string serializeSceneDesc(const SceneDesc& d) {
         if (m.kind == MeshSpec::Plane) o << "plane " << fnum(m.a) << " " << fnum(m.b);
         else if (m.kind == MeshSpec::Rect)
             o << "rect " << fnum(m.a) << " " << fnum(m.b) << " " << fnum(m.uvX) << " " << fnum(m.uvZ);
+        else if (m.kind == MeshSpec::Terrain)
+            o << "terrain " << fnum(m.a) << " " << m.stacks << " " << fnum(m.amp) << " " << fnum(m.freq)
+              << " " << fnum(m.b);
         else if (m.kind == MeshSpec::Cube) o << "cube " << fnum(m.a);
         else o << "sphere " << fnum(m.a) << " " << m.stacks << " " << m.slices;
         o << "\n";

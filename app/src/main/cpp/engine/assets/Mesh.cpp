@@ -31,6 +31,66 @@ MeshData makePlaneRect(float sizeX, float sizeZ, float uvX, float uvZ) {
     return mesh;
 }
 
+// Детерминированная высота рельефа: сумма синусов (в [-amp,amp]) с радиальной маской (плоская
+// арена в центре). Повторена в gen_forest_demo.py (посадка декора) — держать синхронно.
+float terrainHeight(float x, float z, float amp, float freq, float flatR, float hillR) {
+    float f = freq;
+    float h = 0.55f * std::sin(x * f) * std::cos(z * f * 0.9f) +
+              0.30f * std::sin(x * f * 2.1f + 1.7f) * std::cos(z * f * 1.9f - 0.6f) +
+              0.15f * std::sin((x + z) * f * 3.3f + 0.3f);
+    if (hillR > flatR) {  // маска: 0 внутри flatR, плавно до 1 к hillR (smoothstep)
+        float r = std::sqrt(x * x + z * z);
+        float t = (r - flatR) / (hillR - flatR);
+        if (t < 0.0f) t = 0.0f; else if (t > 1.0f) t = 1.0f;
+        h *= t * t * (3.0f - 2.0f * t);
+    }
+    return amp * h;
+}
+
+MeshData makeTerrain(float size, int cells, float amp, float freq, float uvTiles,
+                     float flatR, float hillR) {
+    if (cells < 1) cells = 1;
+    if (cells > 512) cells = 512;  // потолок против взрыва вершин (недоверенный параметр сцены)
+    const float half = size * 0.5f;
+    const float step = size / (float)cells;
+    const float e = step * 0.5f;  // шаг для центральной разности нормали/тангента
+    MeshData mesh;
+    mesh.vertices.reserve((size_t)(cells + 1) * (cells + 1));
+    for (int j = 0; j <= cells; ++j) {
+        for (int i = 0; i <= cells; ++i) {
+            float x = -half + (float)i * step;
+            float z = -half + (float)j * step;
+            float y = terrainHeight(x, z, amp, freq, flatR, hillR);
+            // Наклоны по X/Z центральной разностью -> нормаль (up-ish) и тангент вдоль +X.
+            float dhx = (terrainHeight(x + e, z, amp, freq, flatR, hillR) -
+                         terrainHeight(x - e, z, amp, freq, flatR, hillR)) / (2.0f * e);
+            float dhz = (terrainHeight(x, z + e, amp, freq, flatR, hillR) -
+                         terrainHeight(x, z - e, amp, freq, flatR, hillR)) / (2.0f * e);
+            float nx = -dhx, ny = 1.0f, nz = -dhz;
+            float nl = std::sqrt(nx * nx + ny * ny + nz * nz);
+            nx /= nl; ny /= nl; nz /= nl;
+            float tx = 1.0f, ty = dhx, tz = 0.0f;  // dP/dx
+            float tl = std::sqrt(tx * tx + ty * ty + tz * tz);
+            tx /= tl; ty /= tl; tz /= tl;
+            float u = (float)i / (float)cells * uvTiles;
+            float v = (float)j / (float)cells * uvTiles;
+            mesh.vertices.push_back({x, y, z, nx, ny, nz, u, v, tx, ty, tz});
+        }
+    }
+    const int stride = cells + 1;
+    mesh.indices.reserve((size_t)cells * cells * 6);
+    for (int j = 0; j < cells; ++j) {
+        for (int i = 0; i < cells; ++i) {
+            uint32_t a = (uint32_t)(j * stride + i);
+            uint32_t b = a + 1;
+            uint32_t c = a + stride;
+            uint32_t d = c + 1;
+            mesh.indices.insert(mesh.indices.end(), {a, d, b, a, c, d});  // CCW сверху, как makePlane
+        }
+    }
+    return mesh;
+}
+
 MeshData makeCube(float size) {
     float h = size * 0.5f;
     MeshData mesh;

@@ -16,12 +16,14 @@
 
 struct MeshSpec {
     std::string name;
-    enum Kind { Plane, Cube, Sphere, Rect } kind = Cube;
-    float a = 1.0f;     // plane/cube: size; sphere: radius; rect: sizeX
-    float b = 1.0f;     // plane: uvTiles; rect: sizeZ (иначе не используется)
+    enum Kind { Plane, Cube, Sphere, Rect, Terrain } kind = Cube;
+    float a = 1.0f;     // plane/cube: size; sphere: radius; rect: sizeX; terrain: size
+    float b = 1.0f;     // plane: uvTiles; rect: sizeZ; terrain: uvTiles
     float uvX = 1.0f;   // rect: тайлинг UV по X
     float uvZ = 1.0f;   // rect: тайлинг UV по Z
-    int stacks = 16;    // sphere
+    float amp = 0.0f;   // terrain: амплитуда рельефа
+    float freq = 0.0f;  // terrain: частота рельефа
+    int stacks = 16;    // sphere; terrain: число клеток сетки (cells)
     int slices = 24;    // sphere
 };
 

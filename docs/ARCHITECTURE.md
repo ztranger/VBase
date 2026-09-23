@@ -251,7 +251,9 @@ OBJ-загрузчика). Директивы:
 - `horizon <r g b>` (sRGB) — цвет горизонта/фона: фон-очистка = он же, и в него уходит дальняя земля
   (материал `ground`). Дефолт `0.07 0.07 0.12` (прежний тёмный фон). Общего тумана нет.
 - `mesh <name> plane <size> [uvTiles]` | `rect <sizeX> <sizeZ> [uvX] [uvZ]` (прямоугольная плоскость —
-  дорожки/полосы, независимый тайлинг по осям) | `cube <size>` | `sphere <r> [stacks] [slices]`
+  дорожки/полосы, независимый тайлинг по осям) | `terrain <size> <cells> <amp> <freq> [uvTiles] [flatR] [hillR]`
+  (подразбитый пол с лёгким рельефом; маска flatR/hillR держит центр плоским — физика плоская) |
+  `cube <size>` | `sphere <r> [stacks] [slices]`
 - `object <mesh> mat <mat> [pos x y z] [rot x y z] [scale s] [spin s]`
 - `object model <path.glb> [tex <path>] [shader lit|unlit|phong] [pos x y z] [rot x y z] [scale s] [spin s]`
   — статичный **glTF/GLB-декор** уровня (KayKit/Quaternius/Kenney): geometry + встроенный
