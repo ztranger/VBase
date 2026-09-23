@@ -283,6 +283,16 @@ OBJ-загрузчика). Директивы:
 `shape cube <s>` / `shape sphere <r> [stacks slices]`, `material <lit/phong/unlit> <r g b>`,
 `yoffset`, `pickradius` → таблица `Scene::EntityVisual` (рендер/пикинг/призрак); сервер эти
 ключи парсит, но игнорит.
+
+**Ростер видов защиты** — `assets/config/towers.cfg` (`TowerRoster`/`TowerDesc`, парсер
+`loadTowerRoster`): виды башен-стрелков и напольных ловушек, которые герой строит в бою (Стрелок/
+Мороз/Пушка/Огонь/Шипы). Строка `tower <id> class tower|trap ...` задаёт cost/hp/rate/range/damage,
+эффект (`slow`/`splash`/`burn`), тир-множители и цвет. Индекс записи = «вид» (kind) — сетевой
+контракт: у `Tower`/`Trap` едет в `EntityState.charType` (младший ниббл — вид, старший — тир 1..15).
+`class` решает тег: `tower` (стреляет, блокирует путь, ломаема) или `trap` (`EntityType::Trap`: на
+полу, путь НЕ блокирует, мобы проходят). Апгрейд (`GameWorld::tryUpgrade`) и снос с возвратом
+(`tryDemolish`) — авторитетно на сервере; протокол v7 (`MSG_BUILD`+вид, `MSG_UPGRADE`/`MSG_DEMOLISH`).
+Детали и статус — NEXT_STEPS «Разнообразие башен/ловушек».
 - `light dir <x> <y> <z>` — направление на свет (правится слайдером в `GameUi`)
 - `camera [distance d] [pitch p] [lookHeight l] [fov f] [near n] [far f]` — ¾-камера
   (`pitch` — фиксированный наклон, рад; yaw/зум управляются игроком)
